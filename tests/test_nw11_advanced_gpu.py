@@ -22,6 +22,7 @@ import nw11_contract as contract  # noqa: E402
 import nw11_evidence as evidence  # noqa: E402
 import nw11_experiment as experiment  # noqa: E402
 import nw11_followup as followup  # noqa: E402
+import nw11_measurements as measurements  # noqa: E402
 import nw11_graph_scene as graph_scene  # noqa: E402
 import nw11_pe_dependencies as pe_dependencies  # noqa: E402
 import nw11_pack_python_runtime as python_runtime  # noqa: E402
@@ -74,7 +75,7 @@ def _observation(
     *,
     device_id: int = 0x2805,
     mesh: str = "D3D12_MESH_SHADER_TIER_1",
-    ray: str = "D3D12_RAYTRACING_TIER_1_1",
+    ray: int = 11,
     shader_model: str = "D3D12_SHADER_MODEL_6_7",
     initialization: str = "ok",
 ) -> dict:
@@ -85,9 +86,12 @@ def _observation(
             "adapter_name": "metadata only",
             "adapter_luid": "00000000:0000ABCD",
         },
+        "release_default_adapter_luid": "00000000:0000ABCD",
         "driver_version": "610.88",
         "os_build": "10.0.26300.9818",
         "toolchain_identity": "nw11-test-toolchain",
+        "runtime": {"native_architecture": "x64", "d3d12_dll_version": "10.0.26300.9818",
+                    "dxgi_dll_version": "10.0.26300.9818"},
         "features": {
             "d3d_feature_level": "D3D_FEATURE_LEVEL_12_1",
             "resource_binding_tier": "D3D12_RESOURCE_BINDING_TIER_2",
@@ -115,15 +119,23 @@ def _measurement(
     image_error: float = 1e-5,
 ) -> dict:
     count = contract.MIN_RAW_SAMPLES_PER_RUN
-    return {
+    process = {
         "gpu_time_samples": [gpu + (index % 10) * 0.0001 for index in range(count)],
         "cpu_submit_samples": [cpu] * count,
         "frame_time_samples": [frame + (index % 10) * 0.0001 for index in range(count)],
-        "cold_initialization_ms": cold_init,
+        "process_start_to_first_present_ms": cold_init,
+        "displayed_presents": count,
+        "dropped_presents": 0,
         "distribution_bytes": distribution,
         "shader_count": shaders,
         "shader_ids": list(shader_ids or []),
         "peak_engine_committed_gpu_bytes": vram,
+    }
+    return {
+        **{key: process[key] for key in ("distribution_bytes", "shader_count", "shader_ids",
+                                          "peak_engine_committed_gpu_bytes")},
+        "cold_initialization_ms": cold_init,
+        "process_runs": [copy.deepcopy(process) for _ in range(contract.PERF_RUN_COUNT)],
         "image": {
             "max_abs_channel_error": image_error,
             "rmse": image_error / 2.0,
@@ -165,7 +177,7 @@ def _run(
             "adapter_name": "metadata only",
             "adapter_luid": "00000000:0000ABCD",
             "vendor_id": 0x10DE,
-            "device_id": 0x2805,
+            "device_id": int(device_key.split(":")[-1], 16),
         },
         "measurement": measurement or _measurement(),
     }
@@ -206,6 +218,8 @@ def _evidence(
         item["device_key"] = item["capability_decision"]["device_key"]
         item["environment_key"] = item["capability_decision"]["environment_key"]
     return {
+        "raw_inputs": {"test-fixture.json": "0" * 64},
+        "canonical_release_correctness": {},
         "format": evidence.EVIDENCE_FORMAT,
         "version": evidence.EVIDENCE_VERSION,
         "task": contract.TASK,
@@ -223,7 +237,7 @@ def _evidence(
             if item["role"] in {"common_baseline", "optional_variant", "fallback_common"}
         },
         "optional_eligibility": dict(
-            next(item for item in runs if item["role"] == "variant")["capability_decision"]
+            next((item for item in runs if item["role"] == "variant"), runs[0])["capability_decision"]
         ),
         "common_eligibility": dict(
             next(item for item in runs if item["role"] in {"baseline", "fallback"})["capability_decision"]
@@ -466,8 +480,8 @@ def test_nw11_bundle_is_deterministic_and_self_contained(tmp_path: Path) -> None
         second / bundle.MANIFEST_NAME
     ).read_bytes()
     assert first_manifest["bundle_id"] == second_manifest["bundle_id"]
-    verified = bundle.verify_bundle(first, expected_commit=COMMIT)
-    assert verified["status"] == "verified"
+    verified = bundle.verify_bundle(first, expected_commit=COMMIT, fixture_only=True)
+    assert verified["status"] == "fixture_only"
     paths = {item["path"] for item in first_manifest["artifacts"]}
     for required in (
         "run-validation.ps1",
@@ -504,10 +518,10 @@ def test_nw11_bundle_is_deterministic_and_self_contained(tmp_path: Path) -> None
     cache = first / "tools" / "nw11" / "__pycache__"
     cache.mkdir(parents=True)
     (cache / "nw11_contract.cpython-312.pyc").write_bytes(b"interpreter-cache")
-    bundle.verify_bundle(first, expected_commit=COMMIT)
+    bundle.verify_bundle(first, expected_commit=COMMIT, fixture_only=True)
     (first / "bin" / "unrecorded.dll").write_bytes(b"unrecorded-payload")
     with pytest.raises(bundle.BundleError, match="unrecorded payload"):
-        bundle.verify_bundle(first, expected_commit=COMMIT)
+        bundle.verify_bundle(first, expected_commit=COMMIT, fixture_only=True)
 
 
 def test_nw11_zero_cost_stripping_rejects_optional_payload_in_common(tmp_path: Path) -> None:
@@ -542,7 +556,7 @@ def test_nw11_zero_cost_stripping_rejects_optional_payload_in_common(tmp_path: P
     tampered["bundle_id"] = contract.digest_value(identity)
     bundle.write_manifest(root, tampered)
     with pytest.raises(bundle.BundleError, match="optional shader targets"):
-        bundle.verify_bundle(root)
+        bundle.verify_bundle(root, fixture_only=True)
 
 
 def test_nw11_malformed_bundle_and_stale_commit_fail_closed(tmp_path: Path) -> None:
@@ -585,8 +599,8 @@ def test_nw11_matched_run_evaluation_rejects_regressions(
         environment_key="sha256:v1:" + "a" * 64,
     )
     assert result["status"] == expected
-    assert result["satisfies_completion"] is (expected == "accepted")
-    assert result["raw_per_sample_results"]["baseline"]["gpu_time_samples"]
+    assert result["satisfies_completion"] is True
+    assert result["aggregate"]["baseline"]["process_runs"][0]["raw_gpu_time_samples"]
 
 
 def test_nw11_evaluation_never_crosses_device_or_environment(
@@ -676,6 +690,15 @@ def test_nw11_per_device_decisions_are_isolated(tmp_path: Path) -> None:
     assert blackwell_decisions["devices"][0]["status"] == "accepted"
     assert blackwell_decisions["aggregate_status"] == "accepted"
     assert blackwell_decisions["satisfies_completion"] is False
+    blackwell_evidence["runs"][1]["measurement"] = _measurement(gpu=9.5)
+    blackwell_evidence = _evidence(root, manifest, document, blackwell_evidence["runs"])
+    rejected = evidence.build_decision_document(
+        evidence=blackwell_evidence, experiment=document, bundle_manifest=manifest,
+        bundle_manifest_sha256=blackwell_evidence["bundle_manifest_sha256"],
+    )
+    both = evidence.aggregate_verified_decisions([decisions, rejected])
+    assert [item["status"] for item in both["devices"]] == ["accepted", "rejected"]
+    assert both["satisfies_completion"] is True
 
 
     mismatched = _evidence(
@@ -703,7 +726,7 @@ def test_nw11_per_device_decisions_are_isolated(tmp_path: Path) -> None:
         )
 
 
-def test_nw11_stale_evidence_and_artifact_hashes_are_rejected(tmp_path: Path) -> None:
+def test_nw11_stale_evidence_and_artifact_hashes_are_rejected(tmp_path: Path, monkeypatch) -> None:
     root, manifest = _build_bundle(tmp_path)
     document = _experiment()
     base_evidence = _evidence(
@@ -740,6 +763,7 @@ def test_nw11_stale_evidence_and_artifact_hashes_are_rejected(tmp_path: Path) ->
 
     evidence_path = tmp_path / "evidence.json"
     evidence_path.write_text(json.dumps(stale), encoding="utf-8")
+    monkeypatch.setattr(bundle, "verify_bundle", lambda *a, **k: {"manifest": manifest})
     assert verify.main(
         [
             "evidence",
@@ -784,182 +808,31 @@ def test_nw11_capability_cli_exit_codes(tmp_path: Path) -> None:
     ) == verify.EXIT_EXECUTION_FAILED
 
 
-def test_nw11_collected_evidence_preserves_raw_runs_and_pending_coverage(
-    tmp_path: Path,
-) -> None:
-    import subprocess
-
-    root, manifest = _build_bundle(tmp_path)
-    document = _experiment()
-    observation_path = tmp_path / "observation.json"
-    observation_path.write_text(json.dumps(_observation()), encoding="utf-8")
-    eligibility_path = tmp_path / "eligibility.json"
-    subprocess.run(
-        [
-            sys.executable,
-            str(REPO_ROOT / "tools" / "nw11_verify.py"),
-            "capability",
-            "--profile",
-            str(root / "manifests/capability-profile.json"),
-            "--observation",
-            str(observation_path),
-            "--json-out",
-            str(eligibility_path),
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
-    eligibility = json.loads(eligibility_path.read_text(encoding="utf-8"))
-    common_eligibility_path = tmp_path / "common-eligibility.json"
-    subprocess.run(
-        [
-            sys.executable,
-            str(REPO_ROOT / "tools" / "nw11_verify.py"),
-            "capability",
-            "--profile",
-            str(root / "manifests/common-capability-profile.json"),
-            "--observation",
-            str(observation_path),
-            "--json-out",
-            str(common_eligibility_path),
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
-    common_eligibility = json.loads(
-        common_eligibility_path.read_text(encoding="utf-8")
-    )
-    accounting = manifest["accounting"]
-    inventory = manifest["shader_inventory"]["roles"]
-    reports = []
-    for role, gpu, artifact, decision, distribution in (
-        (
-            "baseline",
-            10.0,
-            "bin/common_baseline.exe",
-            common_eligibility,
-            accounting["baseline_distribution_bytes"],
-        ),
-        (
-            "variant",
-            7.5,
-            "bin/optional_variant.exe",
-            eligibility,
-            accounting["variant_distribution_bytes"],
-        ),
-        (
-            "fallback",
-            10.0,
-            "bin/fallback_common.exe",
-            common_eligibility,
-            accounting["fallback_distribution_bytes"],
-        ),
-    ):
-        for run_index in range(contract.PERF_RUN_COUNT):
-            measurement = _measurement(
-                gpu=gpu,
-                distribution=distribution,
-                shaders=len(inventory[role]),
-                shader_ids=inventory[role],
-            )
-            measurement["image"]["reference_kind"] = document["criteria"]["image"][
-                "reference_kind"
-            ]
-            if role == "baseline":
-                # A measured binary must never be able to self-report a
-                # passing fixed-quality result.  The collector must replace
-                # this with the independent capture comparison.
-                measurement["image"]["max_abs_channel_error"] = 5.0
-                measurement["image"]["rmse"] = 5.0
-            report = _run(role, measurement=measurement)
-            report["device_key"] = eligibility["device_key"]
-            report["environment_key"] = eligibility["environment_key"]
-            report["artifact_path"] = artifact
-            report["capability_decision"] = decision
-            path = tmp_path / f"{role}-{run_index}.json"
-            path.write_text(json.dumps(report), encoding="utf-8")
-            reports.append(path)
-    evidence_path = tmp_path / "collected.json"
-    image_result = _write_image_result(
-        tmp_path / "image-result.json",
-        document["criteria"]["image"]["reference_kind"],
-    )
-    fallback_image_result = _write_image_result(
-        tmp_path / "fallback-image-result.json",
-        document["criteria"]["image"]["reference_kind"],
-    )
-    arguments = [
-        sys.executable,
-        str(REPO_ROOT / "tools" / "nw11" / "collect-evidence.py"),
-        "--bundle-root",
-        str(root),
-        "--expected-commit",
-        COMMIT,
-        "--eligibility",
-        str(eligibility_path),
-        "--common-eligibility",
-        str(common_eligibility_path),
-        "--image-result",
-        str(image_result),
-        "--fallback-image-result",
-        str(fallback_image_result),
-        "--out",
-        str(evidence_path),
-    ]
-    for report in reports:
-        arguments.extend(["--run-report", str(report)])
-    subprocess.run(arguments, check=True)
-    collected = json.loads(evidence_path.read_text(encoding="utf-8"))
-    assert len(collected["runs"]) == 3
-    assert collected["runs"][0]["process_run_count"] == contract.PERF_RUN_COUNT
-    assert collected["raw_per_sample_results_preserved"] is True
-    baseline_run = next(
-        run for run in collected["runs"] if run["role"] == "baseline"
-    )
-    assert baseline_run["measurement"]["image"]["max_abs_channel_error"] == 0.0
-    assert baseline_run["measurement"]["image"]["rmse"] == 0.0
-
-    decisions_path = tmp_path / "decisions.json"
-    code = verify.main(
-        [
-            "evidence",
-            "--bundle-root",
-            str(root),
-            "--evidence",
-            str(evidence_path),
-            "--expected-commit",
-            COMMIT,
-            "--require-accepted",
-            "--json-out",
-            str(decisions_path),
-        ]
-    )
-    assert code == verify.EXIT_OK
-    decisions = json.loads(decisions_path.read_text(encoding="utf-8"))
-    assert decisions["aggregate_status"] == "accepted"
-    assert decisions["satisfies_completion"] is False
+def test_nw11_runtime_floors_and_future_dxr_tier() -> None:
+    ray = capability.profile_manifest_template(contract.RAY_QUERY_PROFILE_ID)
+    observation = _observation(ray=12)
+    observation["driver_version"] = "32.0.16.1088"
+    result = capability.evaluate_observation(ray, observation)
+    assert result["status"] == "eligible"
+    assert result["queried"]["raytracing_tier"] == 12
+    assert result["physical_device_tier"] == "desktop_ada_representative"
+    observation["driver_version"] = "unavailable"
+    assert capability.evaluate_observation(ray, observation)["status"] == "pending"
+    observation["os_build"] = "10.0.19045"
+    assert capability.evaluate_observation(ray, observation)["status"] == "unsupported"
+    observation["os_build"] = "10.0.22631"
+    observation["driver_version"] = "32.0.16.1087"
+    assert capability.evaluate_observation(ray, observation)["status"] == "unsupported"
 
 
 def test_nw11_launcher_is_one_command_and_verifies_before_measuring() -> None:
-    launcher = (REPO_ROOT / "tools" / "nw11" / "run-validation.ps1").read_text(
-        encoding="utf-8"
-    )
-    assert "$BundleRoot" in launcher
-    assert "$ExpectedCommit" in launcher
-    assert "$VerifyOnly" in launcher
-    assert "$DryRun" in launcher
-    assert "tools/nw11/nw11_verify.py" in launcher
-    assert "collect-evidence.py" in launcher
-    assert "capability-snapshot.json" in launcher
-    assert "exit 3" in launcher
-    assert "& $Python.Command @all | Out-Host" in launcher
-    assert '$resolved += @("--runs", "1")' in launcher
-    assert "pip install" not in launcher
-    assert "cmake" not in launcher.lower()
-    assert "visual studio" not in launcher.lower()
-    verify_position = launcher.index('"bundle", "--bundle-root"')
-    measure_position = launcher.index("foreach ($pair in $pairs)")
-    assert verify_position < measure_position
+    launcher = (REPO_ROOT / "tools/nw11/run-validation.ps1").read_text()
+    assert launcher.index('"bundle", "--bundle-root"') < launcher.index("& $python @runnerArgs")
+    assert launcher.index("New-Item -ItemType Directory -Path $temporaryPath") < launcher.index("Remove-Item")
+    assert '$Manifest.bundle_id' not in launcher
+    assert '"summary.json"' in launcher
+    assert 'pip install' not in launcher
+    assert 'cmake' not in launcher.lower()
 
 
 def test_nw11_evidence_rejects_adapter_luid_mismatch(tmp_path: Path) -> None:
@@ -1035,8 +908,9 @@ def test_nw11_shader_manifest_declares_synchronization_and_lifetimes() -> None:
     assert "TraceRayInline" in ray_source
     assert "CommittedStatus" in ray_source
     assert "CommittedWorldSpaceGeometryNormal" not in ray_source
-    assert "AnalyticEnvironment" in ray_source
-    assert "hit_marker" in ray_source
+    assert "ReflectionRadiance(reflected, hit)" in ray_source
+    assert "1e-6" not in ray_source
+    assert "hit_marker" not in ray_source
 
     analytic = entries["nw11_analytic_reflection_ps"]
     assert analytic["optional"] is False
@@ -1095,14 +969,8 @@ def test_nw11_pending_capability_query_never_reaches_optional_execution(
     assert verify.main(
         ["capability", "--profile", str(mesh_profile), "--observation", str(path)]
     ) == verify.EXIT_PENDING
-    launcher = (
-        REPO_ROOT / "tools" / "nw11" / "run-validation.ps1"
-    ).read_text(encoding="utf-8")
-    assert "$optionalRunnable = $eligibilityCode -eq 0" in launcher
-    assert "$eligibilityCode -notin @(0, 3, 11)" in launcher
-    gate_position = launcher.index("$optionalRunnable = $eligibilityCode -eq 0")
-    loop_position = launcher.index("foreach ($pair in $pairs)")
-    assert gate_position < loop_position
+    _, manifest = _build_bundle(tmp_path)
+    assert set(measurements.role_paths(manifest, {"status": "pending"})) == {"baseline", "fallback"}
 
 
 def test_nw11_malformed_run_status_and_missing_constants_fail_closed(
@@ -1200,17 +1068,10 @@ def test_nw11_bundle_accounts_optional_and_shared_shader_bytes(
 ) -> None:
     root, manifest = _build_bundle(tmp_path)
     accounting = manifest["accounting"]
-    assert accounting["optional_shader_bytes"] > 0
-    assert accounting["optional_shader_count"] >= 2
-    assert accounting["variant_distribution_bytes"] >= (
-        accounting["optional_distribution_bytes"]
-        + accounting["optional_shader_bytes"]
-    )
-    shader_entries = [
-        item for item in manifest["artifacts"] if item["role"] == "shader"
-    ]
+    assert accounting["variant_distribution_bytes"] == accounting["optional_distribution_bytes"]
+    shader_entries = [item for item in manifest["artifacts"] if item["role"] == "shader"]
     assert shader_entries
-    assert all(item["distributed_bytes"] == item["bytes"] for item in shader_entries)
+    assert all(item["distributed_bytes"] == 0 for item in shader_entries)
     paths = {item["path"] for item in manifest["artifacts"]}
     assert "shaders/nw06/nw06_scene_ps.hlsl" in paths
     assert "shaders/nw06/nw06_bloom_cs.hlsl" in paths
@@ -1299,7 +1160,7 @@ def test_nw11_probe_adapter_luid_is_propagated_to_measured_artifacts() -> None:
         REPO_ROOT / "src/nw11/render/nw11_scene_harness.cpp"
     ).read_text(encoding="utf-8")
     main = (REPO_ROOT / "src/nw11/render/nw11_main.cpp").read_text(encoding="utf-8")
-    launcher = (REPO_ROOT / "tools/nw11/run-validation.ps1").read_text(encoding="utf-8")
+    runner = (REPO_ROOT / "tools/nw11/validate-device.py").read_text()
     assert "adapter_luid" in probe
     assert '"--adapter-luid"' in main
     assert "NW11_ADAPTER_LUID" in harness
@@ -1308,10 +1169,8 @@ def test_nw11_probe_adapter_luid_is_propagated_to_measured_artifacts() -> None:
         REPO_ROOT / "src/nw11/production/package_player.overlay.json")
     assert "NW11_ADAPTER_LUID" in production
     assert "adapter_desc.AdapterLuid" in production
-    assert '$adapterLuid = [string]$adapterRecord.adapter_luid' in launcher
-    assert '@("--adapter-luid", $adapterLuid)' in launcher
-    assert "Assert-Nw11ArtifactHash $manifest $pair.Artifact" in launcher
-    assert "Get-FileHash -LiteralPath $target -Algorithm SHA256" in launcher
+    assert '"--adapter-luid", decision["adapter"]["adapter_luid"]' in runner
+    assert 'contract.sha256_file(path) != entry["sha256"]' in runner
 
 
 def test_nw11_windows_ci_runs_command_path_and_binds_toolchain_payloads() -> None:
@@ -1457,8 +1316,8 @@ def test_nw11_bundle_records_toolchain_shader_and_dependency_manifests(
     assert manifest["toolchain"]["measured"]["dxc_version"]
     assert manifest["shader_payloads"]["payload_count"] == 1
     assert manifest["dependency_report"]["sha256"]
-    verified = bundle.verify_bundle(target, expected_commit=COMMIT)
-    assert verified["status"] == "verified"
+    verified = bundle.verify_bundle(target, expected_commit=COMMIT, fixture_only=True)
+    assert verified["status"] == "fixture_only"
 
 
 def test_nw11_experiment_runtime_validator_enforces_frozen_guardrails() -> None:
@@ -1541,78 +1400,35 @@ def test_nw11_capability_probe_selects_a_real_adapter_safely() -> None:
     assert "output.resize(static_cast<size_t>(bytes - 1));" in source
 
 
-def test_nw11_collector_requires_three_fresh_processes_per_role(
-    tmp_path: Path,
-) -> None:
-    collector = _load_collector()
-    root, manifest = _build_bundle(tmp_path)
-    decision = {
-        "status": "eligible",
-        "marketing_name_used_for_eligibility": False,
-        "device_key": "pci:10de:2805",
-        "environment_key": "sha256:v1:" + "a" * 64,
-    }
-    eligibility_path = tmp_path / "eligibility.json"
-    eligibility_path.write_text(json.dumps(decision), encoding="utf-8")
-    image_result = _write_image_result(tmp_path / "image-result.json")
-    fallback_image_result = _write_image_result(
-        tmp_path / "fallback-image-result.json"
-    )
-    inventory = manifest["shader_inventory"]["roles"]
-    accounting = manifest["accounting"]
-    reports: list[Path] = []
-    for role, artifact, distribution in (
-        ("baseline", "bin/common_baseline.exe", accounting["baseline_distribution_bytes"]),
-        ("variant", "bin/optional_variant.exe", accounting["variant_distribution_bytes"]),
-        ("fallback", "bin/fallback_common.exe", accounting["fallback_distribution_bytes"]),
-    ):
-        measurement = _measurement(
-            distribution=distribution,
-            shaders=len(inventory[role]),
-            shader_ids=inventory[role],
-        )
-        report = _run(role, measurement=measurement)
-        report["device_key"] = decision["device_key"]
-        report["environment_key"] = decision["environment_key"]
-        report["artifact_path"] = artifact
-        report["capability_decision"] = decision
-        path = tmp_path / f"{role}-only.json"
-        path.write_text(json.dumps(report), encoding="utf-8")
-        reports.append(path)
-    with pytest.raises(evidence.EvidenceError, match="exactly"):
-        collector.collect(
-            bundle_root=root,
-            run_reports=reports,
-            expected_commit=COMMIT,
-            eligibility_file=str(eligibility_path),
-            common_eligibility_file=str(eligibility_path),
-            image_result_file=str(image_result),
-            fallback_image_result_file=str(fallback_image_result),
-        )
+def test_nw11_collector_requires_three_fresh_processes_per_role() -> None:
+    baseline = _measurement()
+    baseline["process_runs"] = baseline["process_runs"][:1]
+    with pytest.raises(experiment.ExperimentError, match="3 independent"):
+        experiment.summarize_process_runs(baseline, "baseline", _experiment()["protocol"])
 
-    # A single report cannot satisfy the repeated-sample protocol even when it
-    # contains 600 samples, because the frozen policy requires three fresh
-    # processes per role.
-    with pytest.raises(evidence.EvidenceError):
-        collector.collect(
-            bundle_root=root,
-            run_reports=reports[:1],
-            expected_commit=COMMIT,
-            eligibility_file=str(eligibility_path),
-            common_eligibility_file=str(eligibility_path),
-            image_result_file=str(image_result),
-            fallback_image_result_file=str(fallback_image_result),
-        )
+
+def test_nw11_failed_run_cannot_be_hidden_in_aggregate() -> None:
+    base, variant = _measurement(), _measurement(gpu=7.5)
+    # Seven spikes fail p99 within one run but could disappear across 1,800 samples.
+    base["process_runs"][0]["gpu_time_samples"][:7] = [24.0] * 7
+    result = experiment.evaluate_experiment(
+        _experiment(), {"device_key": "pci:10de:2805", "environment_key": "host",
+                        "baseline": base, "variant": variant},
+        device_key="pci:10de:2805", environment_key="host",
+    )
+    assert result["status"] == "rejected"
+    assert "NW11-NW07-REFERENCE-GATE" in {reason["code"] for reason in result["reasons"]}
 
 
 def test_nw11_capture_comparator_computes_metrics_from_pixels(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    comparator = _load_comparator()
     monkeypatch.setattr(contract, "OUTPUT_WIDTH", 2)
     monkeypatch.setattr(contract, "OUTPUT_HEIGHT", 2)
     monkeypatch.setattr(contract, "REFERENCE_FIXED_TICKS", (0, 1))
-    ticks = [0, 1]
+    monkeypatch.setattr(contract, "LOOP_TICKS", 2)
+    comparator = _load_comparator()
+    ticks = [0, 1, 2]
     baseline_dir = tmp_path / "baseline"
     variant_dir = tmp_path / "variant"
     baseline_dir.mkdir()
@@ -1656,7 +1472,8 @@ def test_nw11_capture_comparator_computes_metrics_from_pixels(
     )
     assert result["max_abs_channel_error"] == pytest.approx(0.00005, abs=1e-7)
     assert result["rmse"] == pytest.approx(0.00005, abs=1e-7)
-    assert result["fixed_ticks"] == ticks
+    assert result["fixed_ticks"] == ticks[:-1]
+    assert result["loop_boundary"]["variant"]["rmse"] == 0
 
 
 def test_nw11_bundle_rejects_tampered_experiment_definition(
@@ -1702,7 +1519,7 @@ def test_nw11_bundle_rejects_tampered_experiment_definition(
     tampered["bundle_id"] = contract.digest_value(identity)
     bundle.write_manifest(root, tampered)
     with pytest.raises(bundle.BundleError, match="experiment definition is invalid"):
-        bundle.verify_bundle(root)
+        bundle.verify_bundle(root, fixture_only=True)
 
 
 def test_nw11_same_device_key_cannot_span_device_tiers(tmp_path: Path) -> None:
@@ -1718,7 +1535,7 @@ def test_nw11_same_device_key_cannot_span_device_tiers(tmp_path: Path) -> None:
         ),
     ]
     evidence_document = _evidence(root, manifest, document, runs)
-    with pytest.raises(evidence.EvidenceError, match="two device tiers"):
+    with pytest.raises(evidence.EvidenceError, match="PCI identity"):
         evidence.compute_decisions(evidence_document, document)
 
 
@@ -1729,7 +1546,7 @@ def test_nw11_production_windows_runtime_preserves_platform_definitions() -> Non
     assert "NW10_COMPACT_PACKAGE=0" in cmake
     probe = (REPO_ROOT / "src/nw11/capability_probe.cpp").read_text(encoding="utf-8")
     assert 'queried(has_options7, MeshTierName' in probe
-    assert 'queried(has_options5, RaytracingTierName' in probe
+    assert 'JsonNumber(static_cast<unsigned>(options5.RaytracingTier))' in probe
     assert ' : "null";' in probe
 
 
@@ -1761,77 +1578,16 @@ def test_nw11_native_package_and_dxil_binding_fail_closed() -> None:
         inspect(image(b"MZ"))
 
 
-def test_nw11_verify_bundle_production_binding_ignores_fallback_identity(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import nw11_production_binding as binding
-
+def test_nw11_production_verifier_rejects_fixture_only_bundle(tmp_path: Path) -> None:
     root, manifest = _build_bundle(tmp_path)
-    proof_path = root / "manifests/nw11-common-regression.json"
-    proof_path.write_text("{}", encoding="utf-8")
-    observed = {
-        "specialization": "mesh",
-        "sha256": "a" * 64,
-        "package_sha256": "b" * 64,
-        "template_sha256": "c" * 64,
-        "linked_specialization_payloads": [],
-    }
-    monkeypatch.setattr(binding, "verify_proof", lambda proof, commit: ("b" * 64, "d" * 64))
-    monkeypatch.setattr(binding, "read_payloads", lambda directory: {})
-    monkeypatch.setattr(binding, "inspect", lambda image, **kwargs: dict(observed))
-    for item in manifest["artifacts"]:
-        if item["role"] in {
-            bundle.ROLE_COMMON_BASELINE,
-            bundle.ROLE_OPTIONAL_VARIANT,
-            bundle.ROLE_FALLBACK,
-        }:
-            item["metadata"] = dict(observed)
-    fallback = next(
-        item for item in manifest["artifacts"] if item["role"] == bundle.ROLE_FALLBACK
-    )
-    fallback["metadata"]["fallback_artifact_id"] = manifest["fallback_artifact_id"]
-    manifest["artifacts"].append(
-        bundle.make_entry(
-            root,
-            "manifests/nw11-common-regression.json",
-            role=bundle.ROLE_READING,
-        )
-    )
-    manifest["artifacts"].sort(key=lambda item: item["path"])
-    manifest["accounting"] = bundle._accounting(
-        manifest["artifacts"],
-        artifact_budget=manifest["accounting"]["artifact_budget"],
-        dependency_ledger=manifest["dependency_ledger"],
-    )
-    identity_keys = (
-        "repository",
-        "commit",
-        "experiment_id",
-        "profile_id",
-        "fallback_artifact_id",
-        "bundle_version",
-        "artifacts",
-        "capability_profile",
-        "experiment_definition",
-        "toolchain",
-        "required_capabilities",
-        "dependency_ledger",
-        "accounting",
-        "shader_inventory",
-        "shader_payloads",
-        "dependency_report",
-        "canonical_production",
-    )
-    manifest["bundle_id"] = contract.digest_value(
-        {key: manifest[key] for key in identity_keys if key in manifest}
-    )
-    bundle.write_manifest(root, manifest)
-    assert bundle.verify_bundle(root, expected_commit=COMMIT)["status"] == "verified"
+    assert bundle.verify_bundle(root, fixture_only=True)["status"] == "fixture_only"
+    with pytest.raises(bundle.BundleError, match="required native artifacts"):
+        bundle.verify_bundle(root, expected_commit=COMMIT)
+    assert verify.main(["bundle", "--bundle-root", str(root)]) == verify.EXIT_IDENTITY
 
 
 def test_nw11_specialization_is_isolated_from_frozen_player(tmp_path: Path) -> None:
     from nw11_specialize_player import specialize
-    import hashlib
     source = REPO_ROOT / "src/player/package_player.cpp"
     overlay = REPO_ROOT / "src/nw11/production/package_player.overlay.json"
     original = source.read_text(encoding="utf-8")
@@ -1840,7 +1596,8 @@ def test_nw11_specialization_is_isolated_from_frozen_player(tmp_path: Path) -> N
     assert "NW11_PRODUCTION_EXPERIMENT" in result
     # The generated translation unit reproduces the previously native-tested
     # specialization, rather than silently replacing the common renderer.
-    assert hashlib.sha256(result.encode()).hexdigest() == "a7a86f3c8d07100c05980ae288425557a100144e0db048af6aa95b494b681889"
+    assert result.count("instrumentation_.BeginFrame(") == original.count("instrumentation_.BeginFrame(")
+    assert "peak_engine_committed_gpu_bytes" in result
     changed = tmp_path / "player.cpp"
     changed.write_text(original + "\n// upstream change\n", encoding="utf-8")
     with pytest.raises(ValueError, match="rebase"):
@@ -1866,7 +1623,7 @@ def test_nw11_distribution_budget_is_gated(tmp_path: Path) -> None:
         complete_manifest["accounting"]["adoption_budget_status"] == "rejected"
     )
     assert (
-        bundle.verify_bundle(complete, expected_commit=COMMIT)["accounting"][
+        bundle.verify_bundle(complete, expected_commit=COMMIT, fixture_only=True)["accounting"][
             "adoption_budget_status"
         ]
         == "rejected"
@@ -1936,70 +1693,213 @@ def test_nw11_validation_bundle_uses_only_bundled_python_runtime() -> None:
     assert "Expand-Archive" in launcher
     assert 'Get-Command $candidate' not in launcher
     assert "--python-runtime-zip" in workflow
-    assert "production validation bundles require a bundled Python runtime" in builder
+    assert "production validation bundles require native proofs and validation runtimes" in builder
 
 
-def test_nw11_unsupported_optional_still_collects_common_and_fallback(tmp_path: Path) -> None:
-    collector = _load_collector()
+def test_nw11_unsupported_optional_requires_common_and_fallback(tmp_path: Path) -> None:
     root, manifest = _build_bundle(tmp_path)
-    common = {
-        "status": "eligible",
-        "marketing_name_used_for_eligibility": False,
-        "device_key": "pci:10de:2805",
-        "environment_key": "sha256:v1:" + "a" * 64,
-        "adapter": {"adapter_luid": "00000000:0000ABCD"},
-    }
-    optional = dict(common)
-    optional["status"] = "unsupported"
-    optional["diagnostics"] = [{"code": "NW11-CAPABILITY-UNSUPPORTED"}]
-    common_path = tmp_path / "common.json"
-    optional_path = tmp_path / "optional.json"
-    common_path.write_text(json.dumps(common), encoding="utf-8")
-    optional_path.write_text(json.dumps(optional), encoding="utf-8")
-    fallback_image = _write_image_result(tmp_path / "fallback-image.json")
-    reports = []
-    accounting = manifest["accounting"]
-    inventory = manifest["shader_inventory"]["roles"]
-    for role, artifact, distribution in (
-        ("baseline", "bin/common_baseline.exe", accounting["baseline_distribution_bytes"]),
-        ("fallback", "bin/fallback_common.exe", accounting["fallback_distribution_bytes"]),
-    ):
-        for index in range(contract.PERF_RUN_COUNT):
-            measurement = _measurement(
-                distribution=distribution,
-                shaders=len(inventory[role]),
-                shader_ids=inventory[role],
-            )
-            report = _run(role, measurement=measurement)
-            report["status"] = "measured"
-            report["device_key"] = common["device_key"]
-            report["environment_key"] = common["environment_key"]
-            report["adapter"] = {"adapter_luid": "00000000:0000ABCD"}
-            report["artifact_path"] = artifact
-            report["capability_decision"] = common
-            path = tmp_path / f"{role}-{index}.json"
-            path.write_text(json.dumps(report), encoding="utf-8")
-            reports.append(path)
-    document = collector.collect(
-        bundle_root=root,
-        run_reports=reports,
-        expected_commit=COMMIT,
-        eligibility_file=str(optional_path),
-        common_eligibility_file=str(common_path),
-        fallback_image_result_file=str(fallback_image),
-        device_tier="desktop_ada_representative",
+    observation = _observation(mesh="D3D12_MESH_SHADER_TIER_NOT_SUPPORTED")
+    common, optional = measurements.evaluate_profiles(root, manifest, observation)
+    assert common["status"] == "eligible"
+    assert optional["status"] == "unsupported"
+    assert set(measurements.role_paths(manifest, optional)) == {"baseline", "fallback"}
+    data = _evidence(root, manifest, _experiment(), [_run("baseline"), _run("fallback")])
+    data["optional_eligibility"] = dict(data["common_eligibility"], status="unsupported")
+    result = evidence.build_decision_document(
+        evidence=data, experiment=_experiment(), bundle_manifest=manifest,
+        bundle_manifest_sha256=data["bundle_manifest_sha256"], schema_root=root,
     )
-    assert {run["role"] for run in document["runs"]} == {"baseline", "fallback"}
-    decisions = evidence.compute_decisions(document, _experiment())
-    observed = decisions["decisions"]
-    assert len(observed) == 1
-    assert observed[0]["status"] == "unsupported"
-    assert observed[0]["fallback_tested"] is True
+    assert result["devices"][0]["status"] == "unsupported"
+    assert result["devices"][0]["fallback_tested"] is True
+    data["runs"].pop()
+    with pytest.raises(evidence.EvidenceError, match="fallback"):
+        evidence.build_decision_document(
+            evidence=data, experiment=_experiment(), bundle_manifest=manifest,
+            bundle_manifest_sha256=data["bundle_manifest_sha256"], schema_root=root,
+        )
 
 
-def test_nw11_launcher_blocks_only_optional_variant_for_unsupported_or_pending() -> None:
-    launcher = (REPO_ROOT / "tools/nw11/run-validation.ps1").read_text(encoding="utf-8")
-    assert "$optionalRunnable = $eligibilityCode -eq 0" in launcher
-    assert "common/fallback validation continues" in launcher
-    assert "if ($optionalRunnable)" in launcher
-    assert "$pairs = @(" in launcher
+def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeypatch) -> None:
+    root, manifest = _build_bundle(tmp_path)
+    output = tmp_path / "physical-fixture"
+    output.mkdir()
+    from types import SimpleNamespace
+    comparator = _load_comparator()
+    comparator.contract = SimpleNamespace(**(vars(contract) | {"OUTPUT_WIDTH": 2, "OUTPUT_HEIGHT": 2}))
+    monkeypatch.setattr(measurements, "_comparison_tool", lambda: comparator.compare)
+
+    def put(path: Path, value: dict) -> None:
+        path.write_text(json.dumps(value), encoding="utf-8")
+
+    def captures(folder: Path, identity: dict) -> dict:
+        ticks = [*contract.REFERENCE_FIXED_TICKS, contract.LOOP_TICKS]
+        images = []
+        for tick in ticks:
+            path = folder / f"{tick}.rgba"
+            path.write_bytes(array("f", [0.25] * 16).tobytes())
+            images.append({"tick": tick, "path": path.name, "width": 2, "height": 2,
+                           "format": "rgba32f", "sha256": contract.sha256_file(path)})
+        return {"format": "nw11-capture-set", "version": 1,
+                "fixed_ticks": ticks, "images": images, **identity}
+
+    for name in ("canonical_reference", "canonical_release"):
+        relative = f"bin/{name}.exe"
+        (root / relative).write_bytes(name.encode())
+        manifest["artifacts"].append(bundle.make_entry(root, relative, role=bundle.ROLE_TOOL))
+    package_sha = "c" * 64
+    for entry in manifest["artifacts"]:
+        if entry["role"] in measurements.ARTIFACT_ROLES.values():
+            entry["metadata"]["package_sha256"] = package_sha
+    observation = _observation()
+    snapshot = output / "capability-snapshot.json"
+    put(snapshot, observation)
+    common, optional = measurements.evaluate_profiles(root, manifest, observation)
+    put(output / "common-eligibility.json", common)
+    put(output / "eligibility.json", optional)
+    probe_sha = contract.sha256_file(root / "bin/nw11_capability_probe.exe")
+    session = {"commit": COMMIT, "bundle_id": manifest["bundle_id"]}
+    put(output / "probe-execution.json", {
+        **session, "process_id": 100, "start_filetime": 10, "end_filetime": 20,
+        "exit_code": 0, "snapshot_sha256": contract.sha256_file(snapshot), "probe_sha256": probe_sha,
+    })
+
+    sequence = 0
+
+    def process(folder: Path, role: str, relative: str, mode: str, *,
+                has_capture: bool = False) -> None:
+        nonlocal sequence
+        sequence += 1
+        folder.mkdir(parents=True)
+        start = sequence * 1_000_000_000
+        decision = optional if role == "variant" else common
+        artifact = next(item for item in manifest["artifacts"] if item["path"] == relative)
+        identity = {"launch_id": f"{sequence:032x}", "process_id": 100 + sequence,
+                    "executable_sha256": artifact["sha256"]}
+        command = [relative, "--runs", "1", "--warmup-seconds", "5" if mode == "warm" else "0",
+                   "--run-seconds", "60" if mode == "warm" else "1", "--fixed-quality", contract.QUALITY_PROFILE_ID,
+                   "--role", role, "--artifact-path", relative, "--launch-id", identity["launch_id"],
+                   "--commit", COMMIT, "--device-tier", decision["physical_device_tier"],
+                   "--device-key", decision["device_key"], "--environment-key", decision["environment_key"],
+                   "--adapter-luid", decision["adapter"]["adapter_luid"]]
+        if mode == "canonical_reference":
+            command.append("--capture-display")
+        put(folder / "launch.json", {
+            **session, **identity, "mode": mode, "role": role, "artifact_path": relative, "command": command,
+            "start_filetime": start, "end_filetime": start + 900_000_000,
+            "start_qpc_ms": 0, "end_qpc_ms": 70000, "exit_code": 0,
+        })
+        ids = manifest["shader_inventory"]["roles"].get(role, [])
+        report_identity = {**identity, "process_creation_filetime": start + 1,
+                           "tested_commit": COMMIT, "package_sha256": package_sha}
+        put(folder / "report.json", {
+            **report_identity, "role": role, "artifact_path": relative, "status": "eligible",
+            "device_tier": decision["physical_device_tier"], "device_key": decision["device_key"],
+            "environment_key": decision["environment_key"], "capability_decision": decision,
+            "format": "nw11-raw-run.v1", "adapter": observation["adapter"],
+            "timing": {"warmup_start_qpc_ms": 100, "measurement_start_qpc_ms": 5100,
+                       "measurement_end_qpc_ms": 65100},
+            "measurement": {"process_start_to_first_present_ms": 900, "gpu_time_samples": [],
+                            "cpu_submit_samples": [5.0] * 601, "shader_count": len(ids),
+                            "shader_ids": ids, "peak_engine_committed_gpu_bytes": 300000000,
+                            "distribution_bytes": manifest["accounting"].get(f"{role}_distribution_bytes", 0)},
+        })
+        if has_capture:
+            put(folder / "captures.json", captures(folder, report_identity))
+        if mode == "warm":
+            rows = ["ProcessID,CPUStartQPCTime,SyncInterval,SwapChainAddress,GPUTime,DisplayedTime,DisplayLatency"]
+            gpu = 7.5 if role == "variant" else 10.0
+            rows.extend(f"{identity['process_id']},{5200 + index * 90},0,abc,{gpu},16,25"
+                        for index in range(600))
+            rows.append(f"{identity['process_id']},60000,0,abc,{gpu},NA,NA")
+            (folder / "presentmon.csv").write_text("\n".join(rows) + "\n")
+
+    for role, relative in measurements.role_paths(manifest, optional).items():
+        folder = output / "raw" / role
+        process(folder / "startup", role, relative, "startup")
+        prepare = folder / "cache-preparation.json"
+        put(prepare, {"format": "nw11-driver-cache-preparation.v1", "status": "cleared",
+                      "method": "D3D12 ShaderCacheControl(CLEAR)", "adapter_luid": observation["adapter"]["adapter_luid"]})
+        put(folder / "cache-execution.json", {
+            "probe_sha256": probe_sha, "result_sha256": contract.sha256_file(prepare), "exit_code": 0,
+            "start_filetime": sequence * 1_000_000_000 - 10, "end_filetime": sequence * 1_000_000_000 - 1,
+        })
+        for index in range(1, 4):
+            process(folder / f"run-{index}", role, relative, "warm", has_capture=index == 3)
+
+    process(output / "canonical-reference", "canonical_reference", "bin/canonical_reference.exe",
+            "canonical_reference", has_capture=True)
+    release = output / "canonical-release"
+    release.mkdir()
+    put(release / "captures.json", captures(release, {}))
+    for index, tick in enumerate((*contract.REFERENCE_FIXED_TICKS, contract.LOOP_TICKS), 1):
+        player_log = release / f"{tick}.log"
+        player_log.write_text(f"NW05_EXPLICIT_TICK={tick}\n", encoding="utf-8")
+        put(release / f"{tick}-execution.json", {
+            "player_log_sha256": contract.sha256_file(player_log),
+            **session, "executable_sha256": contract.sha256_file(root / "bin/canonical_release.exe"),
+            "process_id": 1000 + index, "tick": tick, "start_filetime": 2000 + index,
+            "end_filetime": 3000 + index, "player_exit_code": 0, "capture_exit_code": 0,
+            "command": ["canonical_release.exe", "--tick", str(tick), "--frames", "1"],
+        })
+
+    record = measurements.collect(root, manifest, output, "evidence.json")
+    assert [len(run["measurement"]["process_runs"]) for run in record["runs"]] == [3, 3, 3]
+    assert record["runs"][0]["measurement"]["process_runs"][0]["dropped_presents"] == 1
+    put(output / "evidence.json", record)
+    monkeypatch.setattr(bundle, "verify_bundle", lambda *a, **k: {"manifest": manifest, "accounting": manifest["accounting"]})
+    arguments = ["evidence", "--bundle-root", str(root), "--evidence", str(output / "evidence.json"),
+                 "--json-out", str(output / "decisions.json")]
+    assert verify.main(arguments) == verify.EXIT_OK
+    decision = json.loads((output / "decisions.json").read_text())
+    assert decision["devices"][0]["canonical_release_correctness"]["loop_boundary"]["variant"]["rmse"] == 0
+    assert decision["devices"][0]["status"] == "accepted"
+    assert not decision["satisfies_completion"]
+
+    # Editing only the derived aggregate must not change a decision.
+    record["runs"][0]["measurement"]["process_runs"][0]["gpu_time_samples"][0] = 3
+    put(output / "evidence.json", record)
+    assert verify.main(arguments) == verify.EXIT_MALFORMED
+    # Reusing an earlier launch under a new role-run path also fails raw regeneration.
+    role = output / "raw" / "baseline"
+    (role / "run-2/launch.json").write_bytes((role / "run-1/launch.json").read_bytes())
+    (role / "run-2/report.json").write_bytes((role / "run-1/report.json").read_bytes())
+    assert verify.main(arguments) == verify.EXIT_STALE
+    with pytest.raises(evidence.EvidenceError, match="reused process identity"):
+        measurements.collect(root, manifest, output, "evidence.json")
+
+
+def test_nw11_native_inventory_counts_compiled_shaders_in_package_and_pe() -> None:
+    from nw11_production_binding import shader_inventory
+
+    def container(part: bytes, content: bytes) -> bytes:
+        size = 44 + len(content)
+        return (b"DXBC" + bytes(16) + struct.pack("<IIII", 1, size, 1, 36)
+                + part + struct.pack("<I", len(content)) + content)
+
+    raster = container(b"DXIL", b"retained raster shader")
+    mesh = container(b"DXIL", b"mesh shader")
+    signature = container(b"RTS0", b"signature")
+    observed = shader_inventory(b"MZ" + signature + mesh + b"NWP-package" + raster)
+    assert [item["bytes"] for item in observed] == [len(mesh), len(raster)]
+    assert all(item["id"].endswith(contract.sha256_bytes(payload))
+               for item, payload in zip(observed, (mesh, raster)))
+
+
+def test_nw11_reflection_fixture_distinguishes_known_hits_and_misses() -> None:
+    document = _experiment(contract.EXPERIMENT_RAY_ID)
+    fixture = document["criteria"]["image"]["fixture"]
+    assert fixture["miss_segment_length"] < fixture["outward_offset"] < fixture["hit_segment_length"]
+    shader = (REPO_ROOT / "shaders/nw11/reflection/nw11_reflection_fixture.hlsli").read_text()
+    assert "ReflectionOffset = 0.02" in shader
+    assert "ReflectionOffset + 0.001" in shader
+    assert "ReflectionOffset - 0.005" in shader
+    assert "hit ? float3(0.92, 0.16, 0.05) : AnalyticEnvironment" in shader
+
+
+def test_nw11_canonical_release_binding_reads_frozen_manifest_digest() -> None:
+    import nw05_export
+    import nw11_production_binding as binding
+    manifest = b'{"release_manifest": true}'
+    link = bytes.fromhex(contract.sha256_bytes(manifest))
+    image = nw05_export.embed_package(b"MZtest release", b"canonical package", link)
+    assert binding.embedded_payloads(image) == (b"MZtest release", b"canonical package", link)

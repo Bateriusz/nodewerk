@@ -26,18 +26,20 @@
 #include <string>
 #include <vector>
 
+#include "capture_release_frame.h"
+
 using Microsoft::WRL::ComPtr;
 
 namespace {
 
 constexpr int kExitOk = 0;
 constexpr int kExitMalformedArgs = 2;
-constexpr int kExitUnsupported = 3;
 constexpr int kExitInitializationFailed = 4;
 
 struct Options {
     std::string json_path;
     bool self_check = false;
+    bool reset_driver_cache = false;
     bool has_adapter_luid = false;
     LUID adapter_luid{};
     bool has_adapter_index = false;
@@ -127,62 +129,35 @@ std::string WindowsBuild() {
     return "unavailable";
 }
 
-std::string DriverVersionForAdapter(LUID adapter_luid) {
-    // DXGI does not expose the display driver version.  Read the class
-    // registry entry whose AdapterLuid matches the selected adapter, so a
-    // multi-GPU machine records the driver belonging to the measured device.
-    HKEY key = nullptr;
-    if (RegOpenKeyExA(
-            HKEY_LOCAL_MACHINE,
-            "SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}",
-            0,
-            KEY_READ,
-            &key) != ERROR_SUCCESS) {
+std::string DriverVersionForAdapter(IDXGIAdapter1* adapter) {
+    // WDDM 2.3+ requires D3D9 and D3D12 UMDs in a driver package to
+    // share this version, and the query is bound to the selected adapter.
+    LARGE_INTEGER version{};
+    if (adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &version) != S_OK ||
+        version.QuadPart == 0) return "unavailable";
+    char text[64]{};
+    std::snprintf(text, sizeof(text), "%u.%u.%u.%u",
+        static_cast<unsigned>(HIWORD(version.HighPart)),
+        static_cast<unsigned>(LOWORD(version.HighPart)),
+        static_cast<unsigned>(HIWORD(version.LowPart)),
+        static_cast<unsigned>(LOWORD(version.LowPart)));
+    return text;
+}
+
+std::string NativeArchitecture() {
+    USHORT process_machine = 0;
+    USHORT native_machine = 0;
+    if (!IsWow64Process2(GetCurrentProcess(), &process_machine, &native_machine))
         return "unavailable";
-    }
-    std::string result = "unavailable";
-    for (DWORD index = 0;; ++index) {
-        char subkey_name[256] = {};
-        DWORD name_length = sizeof(subkey_name);
-        if (RegEnumKeyExA(key, index, subkey_name, &name_length, nullptr, nullptr, nullptr, nullptr) !=
-            ERROR_SUCCESS) {
-            break;
-        }
-        HKEY subkey = nullptr;
-        if (RegOpenKeyExA(key, subkey_name, 0, KEY_READ, &subkey) != ERROR_SUCCESS) {
-            continue;
-        }
-        DWORD luid_high = 0;
-        DWORD luid_low = 0;
-        DWORD size = sizeof(DWORD);
-        const bool has_high = RegGetValueA(
-            subkey, nullptr, "AdapterLuidHighPart", RRF_RT_REG_DWORD, nullptr, &luid_high, &size) ==
-            ERROR_SUCCESS;
-        size = sizeof(DWORD);
-        const bool has_low = RegGetValueA(
-            subkey, nullptr, "AdapterLuidLowPart", RRF_RT_REG_DWORD, nullptr, &luid_low, &size) ==
-            ERROR_SUCCESS;
-        if (has_high && has_low && luid_high == adapter_luid.HighPart &&
-            luid_low == adapter_luid.LowPart) {
-            char version[128] = {};
-            size = sizeof(version);
-            if (RegGetValueA(
-                    subkey,
-                    nullptr,
-                    "DriverVersion",
-                    RRF_RT_REG_SZ,
-                    nullptr,
-                    version,
-                    &size) == ERROR_SUCCESS) {
-                result = version;
-            }
-            RegCloseKey(subkey);
-            break;
-        }
-        RegCloseKey(subkey);
-    }
-    RegCloseKey(key);
-    return result;
+    return native_machine == IMAGE_FILE_MACHINE_AMD64 ? "x64" : "other";
+}
+
+std::string DisplayMode() {
+    DEVMODEW mode{};
+    mode.dmSize = sizeof(mode);
+    if (!EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode)) return "unavailable";
+    return std::to_string(mode.dmPelsWidth) + "x" + std::to_string(mode.dmPelsHeight) +
+        "@" + std::to_string(mode.dmDisplayFrequency);
 }
 
 std::string ModuleVersion(const wchar_t* module_name) {
@@ -254,14 +229,6 @@ const char* MeshTierName(D3D12_MESH_SHADER_TIER tier) {
     }
 }
 
-const char* RaytracingTierName(D3D12_RAYTRACING_TIER tier) {
-    switch (tier) {
-        case D3D12_RAYTRACING_TIER_1_1: return "D3D12_RAYTRACING_TIER_1_1";
-        case D3D12_RAYTRACING_TIER_1_0: return "D3D12_RAYTRACING_TIER_1_0";
-        default: return "D3D12_RAYTRACING_TIER_NOT_SUPPORTED";
-    }
-}
-
 const char* BindingTierName(D3D12_RESOURCE_BINDING_TIER tier) {
     switch (tier) {
         case D3D12_RESOURCE_BINDING_TIER_3: return "D3D12_RESOURCE_BINDING_TIER_3";
@@ -285,6 +252,8 @@ bool ParseArguments(int argc, char** argv, Options& options) {
                 return false;
             }
             options.json_path = argv[++index];
+        } else if (std::strcmp(argv[index], "--reset-driver-cache") == 0) {
+            options.reset_driver_cache = true;
         } else if (std::strcmp(argv[index], "--self-check") == 0) {
             options.self_check = true;
         } else if (std::strcmp(argv[index], "--adapter-index") == 0) {
@@ -341,6 +310,10 @@ std::string JsonNumber(unsigned int value) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 4 && std::strcmp(argv[1], "--capture-release-pid") == 0) {
+        const auto pid = static_cast<DWORD>(std::strtoul(argv[2], nullptr, 10));
+        return nw11::CaptureReleaseFrame(pid, argv[3]) ? kExitOk : kExitInitializationFailed;
+    }
     Options options;
     if (!ParseArguments(argc, argv, options)) {
         std::fputs(
@@ -357,19 +330,29 @@ int main(int argc, char** argv) {
         return kExitOk;
     }
 
+    const auto fail = [&options](const char* stage, HRESULT hr) {
+        char payload[512]{};
+        std::snprintf(payload, sizeof(payload),
+            "{\"format\":\"nw11-capability-snapshot\",\"version\":1,"
+            "\"status\":\"failed\",\"initialization\":{\"status\":\"failed\","
+            "\"stage\":\"%s\",\"hresult\":\"0x%08lX\"}}",
+            stage, static_cast<unsigned long>(hr));
+        WriteOutput(options.json_path, payload);
+        std::fprintf(stderr, "[NW11-PROBE][exit_code=4] %s failed (0x%08lX)\n",
+            stage, static_cast<unsigned long>(hr));
+        return kExitInitializationFailed;
+    };
+
     ComPtr<IDXGIFactory1> factory;
     HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
     if (FAILED(hr)) {
-        WriteOutput(
-            options.json_path,
-            "{\"format\":\"nw11-capability-snapshot\",\"version\":1,\"status\":\"unsupported\","
-            "\"reason\":\"CreateDXGIFactory1 failed\"}");
-        return kExitUnsupported;
+        return fail("CreateDXGIFactory1", hr);
     }
 
     ComPtr<IDXGIAdapter1> adapter;
     std::vector<std::string> adapter_records;
     DXGI_ADAPTER_DESC1 best_desc{};
+    std::string release_default_luid;
     bool have_best = false;
     for (UINT index = 0;; ++index) {
         ComPtr<IDXGIAdapter1> candidate;
@@ -378,11 +361,20 @@ int main(int argc, char** argv) {
             break;
         }
         if (FAILED(hr) || candidate == nullptr) {
-            continue;
+            return fail("EnumAdapters1", FAILED(hr) ? hr : E_POINTER);
         }
         DXGI_ADAPTER_DESC1 candidate_desc{};
-        if (FAILED(candidate->GetDesc1(&candidate_desc))) {
-            continue;
+        hr = candidate->GetDesc1(&candidate_desc);
+        if (FAILED(hr)) {
+            return fail("GetDesc1", hr);
+        }
+        const bool software = (candidate_desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0;
+        // The byte-frozen NW-07 release selects the first hardware adapter
+        // that can create its FL12.0 device. Prove its use before capture.
+        if (!options.reset_driver_cache && !software && release_default_luid.empty() &&
+            SUCCEEDED(D3D12CreateDevice(candidate.Get(), D3D_FEATURE_LEVEL_12_0,
+                                       __uuidof(ID3D12Device), nullptr))) {
+            release_default_luid = LuidString(candidate_desc.AdapterLuid);
         }
         char record[1024] = {};
         std::snprintf(
@@ -396,9 +388,7 @@ int main(int argc, char** argv) {
             candidate_desc.VendorId,
             candidate_desc.DeviceId,
             static_cast<unsigned long long>(candidate_desc.DedicatedVideoMemory),
-            (candidate_desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0
-                ? "true"
-                : "false");
+            software ? "true" : "false");
         adapter_records.emplace_back(record);
 
         bool selected = false;
@@ -413,37 +403,49 @@ int main(int argc, char** argv) {
             // Default selection avoids an integrated GPU on multi-GPU
             // validation hosts: choose the hardware adapter with the largest
             // dedicated video memory.  Marketing names never decide this.
-            const bool software =
-                (candidate_desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0;
             selected =
                 !software &&
                 (!have_best ||
                  candidate_desc.DedicatedVideoMemory >
                      best_desc.DedicatedVideoMemory);
         }
-        if (selected) {
+        if (selected && !software) {
             adapter = candidate;
             best_desc = candidate_desc;
             have_best = true;
         }
     }
     if (!have_best || adapter == nullptr) {
-        WriteOutput(
-            options.json_path,
-            "{\"format\":\"nw11-capability-snapshot\",\"version\":1,\"status\":\"unsupported\","
-            "\"reason\":\"no matching hardware DXGI adapter\"}");
-        return kExitUnsupported;
+        return fail("select hardware adapter", DXGI_ERROR_NOT_FOUND);
     }
     DXGI_ADAPTER_DESC1 description = best_desc;
 
     ComPtr<ID3D12Device> device;
     hr = D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&device));
     if (FAILED(hr) || device == nullptr) {
-        WriteOutput(
-            options.json_path,
-            "{\"format\":\"nw11-capability-snapshot\",\"version\":1,\"status\":\"unsupported\","
-            "\"reason\":\"D3D12CreateDevice(D3D_FEATURE_LEVEL_12_0) failed\"}");
-        return kExitUnsupported;
+        return fail("D3D12CreateDevice(D3D_FEATURE_LEVEL_12_0)", FAILED(hr) ? hr : E_POINTER);
+    }
+
+    if (options.reset_driver_cache) {
+        ComPtr<ID3D12Device9> device9;
+        hr = device.As(&device9);
+        if (FAILED(hr)) return fail("ID3D12Device9", hr);
+        D3D12_FEATURE_DATA_SHADER_CACHE cache{};
+        hr = device->CheckFeatureSupport(D3D12_FEATURE_SHADER_CACHE, &cache, sizeof(cache));
+        if (FAILED(hr)) return fail("D3D12_FEATURE_SHADER_CACHE", hr);
+        if ((cache.SupportFlags & D3D12_SHADER_CACHE_SUPPORT_SHADER_CONTROL_CLEAR) == 0)
+            return fail("shader cache clear capability", E_NOTIMPL);
+        const auto kinds = static_cast<D3D12_SHADER_CACHE_KIND_FLAGS>(
+            D3D12_SHADER_CACHE_KIND_FLAG_IMPLICIT_D3D_CACHE_FOR_DRIVER |
+            D3D12_SHADER_CACHE_KIND_FLAG_IMPLICIT_D3D_CONVERSIONS |
+            D3D12_SHADER_CACHE_KIND_FLAG_IMPLICIT_DRIVER_MANAGED);
+        hr = device9->ShaderCacheControl(kinds, D3D12_SHADER_CACHE_CONTROL_FLAG_CLEAR);
+        if (hr != S_OK) return fail("ShaderCacheControl(CLEAR)", hr);
+        WriteOutput(options.json_path,
+            "{\"format\":\"nw11-driver-cache-preparation.v1\","
+            "\"status\":\"cleared\",\"method\":\"D3D12 ShaderCacheControl(CLEAR)\","
+            "\"adapter_luid\":\"" + LuidString(best_desc.AdapterLuid) + "\"}");
+        return kExitOk;
     }
 
     D3D12_FEATURE_DATA_FEATURE_LEVELS levels{};
@@ -491,7 +493,7 @@ int main(int argc, char** argv) {
 
     const LUID luid = description.AdapterLuid;
     const std::string adapter_name = Narrow(description.Description);
-    const std::string driver = DriverVersionForAdapter(luid);
+    const std::string driver = DriverVersionForAdapter(adapter.Get());
     const std::string os_build = WindowsBuild();
     const std::string shader_model_name =
         has_shader_model ? ShaderModelName(shader_model.HighestShaderModel)
@@ -514,14 +516,19 @@ int main(int argc, char** argv) {
     payload += "  \"adapter\": {\n";
     payload += "    \"vendor_id\": " + JsonNumber(description.VendorId) + ",\n";
     payload += "    \"device_id\": " + JsonNumber(description.DeviceId) + ",\n";
+    payload += "    \"subsystem_id\": " + JsonNumber(description.SubSysId) + ",\n";
+    payload += "    \"revision\": " + JsonNumber(description.Revision) + ",\n";
     payload += "    \"adapter_name\": \"" + JsonEscape(adapter_name) + "\",\n";
     payload += "    \"adapter_luid\": \"" + LuidString(description.AdapterLuid) + "\",\n";
     payload += "    \"dedicated_video_memory_bytes\": " + std::to_string(description.DedicatedVideoMemory) + "\n";
     payload += "  },\n";
+    payload += "  \"release_default_adapter_luid\": \"" + release_default_luid + "\",\n";
     payload += "  \"driver_version\": \"" + JsonEscape(driver) + "\",\n";
     payload += "  \"os_build\": \"" + JsonEscape(os_build) + "\",\n";
     payload += "  \"toolchain_identity\": \"nw11-capability-probe/1.0.0/d3d12\",\n";
     payload += "  \"runtime\": {\n";
+    payload += "    \"native_architecture\": \"" + NativeArchitecture() + "\",\n";
+    payload += "    \"display_mode\": \"" + DisplayMode() + "\",\n";
     payload += "    \"d3d12_dll_version\": \"" + JsonEscape(ModuleVersion(L"d3d12.dll")) + "\",\n";
     payload += "    \"dxgi_dll_version\": \"" + JsonEscape(ModuleVersion(L"dxgi.dll")) + "\",\n";
     payload += "    \"agility_sdk_d3d12core_present\": ";
@@ -539,7 +546,7 @@ int main(int argc, char** argv) {
     payload += "    \"highest_shader_model_mesh\": " + queried(has_shader_model, shader_model_name.c_str()) + ",\n";
     payload += "    \"highest_shader_model_ray\": " + queried(has_shader_model, shader_model_name.c_str()) + ",\n";
     payload += "    \"mesh_shader_tier\": " + queried(has_options7, MeshTierName(options7.MeshShaderTier)) + ",\n";
-    payload += "    \"raytracing_tier\": " + queried(has_options5, RaytracingTierName(options5.RaytracingTier)) + "\n";
+    payload += "    \"raytracing_tier\": " + (has_options5 ? JsonNumber(static_cast<unsigned>(options5.RaytracingTier)) : "null") + "\n";
     payload += "  },\n";
     payload += "  \"initialization\": {\"status\": \"ok\", \"stage\": \"device_and_capability_query\"}\n";
     payload += "}\n";

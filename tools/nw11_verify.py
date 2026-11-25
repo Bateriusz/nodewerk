@@ -228,23 +228,50 @@ def command_evidence(args: argparse.Namespace) -> int:
         experiment_document = _load_embedded_json(
             bundle_root, manifest, "experiment_definition"
         )
-        evidence_document = _load_json(args.evidence)
-        decisions = evidence.build_decision_document(
-            evidence=evidence_document,
-            experiment=experiment_document,
-            bundle_manifest=manifest,
-            bundle_manifest_sha256=manifest_sha,
-            expected_commit=args.expected_commit,
-            schema_root=bundle_root,
-            bundle_accounting=verified.get("accounting"),
-        )
-        evidence.validate_decision_document(decisions)
+        import nw11_measurements as measurements
+        documents = []
+        for record_path in map(Path, args.evidence):
+            observed = _load_json(record_path)
+            evidence.assert_fresh(observed, expected_commit=manifest["commit"],
+                                  bundle_manifest=manifest, bundle_manifest_sha256=manifest_sha)
+            directory = record_path.parent.resolve()
+            raw_inputs = observed.get("raw_inputs")
+            if not isinstance(raw_inputs, dict) or not raw_inputs:
+                raise evidence.EvidenceError("Evidence must bind its raw inputs")
+            for relative, expected_sha in raw_inputs.items():
+                path = (directory / relative).resolve()
+                if directory not in path.parents:
+                    raise evidence.EvidenceError("Raw input path escapes the evidence directory")
+                if not path.is_file() or contract.sha256_file(path) != expected_sha:
+                    raise evidence.StaleEvidenceError(f"Raw evidence hash changed: {relative}")
+            regenerated = measurements.collect(bundle_root, manifest, record_path.parent, record_path.name)
+            if observed.get("raw_inputs") != regenerated["raw_inputs"]:
+                raise evidence.StaleEvidenceError("Raw observation, execution or capture hashes changed")
+            if observed != regenerated:
+                raise evidence.EvidenceError("Evidence disagrees with the regenerated raw measurements")
+            document = evidence.build_decision_document(
+                evidence=regenerated,
+                experiment=experiment_document,
+                bundle_manifest=manifest,
+                bundle_manifest_sha256=manifest_sha,
+                expected_commit=args.expected_commit,
+                schema_root=bundle_root,
+                bundle_accounting=verified["accounting"],
+            )
+            device = document["devices"][0]
+            device["evidence_sha256"] = contract.sha256_file(record_path)
+            device["evidence_file"] = record_path.name
+            device["canonical_release_correctness"] = regenerated["canonical_release_correctness"]
+            document["decision_id"] = evidence.decision_id(document)
+            documents.append(document)
+        decisions = evidence.aggregate_verified_decisions(documents)
+        schema = _load_json(bundle_root / "schemas/nw11-decision.schema.json")
+        import schema_validator
+        schema_validator.validate_instance(decisions, schema, schema)
     except evidence.StaleEvidenceError as exc:
         return _emit_error(EXIT_STALE, "evidence", str(exc))
     except (
-        bundle.BundleError,
-        evidence.EvidenceError,
-        experiment.ExperimentError,
+        ValueError, OSError, KeyError, TypeError, StopIteration,
     ) as exc:
         return _emit_error(EXIT_MALFORMED, "evidence", str(exc))
     _write_json(args.json_out, decisions)
@@ -253,6 +280,8 @@ def command_evidence(args: argparse.Namespace) -> int:
         return EXIT_EXECUTION_FAILED
     if statuses == {"unsupported"}:
         return EXIT_UNSUPPORTED
+    if args.require_complete and not decisions["satisfies_completion"]:
+        return EXIT_PENDING
     if decisions["aggregate_status"] == "rejected":
         return EXIT_REJECTED if args.require_accepted else EXIT_OK
     if args.require_accepted and decisions["aggregate_status"] != "accepted":
@@ -292,7 +321,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     evidence_parser = subparsers.add_parser("evidence")
     evidence_parser.add_argument("--bundle-root", required=True)
-    evidence_parser.add_argument("--evidence", required=True)
+    evidence_parser.add_argument("--evidence", required=True, action="append")
+    evidence_parser.add_argument("--require-complete", action="store_true")
     evidence_parser.add_argument("--expected-commit")
     evidence_parser.add_argument("--require-accepted", action="store_true")
     evidence_parser.add_argument("--json-out")

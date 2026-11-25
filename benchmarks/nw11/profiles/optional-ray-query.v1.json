@@ -168,7 +168,7 @@
       "d3d12_query": "D3D12_FEATURE_D3D12_OPTIONS5",
       "member": "RaytracingTier",
       "method": "ID3D12Device::CheckFeatureSupport",
-      "minimum_rank": 0,
+      "minimum_rank": 11,
       "query_id": "raytracing_tier"
     },
     {
@@ -185,7 +185,7 @@
       "query_id": "highest_shader_model_ray"
     }
   ],
-  "requirements_digest": "sha256:v1:efe3d0e61d837c57bf102267bbfc7afd60c4a2fbaf401ea000b7fa9174e77ebd",
+  "requirements_digest": "sha256:v1:d864eb2025494e9817c14ae05542a5e601c256407e77cca9cb5d87e2e2da2515",
   "runtime": {
     "agility_sdk": {
       "minimum_version": null,
@@ -200,7 +200,8 @@
     "runtime_shader_compilation": false
   },
   "shader_targets": [
-    "ps_6_5"
+    "ps_6_5",
+    "cs_6_0"
   ],
   "task": "NW-11",
   "toolchain": {

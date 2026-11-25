@@ -19,6 +19,8 @@ struct RendererOptions {
     std::string capture_manifest;
     std::string role;
     std::string artifact_path;
+    std::string launch_id;
+    std::string commit;
     std::string device_tier;
     std::string device_key;
     std::string environment_key;
@@ -36,6 +38,7 @@ struct RendererOptions {
     bool self_check = false;
     bool allow_software_adapter = false;
     bool headless = false;
+    bool capture_display = false;
 };
 
 int RunSceneRenderer(const RendererOptions& options);

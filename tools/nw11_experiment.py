@@ -21,6 +21,7 @@ from nw11_contract import (  # type: ignore[import-not-found]
     COMMON_PROFILE_ID,
     COMPLETE_DISTRIBUTION_CEILING_BYTES,
     CPU_SUBMIT_MS_MAX,
+    DEVICE_TIERS,
     EXPERIMENT_MESH_ID,
     EXPERIMENT_PATH_BY_ID,
     EXPERIMENT_RAY_ID,
@@ -201,6 +202,8 @@ def _validate_criteria(document: Mapping[str, Any], kind: str) -> None:
         raise ExperimentError(
             "the primary criterion must be evaluated independently per device/environment"
         )
+    if primary.get("statistic") != "nearest-rank p99 per 60-second process; require every matched run pair to improve":
+        raise ExperimentError("experiments must use the frozen per-process comparison statistic")
     guardrails = _mapping(criteria.get("guardrails"), "criteria.guardrails")
     for key in (
         "end_to_end_frame_time_must_not_regress",
@@ -381,13 +384,7 @@ def _validate_pipeline(
             raise ExperimentError(
                 "optional shader implementations must live under shaders/nw11/"
             )
-        is_ray_deformation = (
-            profile_id == RAY_QUERY_PROFILE_ID
-            and path == "shaders/nw11/reflection/nw11_deform_cs.hlsl"
-            and target == "cs_6_0"
-            and entry.get("entry_point") == "DeformCS"
-        )
-        if target not in allowed_targets and not is_ray_deformation:
+        if target not in allowed_targets:
             raise ExperimentError(
                 f"variant shader target '{target}' is not declared by the profile"
             )
@@ -558,10 +555,12 @@ def _summarize_run(run: Mapping[str, Any], label: str, protocol: Mapping[str, An
         "raw_gpu_time_samples": [float(value) for value in gpu],
         "raw_cpu_submit_samples": [float(value) for value in cpu],
         "raw_frame_time_samples": [float(value) for value in frame],
-        "cold_initialization_ms": _number(
-            _require_metric(run, "cold_initialization_ms", label),
-            f"{label}.cold_initialization_ms",
+        "startup_ms": _number(
+            _require_metric(run, "process_start_to_first_present_ms", label),
+            f"{label}.process_start_to_first_present_ms",
         ),
+        "displayed_presents": int(_require_metric(run, "displayed_presents", label)),
+        "dropped_presents": int(_require_metric(run, "dropped_presents", label)),
         "distribution_bytes": int(
             _require_metric(run, "distribution_bytes", label)
         ),
@@ -569,25 +568,26 @@ def _summarize_run(run: Mapping[str, Any], label: str, protocol: Mapping[str, An
         "peak_engine_committed_gpu_bytes": int(
             _require_metric(run, "peak_engine_committed_gpu_bytes", label)
         ),
-        "image": {
-            "max_abs_channel_error": _number(
-                _mapping(run.get("image"), f"{label}.image").get(
-                    "max_abs_channel_error"
-                ),
-                f"{label}.image.max_abs_channel_error",
-            ),
-            "rmse": _number(
-                _mapping(run.get("image"), f"{label}.image").get("rmse"),
-                f"{label}.image.rmse",
-            ),
-            "reference_kind": _mapping(run.get("image"), f"{label}.image").get(
-                "reference_kind"
-            ),
-            "fixed_ticks": list(
-                _mapping(run.get("image"), f"{label}.image").get("fixed_ticks") or []
-            ),
-        },
     }
+
+
+def summarize_process_runs(arm: Mapping[str, Any], label: str, protocol: Mapping[str, Any]) -> list[dict[str, Any]]:
+    processes = arm.get("process_runs")
+    if not isinstance(processes, list) or len(processes) != protocol["runs"]:
+        raise ExperimentError(f"{label} requires {protocol['runs']} independent process runs")
+    return [_summarize_run(_mapping(run, label), f"{label} run {index}", protocol)
+            for index, run in enumerate(processes, 1)]
+
+
+def reference_gate_failures(device_key: str, runs: list[dict[str, Any]]) -> list[str]:
+    # NW-07 specifies an absolute Ada reference gate and a separate Blackwell
+    # development series. Qualification of the exact NW-07 host is independent.
+    if device_key != DEVICE_TIERS["desktop_ada_representative"]["device_key"]:
+        return []
+    return [f"run {index} p99 {label} must be strictly below {CPU_SUBMIT_MS_MAX} ms"
+            for index, run in enumerate(runs, 1)
+            for metric, label in (("gpu_time", "GPU frame time"), ("cpu_submit", "CPU submission"))
+            if run[metric]["p99"] >= CPU_SUBMIT_MS_MAX]
 
 
 def evaluate_experiment(
@@ -619,24 +619,19 @@ def evaluate_experiment(
         )
 
     protocol = document["protocol"]
-    baseline = _summarize_run(
-        _mapping(measurement.get("baseline"), "measurement.baseline"),
-        "baseline",
-        protocol,
-    )
-    variant = _summarize_run(
-        _mapping(measurement.get("variant"), "measurement.variant"),
-        "variant",
-        protocol,
-    )
-
-    baseline_p99 = baseline["gpu_time"]["p99"]
-    variant_p99 = variant["gpu_time"]["p99"]
-    reduction = (
-        ((baseline_p99 - variant_p99) / baseline_p99) * 100.0
-        if baseline_p99 > 0.0
-        else 0.0
-    )
+    baseline = _mapping(measurement.get("baseline"), "measurement.baseline")
+    variant = _mapping(measurement.get("variant"), "measurement.variant")
+    baseline_runs = summarize_process_runs(baseline, "baseline", protocol)
+    variant_runs = summarize_process_runs(variant, "variant", protocol)
+    reductions = [
+        (left["gpu_time"]["p99"] - right["gpu_time"]["p99"]) / left["gpu_time"]["p99"] * 100
+        if left["gpu_time"]["p99"] > 0 else 0.0
+        for left, right in zip(baseline_runs, variant_runs)
+    ]
+    reduction = min(reductions)
+    worst_pair = reductions.index(reduction)
+    baseline_p99 = baseline_runs[worst_pair]["gpu_time"]["p99"]
+    variant_p99 = variant_runs[worst_pair]["gpu_time"]["p99"]
     criteria = document["criteria"]
     primary = criteria["primary"]
     guardrails = criteria["guardrails"]
@@ -647,32 +642,22 @@ def evaluate_experiment(
     def reject(code: str, message: str) -> None:
         reasons.append({"code": code, "message": message})
 
-    if reduction < float(primary["relative_reduction_percent_min"]):
-        reject(
-            "NW11-PRIMARY-NOT-MET",
-            f"p99 GPU time reduction {reduction:.3f}% is below "
-            f"{primary['relative_reduction_percent_min']:.3f}%",
-        )
-    if variant_p99 > baseline_p99:
-        reject(
-            "NW11-END-TO-END-REGRESSION",
-            "variant p99 GPU frame time regressed against the matched baseline",
-        )
-    if variant["frame_time"]["p99"] > baseline["frame_time"]["p99"]:
-        reject(
-            "NW11-FRAME-TIME-REGRESSION",
-            "variant displayed-frame p99 regressed against the matched baseline",
-        )
-    if variant["cpu_submit"]["p99"] > CPU_SUBMIT_MS_MAX:
-        reject(
-            "NW11-CPU-SUBMIT-GATE",
-            "variant p99 CPU submit time exceeds the preserved NW-07 gate",
-        )
-    if variant["cpu_submit"]["p99"] > baseline["cpu_submit"]["p99"]:
-        reject(
-            "NW11-CPU-REGRESSION",
-            "variant p99 CPU submit time regressed against the matched baseline",
-        )
+    for label, arm_runs in (("baseline", baseline_runs), ("variant", variant_runs)):
+        for failure in reference_gate_failures(device_key, arm_runs):
+            reject("NW11-NW07-REFERENCE-GATE", f"{label} {failure}")
+    for index, (left, right, improvement) in enumerate(zip(baseline_runs, variant_runs, reductions), 1):
+        if improvement < float(primary["relative_reduction_percent_min"]):
+            reject("NW11-PRIMARY-NOT-MET",
+                   f"run {index} p99 GPU time reduction {improvement:.3f}% is below "
+                   f"{primary['relative_reduction_percent_min']:.3f}%")
+        if right["frame_time"]["p99"] > left["frame_time"]["p99"]:
+            reject("NW11-FRAME-TIME-REGRESSION", f"run {index} displayed-frame p99 regressed")
+        if right["displayed_presents"] < left["displayed_presents"]:
+            reject("NW11-DISPLAYED-FRAME-COUNT", f"run {index} delivered fewer frames to the display")
+        if right["cpu_submit"]["p99"] > float(guardrails["cpu_submit_ms_max"]):
+            reject("NW11-CPU-SUBMIT-GATE", f"run {index} p99 CPU submission exceeded the experiment ceiling")
+        if right["cpu_submit"]["p99"] > left["cpu_submit"]["p99"]:
+            reject("NW11-CPU-REGRESSION", f"run {index} p99 CPU submission regressed")
     if max(baseline["distribution_bytes"], variant["distribution_bytes"]) > int(
         document["artifact_budget"]["complete_distribution_bytes_ceiling"]
     ):
@@ -694,17 +679,18 @@ def evaluate_experiment(
             "NW11-SHADER-COUNT-BUDGET",
             "variant shader-count increment exceeds the frozen experiment budget",
         )
-    if variant["cold_initialization_ms"] > float(
-        guardrails["cold_initialization_ms_ceiling"]
-    ):
-        reject(
-            "NW11-COLD-INITIALIZATION",
-            "variant cold initialization exceeds the preserved NW-07 ceiling",
-        )
-    if variant["peak_engine_committed_gpu_bytes"] > int(
-        guardrails["peak_engine_committed_gpu_bytes_ceiling"]
-    ):
-        reject("NW11-VRAM-CEILING", "variant peak engine-committed GPU bytes exceed the budget")
+    missing_cold = False
+    for label, arm, arm_runs in (("baseline", baseline, baseline_runs), ("variant", variant, variant_runs)):
+        cold = arm.get("cold_initialization_ms")
+        if cold is None:
+            missing_cold = True
+        else:
+            if _number(cold, f"{label}.cold_initialization_ms") > float(guardrails["cold_initialization_ms_ceiling"]):
+                reject("NW11-COLD-INITIALIZATION", f"{label} cold initialization exceeds the ceiling")
+        if any(run["startup_ms"] > float(guardrails["cold_initialization_ms_ceiling"]) for run in arm_runs):
+            reject("NW11-WARM-INITIALIZATION", f"{label} warm initialization exceeds the ceiling")
+        if arm["peak_engine_committed_gpu_bytes"] > int(guardrails["peak_engine_committed_gpu_bytes_ceiling"]):
+            reject("NW11-VRAM-CEILING", f"{label} peak engine-committed GPU bytes exceed the ceiling")
     if variant["image"]["max_abs_channel_error"] > float(image["max_abs_channel_error"]):
         reject(
             "NW11-IMAGE-MAX-ERROR",
@@ -729,7 +715,9 @@ def evaluate_experiment(
             "variant image result does not use the frozen experiment reference",
         )
 
-    status = "accepted" if not reasons else "rejected"
+    if missing_cold:
+        reject("NW11-COLD-PENDING", "driver-cache preparation did not establish cold startup coverage")
+    status = "pending" if missing_cold else ("rejected" if reasons else "accepted")
     return {
         "experiment_id": document["experiment_id"],
         "variant_profile_id": document["variant_profile_id"],
@@ -738,21 +726,22 @@ def evaluate_experiment(
         "device_key": device_key,
         "environment_key": environment_key,
         "status": status,
-        "satisfies_completion": status == "accepted",
+        "satisfies_completion": status in {"accepted", "rejected"},
         "reasons": reasons,
         "primary": {
             "metric": "p99_gpu_time_ms",
             "baseline": baseline_p99,
             "variant": variant_p99,
             "relative_reduction_percent": reduction,
+            "relative_reduction_percent_per_run": reductions,
             "required_reduction_percent": float(
                 primary["relative_reduction_percent_min"]
             ),
             "evaluation": primary["evaluation"],
         },
         "aggregate": {
-            "baseline": baseline,
-            "variant": variant,
+            "baseline": {**baseline, "process_runs": baseline_runs},
+            "variant": {**variant, "process_runs": variant_runs},
             "incremental_distribution_bytes": incremental_bytes,
             "incremental_shader_count": shader_increment,
             "baseline_distribution_bytes": baseline["distribution_bytes"],
@@ -763,18 +752,6 @@ def evaluate_experiment(
             "incremental_distribution_bytes_ceiling": int(
                 document["artifact_budget"]["incremental_distribution_bytes_ceiling"]
             ),
-        },
-        "raw_per_sample_results": {
-            "baseline": {
-                "gpu_time_samples": baseline["raw_gpu_time_samples"],
-                "cpu_submit_samples": baseline["raw_cpu_submit_samples"],
-                "frame_time_samples": baseline["raw_frame_time_samples"],
-            },
-            "variant": {
-                "gpu_time_samples": variant["raw_gpu_time_samples"],
-                "cpu_submit_samples": variant["raw_cpu_submit_samples"],
-                "frame_time_samples": variant["raw_frame_time_samples"],
-            },
         },
         "policy": {
             "microbenchmark_gain_alone_is_sufficient": False,

@@ -39,6 +39,9 @@ TOOL_FILES = (
     "nw11_verify.py",
     "nw11_toolchain_identity.py",
     "nw11_production_binding.py",
+    "nw11_pe_dependencies.py",
+    "nw11_measurements.py",
+    "nw07_presentmon_collector.py",
 )
 SUPPORT_FILES = (
     ("tools/schema_validator.py", "tools/nw11/schema_validator.py"),
@@ -50,9 +53,11 @@ SCHEMA_FILES = (
     "nw11-experiment.schema.json",
     "nw11-evidence.schema.json",
     "nw11-bundle-manifest.schema.json",
+    "nw11-decision.schema.json",
 )
 COLLECTOR = "tools/nw11/collect-evidence.py"
 CAPTURE_COMPARATOR = "tools/nw11/compare-captures.py"
+VALIDATION_RUNNER = "tools/nw11/validate-device.py"
 LAUNCHER = "tools/nw11/run-validation.ps1"
 
 
@@ -101,6 +106,8 @@ def build(
     shader_payloads: Path | str | None = None,
     dependency_report: Path | str | None = None,
     python_runtime_zip: Path | str | None = None,
+    presentmon: Path | str | None = None,
+    presentmon_license: Path | str | None = None,
     bundle_version: str = "1.0.0",
     repository: str = "nodewerk",
     repo_root: Path | str | None = None,
@@ -109,8 +116,9 @@ def build(
     root = Path(repo_root or REPO_ROOT)
     if require_head:
         verify_repository_commit(root, commit)
-        if python_runtime_zip is None:
-            raise BuildError("production validation bundles require a bundled Python runtime")
+        if not all((python_runtime_zip, presentmon, presentmon_license, capability_probe,
+                    graph_scene, measured_toolchain, shader_payloads, dependency_report)):
+            raise BuildError("production validation bundles require native proofs and validation runtimes")
     bundle.validate_variant_sources(root)
     output = Path(output_directory)
     if output.exists() and any(output.iterdir()):
@@ -133,6 +141,10 @@ def build(
         # Only CI production bundles have native measurement artifacts. Unit
         # tests can still exercise the generic manifest logic with test blobs.
         native = Path(baseline_executable).parent
+        _copy(native / "nw11-canonical-release.exe", output / "bin/canonical_release.exe")
+        _copy(native / "nw11_common_baseline.exe", output / "bin/canonical_reference.exe")
+        _copy(Path(presentmon), output / "runtime/presentmon.exe")
+        _copy(Path(presentmon_license), output / "runtime/presentmon-license.txt")
         proof = json.loads((native / "nw11-common-regression.json").read_text(encoding="utf-8"))
         package_hash, manifest_hash = production_binding.verify_proof(proof, commit)
         payloads = production_binding.read_payloads(native / "compiled-specializations")
@@ -200,7 +212,8 @@ def build(
     for name in TOOL_FILES:
         _copy(root / "tools" / name, output / "tools/nw11" / name)
     _copy(root / COLLECTOR, output / "tools/nw11/collect-evidence.py")
-    _copy(root / CAPTURE_COMPARATOR, output / "tools/nw11/compare-captures.py")
+    _copy(root / CAPTURE_COMPARATOR, output / CAPTURE_COMPARATOR)
+    _copy(root / VALIDATION_RUNNER, output / VALIDATION_RUNNER)
     for source_relative, destination_relative in SUPPORT_FILES:
         _copy(root / source_relative, output / destination_relative)
     for schema_name in SCHEMA_FILES:
@@ -318,7 +331,14 @@ def build(
             },
         ),
     ]
+    if experiment_id == contract.EXPERIMENT_RAY_ID:
+        reflection = "shaders/nw11/reflection/nw11_reflection_fixture.hlsli"
+        _copy(root / reflection, output / reflection)
+        artifacts.append(bundle.make_entry(output, reflection, role=bundle.ROLE_READING))
     if production_records:
+        for path in ("bin/canonical_release.exe", "bin/canonical_reference.exe",
+                     "runtime/presentmon.exe", "runtime/presentmon-license.txt"):
+            artifacts.append(bundle.make_entry(output, path, role=bundle.ROLE_TOOL))
         artifacts.append(bundle.make_entry(output, "manifests/nw11-common-regression.json",
                                            role=bundle.ROLE_READING))
         for name in production_binding.PAYLOADS:
@@ -399,6 +419,7 @@ def build(
     artifacts.append(
         bundle.make_entry(output, "tools/nw11/compare-captures.py", role=bundle.ROLE_TOOL)
     )
+    artifacts.append(bundle.make_entry(output, VALIDATION_RUNNER, role=bundle.ROLE_TOOL))
     if graph_scene is not None:
         artifacts.append(
             bundle.make_entry(output, "manifests/graph-scene.json", role=bundle.ROLE_READING)
@@ -492,7 +513,12 @@ def build(
             "bytes": sum(int(entry["bytes"]) for entry in common_shaders.values()),
             "paths": sorted(common_shaders),
         },
-        "roles": _role_shader_ids(document),
+        "roles": (
+            {short: sorted(shader["id"] for shader in production_records[role]["shipped_shaders"])
+             for short, role in (("baseline", "common_baseline"), ("variant", "optional_variant"),
+                                 ("fallback", "fallback_common"))}
+            if production_records else _role_shader_ids(document)
+        ),
     }
     if shader_payloads is not None:
         manifest["shader_payloads"] = {
@@ -598,6 +624,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--shader-payloads")
     parser.add_argument("--dependency-report")
     parser.add_argument("--python-runtime-zip")
+    parser.add_argument("--presentmon")
+    parser.add_argument("--presentmon-license")
     parser.add_argument("--bundle-version", default="1.0.0")
     parser.add_argument("--repository", default="nodewerk")
     parser.add_argument("--repo-root")
@@ -623,6 +651,8 @@ def main(argv: list[str] | None = None) -> int:
             shader_payloads=args.shader_payloads,
             dependency_report=args.dependency_report,
             python_runtime_zip=args.python_runtime_zip,
+            presentmon=args.presentmon,
+            presentmon_license=args.presentmon_license,
             bundle_version=args.bundle_version,
             repository=args.repository,
             repo_root=args.repo_root,

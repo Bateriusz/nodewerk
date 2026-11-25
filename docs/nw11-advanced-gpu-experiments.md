@@ -48,7 +48,7 @@ The two optional profiles are separately exported and separately tested:
 | Profile | ID | Requirements digest | Shader targets | Fallback |
 |---|---|---|---|---|
 | Mesh shaders | `nw.optional.d3d12.mesh_shaders.ms6_5.v1` | `sha256:v1:cc0636631f844cca1840c848849fd0056a5c688d6228f97cec0a70fb78f237b8` | `as_6_5`, `ms_6_5`, `ps_6_0` | `nw11.fallback.mesh.indexed.d3d12.fl12_0.sm6_0.v1` |
-| Ray queries | `nw.optional.d3d12.ray_query.ps6_5.v1` | `sha256:v1:efe3d0e61d837c57bf102267bbfc7afd60c4a2fbaf401ea000b7fa9174e77ebd` | `ps_6_5` | `nw11.fallback.ray.analytic.d3d12.fl12_0.sm6_0.v1` |
+| Ray queries | `nw.optional.d3d12.ray_query.ps6_5.v1` | `sha256:v1:d864eb2025494e9817c14ae05542a5e601c256407e77cca9cb5d87e2e2da2515` | `ps_6_5`, `cs_6_0` | `nw11.fallback.ray.analytic.d3d12.fl12_0.sm6_0.v1` |
 
 Every profile document (`benchmarks/nw11/profiles/`) declares:
 
@@ -213,11 +213,12 @@ link mesh or DXR code, shaders, or payload headers.
 - Variant: `nw11_scene_rayquery_ps` (`ps_6_5`) with inline
   `RayQuery<RAY_FLAG_NONE>` over a BLAS/TLAS built from the same
   graph-generated geometry.
-- Hit and miss both resolve the same analytic environment reference used by the
-  baseline, so the DXR traversal is measured at the frozen 1e-4 fixed-quality
-  criterion instead of producing an unmatchable scene-lit color. A 1e-6
-  hit/miss marker keeps the committed traversal live without changing the
-  reference image beyond tolerance.
+- The reflection fixture traces a short segment toward the visible torus surface.
+  Alternating 32-pixel bands end just beyond the surface or just before it.
+  The analytic baseline solves the intersection with the tangent plane at the
+  raster sample. The DXR arm selects warm reflected radiance for a committed
+  triangle and the analytic sky for a miss. Both outcomes affect the presented
+  image at the frozen `1e-4` tolerance.
 - The acceleration structure and all bound buffers must outlive the frame
   command list; BLAS/TLAS build work is fenced before shading.
 - Shader-count increment ≤ 1; complete distribution ≤ 262,144 bytes;
@@ -265,6 +266,8 @@ bundle-manifest.json
 bin/common_baseline.exe
 bin/optional_variant.exe
 bin/fallback_common.exe
+bin/canonical_release.exe
+bin/canonical_reference.exe
 bin/nw11_capability_probe.exe
 manifests/capability-profile.json
 manifests/common-capability-profile.json
@@ -273,10 +276,12 @@ manifests/follow-up-matrix.json
 manifests/shader-manifest.json
 manifests/graph-scene.json
 schemas/*.json
-shaders/nw06/... (shared payloads)
+shaders/nw06/... (validation source copies)
 shaders/nw11/...
 tools/nw11/*.py
 runtime/python-runtime.zip
+runtime/presentmon.exe
+runtime/presentmon-license.txt
 ```
 
 The manifest binds repository, commit, experiment/profile, toolchain/runtime
@@ -286,8 +291,8 @@ dependency ledger, accounting, and the per-role shader inventory.
 capability profile and experiment definition, and rejects missing, extra,
 mutated, or misclassified files.
 
-Bundles are built by hosted CI from the executables compiled by the same
-workflow run. `tools/nw11_build_bundle.py --require-head` refuses a `--commit`
+Independent native builds in the same hosted CI workflow must produce identical
+bundle identities and manifest hashes. `tools/nw11_build_bundle.py --require-head` refuses a `--commit`
 that does not equal the checked-out repository HEAD, so hashing an arbitrary
 operator-supplied file cannot be presented as same-revision evidence.
 The same workflow provisions the pinned NW-01 toolchain, records the measured
@@ -312,72 +317,68 @@ The bundle manifest also enforces zero-cost stripping:
 
 ### One-command physical validation
 
-On a clean validation machine with PowerShell 7; no system Python installation is required:
+Run the bundle from an interactive Windows 11 x64 session with PowerShell 7 and
+permission to collect PresentMon ETW events. Use an SDR desktop that can show
+the entire 1920×1080 client area at native scale. The release capture reads the
+visible window, and desktop overlays or occlusion affect the comparison.
 
 ```powershell
-pwsh .\run-validation.ps1 -BundleRoot . -ExpectedCommit <tested-commit> -DeviceTier desktop_ada_representative
+pwsh .\run-validation.ps1 -ExpectedCommit <tested-commit>
 ```
 
-`-DeviceTier` must be one of `desktop_ada_representative` or
-`desktop_blackwell_representative`; `NW11_DEVICE_TIER` may be set instead.
-Measured runs without a qualified tier exit `11` (pending).
+The probe assigns the physical tier from the selected PCI identity
+(`10de:2805` for Ada and `10de:2c05` for Blackwell). Use `-DeviceTier` to
+assert the expected board on an assigned runner. The verifier checks Windows
+build 22631 or later, the NVIDIA driver floor of 610.88, inbox runtime versions,
+and the queried profile requirements. [NVIDIA board IDs](https://download.nvidia.com/XFree86/Linux-x86_64/615.78.08/README/supportedchips.html)
 
-The launcher verifies the bundled `runtime/python-runtime.zip`, rehydrates it
-into a fresh temporary directory for each validation, and uses only that
-runtime for the repository-owned verifier and evidence tools. It does not need
-a source checkout, nodewerk build, Visual Studio changes, CMake configuration,
-system Python installation, Python package installation, or manual evidence
-editing. It:
+The launcher extracts the bundled Python runtime into a unique temporary
+directory and verifies the immutable bundle before launching measured artifacts.
+Each invocation writes a fresh evidence directory containing the probe snapshot,
+raw reports, presentation traces, capture pixels, `evidence.json`,
+`decisions.json`, and a short `summary.txt`.
 
-1. verifies bundle identities and hashes;
-2. runs the bundled capability probe and records the actual adapter, driver,
-   OS build, inbox `d3d12.dll`/`dxgi.dll` versions, Agility `D3D12Core`
-   presence, and queried D3D12 features/shader-model support;
-3. determines eligibility from those queries;
-4. re-checks each measured artifact SHA-256 immediately before execution and
-   passes the probe-selected adapter LUID to every measured executable;
-5. blocks the optional variant with an explicit unsupported (`3`) or
-   pending (`11`) decision when its required capability is absent or
-   unqueried, while still executing the common baseline and separately exported
-   common fallback;
-6. runs the common baseline, the variant only when eligible, and the separately
-   exported common fallback under identical frozen settings, warm-up, and
-   repeated fresh processes, taking GPU time from timestamp queries and CPU
-   submit time from the `ExecuteCommandLists` call;
-7. preserves raw outputs and compares fixed-tick captures with the
-   repository-owned comparator;
-8. invokes the repository-owned verifier locally and writes
-   `evidence.json`, `decisions.json`, and a short `summary.txt` into a sibling
-   output directory (never into the immutable bundle root, so unrecorded
-   payload detection stays strict).
+The startup sequence requests a D3D12 driver-cache reset on the validation host
+and records its result before launching one cold process per role. Use a
+dedicated validation host with Windows Developer Mode and a driver that supports
+the cache clear operation. A failed or unavailable reset leaves cold coverage
+pending. Warm measurements begin after the identical executable exits, then
+use a five-second warm-up and three fresh 60-second uncapped processes.
+[Microsoft shader cache control](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device9-shadercachecontrol)
 
-Exit codes:
+The per-process windows bind production CPU command-recording and submission
+samples with PresentMon GPU frame times and displayed intervals. Dropped
+presents affect delivered frame counts and intervals. Every matched run pair
+must meet the relative GPU criterion and the end-to-end guardrails. The Ada
+baseline and variant must each pass the strict GPU and CPU reference thresholds
+in every run. The Blackwell comparison uses its own matched measurements.
+[PresentMon 2.3.1 console metrics](https://github.com/GameTechDev/PresentMon/blob/v2.3.1/README-ConsoleApplication.md)
+
+The canonical correctness check launches the exact NW-07 release executable
+covered by the byte-equivalence proof. It uses the release fixed-tick
+`--tick N --frames 1` interface and an external desktop capture. It compares
+the normalized SDR presentation bytes with a separately linked NW-07 package
+reference, including the `0 / 960000` loop boundary. Optional arm comparisons
+retain the RGBA32F production readback. The verifier recomputes both comparisons
+from the bound pixels.
+
+The executable distribution ledger counts each measured PE image and any
+required redistributable runtime payload. The shader count includes every DXIL
+container in the PE or its embedded package, including retained canonical
+stages. HLSL source, PresentMon, Python, and the separately shipped verification
+copies of DXIL contribute to bundle size. Their bytes carry no measured runtime
+distribution charge.
 
 | Code | Meaning |
 |---:|---|
-| 0 | verified/accepted |
-| 2 | malformed manifest/profile/experiment/evidence |
-| 3 | capability absence: explicitly unsupported |
-| 4 | initialization or execution failure |
-| 5 | stale evidence |
-| 6 | bundle identity mismatch |
-| 10 | measured decision rejected |
-| 11 | required device/environment coverage still pending |
-
-### Raw run report contract
-
-Each measured executable writes one JSON report per fresh process. The report
-declares `role` (`baseline`/`variant`), `artifact_path` matching the bundle
-manifest, the capability decision obtained before launch, the device/environment
-keys, and a `measurement` object containing raw GPU/CPU/frame-time samples,
-cold-initialization milliseconds, distribution bytes, shader count, peak
-engine-committed GPU bytes, and the fixed-quality image result. The launcher
-merges repeated processes for the same role only when every identity and
-capability snapshot agrees, including the probe-selected adapter LUID; it
-never fabricates or reorders samples. The collector replaces baseline,
-variant, and fallback image metrics with results computed directly from the
-fixed-tick capture bytes, so a measured binary cannot self-report a passing
-quality result.
+| 0 | Verified device record with an accepted decision |
+| 2 | Malformed manifest, profile, experiment, or evidence |
+| 3 | Optional capability unsupported after verified common and fallback captures |
+| 4 | Initialization, capture, or execution failure |
+| 5 | Stale evidence |
+| 6 | Bundle identity mismatch |
+| 10 | Verified device record with a rejected decision |
+| 11 | Required device or environment coverage pending |
 
 ## 5. Physical coverage and published decisions
 
@@ -393,10 +394,16 @@ tracked `evidence-status.v1.json` keeps physical evidence
 implementation is verified by pytest and does not substitute for physical
 evidence.
 
-After ordinary CI is green and implementation is stable, validation bundles for
-the tested commit are attached to the PR (or linked from it) together with
-`evidence.json`, `decisions.json`, and the bundle manifest SHA-256. Pending
-coverage does not count as a completed acceptance.
+After ordinary CI is green, collect both devices for each experiment from
+the same tested bundle. Pass `--evidence` twice to the bundled verifier's
+`evidence` command and use `--require-complete` when generating the aggregate.
+The verifier reopens each record's raw evidence, derives the matching device
+and environment, and binds the two evidence-file hashes to the bundle. A
+verified rejection completes a measured evaluation on its own device.
+
+Publish the tested bundle identities, raw evidence locations, and generated
+decision record in PR #44 after both devices are verified. The tracked status
+files remain pending until those physical executions exist.
 
 ## 6. Preserved contracts and stripping
 

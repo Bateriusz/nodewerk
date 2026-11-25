@@ -25,7 +25,8 @@ from nw11_contract import (  # type: ignore[import-not-found]
     canonical_json_bytes,
     digest_value,
 )
-from nw11_experiment import ExperimentError, evaluate_experiment, validate_experiment
+from nw11_experiment import (ExperimentError, evaluate_experiment, reference_gate_failures,
+                             summarize_process_runs, validate_experiment)
 
 EVIDENCE_FORMAT = "nw11-validation-evidence"
 EVIDENCE_VERSION = 1
@@ -325,6 +326,8 @@ def validate_evidence(
         role = str(entry.get("role"))
         if role not in ROLE_ARTIFACT_ROLE:
             raise EvidenceError(f"run role '{role}' is not baseline, variant, or fallback")
+        if role in roles_seen:
+            raise EvidenceError(f"duplicate measured role {role}")
         roles_seen.add(role)
         status = classify_measurement(entry)
         if status not in EVIDENCE_STATUSES:
@@ -376,8 +379,9 @@ def validate_evidence(
                     "run adapter LUID disagrees with the probe-selected adapter; "
                     "the measured device cannot be attributed to another GPU"
                 )
-        if entry.get("device_tier") not in DEVICE_TIERS:
-            raise EvidenceError(f"unknown device tier '{entry.get('device_tier')}'")
+        board = DEVICE_TIERS.get(entry.get("device_tier"))
+        if board is None or board["device_key"] != device_key:
+            raise EvidenceError(f"PCI identity {device_key} does not match declared device tier")
         if entry.get("measurement") is not None:
             _validate_run_measurement(
                 entry, role=role, manifest=bundle_manifest, document=document
@@ -453,6 +457,8 @@ def compute_decisions(
         if tier not in by_tier:
             raise EvidenceError(f"run references unknown device tier '{tier}'")
         device_key = _string(entry.get("device_key"), "run.device_key")
+        if DEVICE_TIERS[tier]["device_key"] != device_key:
+            raise EvidenceError(f"PCI identity {device_key} does not match declared device tier")
         previous = tier_by_device.setdefault(device_key, tier)
         if previous != tier:
             raise EvidenceError(
@@ -517,6 +523,12 @@ def _decide_group(
             "metrics": None,
             "fallback_tested": False,
         }
+    for run in (baseline, fallback):
+        if run.get("status") not in {"eligible", "measured"} or run.get("measurement") is None:
+            raise EvidenceError("Common baseline and fallback did not both execute successfully")
+    fallback_measurement = fallback["measurement"]
+    fallback_runs = summarize_process_runs(fallback_measurement, "fallback", experiment["protocol"])
+    fallback_failures = reference_gate_failures(device_key, fallback_runs)
     optional_status = str(optional_eligibility.get("status"))
     if optional_status in {"unsupported", "pending"}:
         return {
@@ -529,7 +541,12 @@ def _decide_group(
                 if optional_status == "unsupported"
                 else "required D3D12 capability query is pending; optional variant was not executed"
             ),
-            "metrics": None,
+            "metrics": {
+                "baseline": {**baseline["measurement"], "process_runs":
+                             summarize_process_runs(baseline["measurement"], "baseline", experiment["protocol"])},
+                "fallback": {**fallback_measurement, "process_runs": fallback_runs},
+            },
+            "fallback_reference_gate_failures": fallback_failures,
             "fallback_tested": True,
             "common_baseline_tested": True,
             "diagnostics": list(optional_eligibility.get("diagnostics") or []),
@@ -595,11 +612,16 @@ def _decide_group(
         )
     except ExperimentError as exc:
         raise EvidenceError(f"invalid matched measurement: {exc}") from exc
+    evaluation["aggregate"]["fallback"] = {**fallback_measurement, "process_runs": fallback_runs}
+    if fallback_failures and evaluation["status"] == "accepted":
+        evaluation["status"] = "rejected"
+        evaluation["reasons"].extend({"code": "NW11-FALLBACK-REFERENCE-GATE", "message": reason}
+                                      for reason in fallback_failures)
     evaluation["device_tier"] = None
     evaluation["reason"] = (
         "matched p99 GPU-time, end-to-end, distribution, and fixed-quality criteria passed"
         if evaluation["status"] == "accepted"
-        else "; ".join(reason["message"] for reason in evaluation["reasons"])
+        else ". ".join(reason["message"] for reason in evaluation["reasons"])
     )
     evaluation["metrics"] = evaluation["aggregate"]
     evaluation["fallback_tested"] = True
@@ -642,7 +664,7 @@ def build_decision_document(
                 if decision["status"] != "accepted":
                     continue
                 decision["status"] = "rejected"
-                decision["satisfies_completion"] = False
+                decision["satisfies_completion"] = True
                 decision.setdefault("reasons", []).append(
                     {
                         "code": "NW11-BUNDLE-DISTRIBUTION-BUDGET",
@@ -687,7 +709,7 @@ def build_decision_document(
         and all(item.get("fallback_tested") is True for item in decisions),
         "satisfies_completion": (
             {item["device_tier"] for item in decisions} == set(DEVICE_TIERS)
-            and all(item["status"] == "accepted" for item in decisions)
+            and all(item["status"] in {"accepted", "rejected"} for item in decisions)
         ),
         "per_device_decision_isolation": True,
         "pending_is_not_pass": True,
@@ -695,6 +717,11 @@ def build_decision_document(
     }
     if bundle_adoption_status is not None:
         document["bundle_adoption_budget_status"] = bundle_adoption_status
+    document["decision_id"] = decision_id(document)
+    return document
+
+
+def decision_id(document: Mapping[str, Any]) -> str:
     identity = {
         key: document[key]
         for key in (
@@ -713,8 +740,42 @@ def build_decision_document(
         )
         if key in document
     }
-    document["decision_id"] = digest_value(identity)
-    return document
+    return digest_value(identity)
+
+
+def aggregate_verified_decisions(documents: list[dict[str, Any]]) -> dict[str, Any]:
+    if not documents:
+        raise EvidenceError("At least one verified physical evidence record is required")
+    first = documents[0]
+    devices = []
+    keys = set()
+    for document in documents:
+        validate_decision_document(document)
+        if any(document[key] != first[key] for key in (
+                "commit", "bundle_id", "bundle_manifest_sha256", "experiment_id", "variant_profile_id")):
+            raise EvidenceError("Cannot aggregate different tested bundles")
+        if len(document["devices"]) != 1:
+            raise EvidenceError("Each input must describe exactly one physical device/environment")
+        device = document["devices"][0]
+        key = (device["device_key"], device["environment_key"])
+        if key in keys:
+            raise EvidenceError("Duplicate verified device/environment")
+        keys.add(key)
+        devices.append(device)
+    result = dict(first, devices=sorted(devices, key=lambda d: (d["device_tier"], d["environment_key"])))
+    statuses = {entry["status"] for entry in devices}
+    result["aggregate_status"] = next(status for status in ("failed", "pending", "unsupported", "rejected", "accepted")
+                                      if status in statuses)
+    result["fallback_tested"] = all(item.get("fallback_tested") is True for item in devices)
+    result["satisfies_completion"] = (
+        {item["device_tier"] for item in devices} == set(DEVICE_TIERS)
+        and statuses <= {"accepted", "rejected"}
+        and result["fallback_tested"]
+    )
+    if len(devices) > 1:
+        result["evidence_file"] = None
+    result["decision_id"] = decision_id(result)
+    return validate_decision_document(result)
 
 
 def validate_decision_document(document: Mapping[str, Any]) -> dict[str, Any]:
@@ -752,33 +813,12 @@ def validate_decision_document(document: Mapping[str, Any]) -> dict[str, Any]:
                 "a rejected bundle distribution budget cannot contain an accepted device"
             )
     if record.get("satisfies_completion") is True:
-        if not all(item.get("status") == "accepted" for item in devices):
-            raise EvidenceError(
-                "completion requires accepted evidence for every qualified device"
-            )
+        if ({item["device_tier"] for item in devices} != set(DEVICE_TIERS)
+                or any(item["status"] not in {"accepted", "rejected"} for item in devices)):
+            raise EvidenceError("completion requires a measured decision for both physical targets")
         if record.get("fallback_tested") is not True:
-            raise EvidenceError(
-                "completion requires the separate common fallback to be executed"
-            )
-    identity = {
-        key: record[key]
-        for key in (
-            "commit",
-            "bundle_id",
-            "bundle_manifest_sha256",
-            "experiment_id",
-            "variant_profile_id",
-            "fallback_artifact_id",
-            "evidence_file",
-            "devices",
-            "aggregate_status",
-            "fallback_tested",
-            "satisfies_completion",
-            "bundle_adoption_budget_status",
-        )
-        if key in record
-    }
-    if record.get("decision_id") != digest_value(identity):
+            raise EvidenceError("completion requires the separate common fallback to be executed")
+    if record.get("decision_id") != decision_id(record):
         raise EvidenceError("decision_id does not match the decision document identity")
     return dict(record)
 

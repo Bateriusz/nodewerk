@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 import nw05_export
@@ -38,6 +39,7 @@ def embed(proof_dir: Path, executable_dir: Path, commit: str) -> None:
         if identity(report, folder) != proof[arm]:
             raise ValueError("actual production export does not match regression proof")
     candidate = proof_dir / "candidate"
+    shutil.copyfile(candidate / FILES[0], executable_dir / "nw11-canonical-release.exe")
     package = (candidate / FILES[1]).read_bytes()
     manifest = (candidate / FILES[2]).read_bytes()
     link = json.loads(manifest)

@@ -23,7 +23,7 @@ PAYLOADS = {
 }
 
 
-def embedded_image(image: bytes) -> tuple[bytes, bytes, dict[str, Any]]:
+def embedded_payloads(image: bytes) -> tuple[bytes, bytes, bytes]:
     if len(image) < FOOTER.size:
         raise ValueError("missing production package footer")
     magic, version, package_size, manifest_size, package_hash, manifest_hash = FOOTER.unpack_from(
@@ -38,10 +38,15 @@ def embedded_image(image: bytes) -> tuple[bytes, bytes, dict[str, Any]]:
     if (sha256_bytes(package) != package_hash.hex()
             or sha256_bytes(manifest) != manifest_hash.hex()):
         raise ValueError("embedded production package checksum mismatch")
+    return image[:start], package, manifest
+
+
+def embedded_image(image: bytes) -> tuple[bytes, bytes, dict[str, Any]]:
+    template, package, manifest = embedded_payloads(image)
     overlay = json.loads(manifest)
     if not isinstance(overlay, dict):
         raise ValueError("production specialization overlay must be an object")
-    return image[:start], package, overlay
+    return template, package, overlay
 
 
 def read_payloads(directory: Path) -> dict[str, bytes]:
@@ -49,6 +54,31 @@ def read_payloads(directory: Path) -> dict[str, bytes]:
     if any(not data.startswith(b"DXBC") for data in payloads.values()):
         raise ValueError("invalid offline DXIL container")
     return payloads
+
+
+def shader_inventory(image: bytes) -> list[dict[str, Any]]:
+    """Inventory DXIL containers physically present in the linked image or NWP."""
+    shaders = []
+    offset = 0
+    while (offset := image.find(b"DXBC", offset)) >= 0:
+        start = offset
+        offset += 4
+        if start + 32 > len(image):
+            break
+        version, size, count = struct.unpack_from("<III", image, start + 20)
+        if version != 1 or not 0 < count <= 64 or not 32 + count * 4 <= size <= len(image) - start:
+            continue
+        parts = struct.unpack_from(f"<{count}I", image, start + 32)
+        if any(part < 32 + count * 4 or part + 8 > size or
+               part + 8 + struct.unpack_from("<I", image, start + part + 4)[0] > size
+               for part in parts):
+            continue
+        if not any(image[start + part:start + part + 4] == b"DXIL" for part in parts):
+            continue
+        digest = sha256_bytes(image[start:start + size])
+        shaders.append({"id": f"dxil:{start}:{digest}", "bytes": size})
+        offset = start + size
+    return shaders
 
 
 def inspect(image: bytes, *, commit: str, specialization: str,
@@ -77,7 +107,8 @@ def inspect(image: bytes, *, commit: str, specialization: str,
     return {"specialization": specialization, "sha256": sha256_bytes(image),
             "package_sha256": package_sha256,
             "template_sha256": sha256_bytes(template),
-            "linked_specialization_payloads": linked}
+            "linked_specialization_payloads": linked,
+            "shipped_shaders": shader_inventory(image)}
 
 
 def verify_proof(proof: dict[str, Any], commit: str) -> tuple[str, str]:

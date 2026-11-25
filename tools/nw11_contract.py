@@ -125,10 +125,11 @@ AGILITY_SDK_NOTE = (
 )
 MIN_WINDOWS_BUILD = 22_631
 NVIDIA_DRIVER_FLOOR = "610.88"
+PRESENTMON_SHA256 = "364e5d98d4d134bd54dd25c22ed2ca2f4883f8bc3ed6502bee0c151e3436d30c"
 
 COMMON_SHADER_TARGETS = ("vs_6_0", "ps_6_0", "cs_6_0")
 MESH_SHADER_TARGETS = ("as_6_5", "ms_6_5", "ps_6_0")
-RAY_QUERY_SHADER_TARGETS = ("ps_6_5",)
+RAY_QUERY_SHADER_TARGETS = ("ps_6_5", "cs_6_0")
 
 # Exact D3D12 capabilities queried before eligibility is decided.  Names are
 # recorded verbatim so evidence can be checked against the DX12 headers.
@@ -208,7 +209,7 @@ RAY_QUERIES = COMMON_QUERIES + (
         "method": "ID3D12Device::CheckFeatureSupport",
         "member": "RaytracingTier",
         "accepted_values": ["D3D12_RAYTRACING_TIER_1_1"],
-        "minimum_rank": 0,
+        "minimum_rank": 11,
     },
     {
         "query_id": "highest_shader_model_ray",
@@ -274,10 +275,12 @@ DEVICE_TIERS = {
     "desktop_ada_representative": {
         "architecture": "Ada",
         "representative_model": "NVIDIA GeForce RTX 4060 Ti",
+        "device_key": "pci:10de:2805",
     },
     "desktop_blackwell_representative": {
         "architecture": "Blackwell",
         "representative_model": "NVIDIA GeForce RTX 5070 Ti",
+        "device_key": "pci:10de:2c05",
     },
 }
 

@@ -65,6 +65,7 @@ jobs:
           tools/nw11_build_bundle.py tools/nw11_verify.py tools/nw11_graph_scene.py
           tools/nw11_toolchain_identity.py tools/nw11_shader_payloads.py
           tools/nw11_pe_dependencies.py tools/nw11_pack_python_runtime.py
+          tools/nw11_measurements.py tools/nw11/validate-device.py
           tools/nw11/collect-evidence.py tools/nw11/compare-captures.py
       - name: Validate schemas and tracked evidence state
         run: |
@@ -134,6 +135,16 @@ jobs:
           --target nw11_capability_probe nw11_common_baseline nw11_common_analytic
           nw11_fallback_common nw11_fallback_analytic nw11_optional_mesh
           nw11_optional_ray
+      - name: Independently rebuild native artifacts with the pinned toolchain
+        shell: pwsh
+        run: |
+          $cl = (Get-Command cl.exe -ErrorAction Stop).Source
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          $ninja = (Get-Command ninja.exe -ErrorAction Stop).Source
+          cmake -S src/nw11 -B build/nw11-rebuild -G Ninja "-DCMAKE_BUILD_TYPE=Release" "-DCMAKE_CXX_COMPILER=$cl" "-DCMAKE_MAKE_PROGRAM=$ninja" "-DNW11_DXC_EXECUTABLE=$dxc"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build/nw11-rebuild --parallel 2 --target nw11_capability_probe nw11_common_baseline nw11_common_analytic nw11_fallback_common nw11_fallback_analytic nw11_optional_mesh nw11_optional_ray
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Launch every artifact in self-check mode
         shell: pwsh
         run: |
@@ -194,6 +205,31 @@ jobs:
             --exe "build/nw11-artifacts/nw11_optional_ray.exe" `
             --out "build/nw11-artifacts/nw11-pe-dependencies.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compare and stage independent native rebuild
+        shell: pwsh
+        run: |
+          $primary = "build/nw11-artifacts"
+          $second = Join-Path $primary "independent"
+          New-Item -ItemType Directory -Path $second, "$second/compiled-specializations" | Out-Null
+          foreach ($exe in Get-ChildItem $primary -Filter "*.exe") {
+            $rebuild = Join-Path "build/nw11-rebuild" $exe.Name
+            if ((Get-FileHash $exe.FullName).Hash -ne (Get-FileHash $rebuild).Hash) {
+              throw "Native rebuild changed $($exe.Name)"
+            }
+            Copy-Item $rebuild $second
+          }
+          foreach ($file in Get-ChildItem "build/nw11-experiments/shaders" -Filter "*.dxil") {
+            if ((Get-FileHash $file.FullName).Hash -ne (Get-FileHash "build/nw11-rebuild/shaders/$($file.Name)").Hash) {
+              throw "Independent shader rebuild changed $($file.Name)"
+            }
+          }
+          foreach ($file in Get-ChildItem "$primary/compiled-specializations") {
+            Copy-Item "build/nw11-rebuild/shaders/$($file.Name)" "$second/compiled-specializations"
+          }
+          Copy-Item "build/nw11-rebuild/generated/nw11_scene_generated.json" $second
+          foreach ($record in @("nw11-toolchain-identity.json", "nw11-shader-payloads.json", "nw11-pe-dependencies.json")) {
+            Copy-Item "$primary/$record" $second
+          }
       - name: Upload same-revision build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -279,6 +315,8 @@ jobs:
         run: |
           python tools/nw11_embed_production.py --proof build/nw11-common-proof --executables build/nw11-artifacts --commit "${{ github.event.pull_request.head.sha || github.sha }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/nw11_embed_production.py --proof build/nw11-common-proof --executables build/nw11-artifacts/independent --commit "${{ github.event.pull_request.head.sha || github.sha }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Exercise common and fallback D3D12 paths on WARP
         shell: pwsh
         run: |
@@ -292,6 +330,20 @@ jobs:
             }
           }
 
+      - name: Exercise eligible advanced paths on WARP and check absent features
+        shell: pwsh
+        run: |
+          foreach ($name in @("nw11_optional_mesh", "nw11_optional_ray")) {
+            $report = "build/$name-warp-smoke.json"
+            & "build/nw11-artifacts/$name.exe" --allow-software --benchmark-json $report --warmup-seconds 0 --runs 1 --run-seconds 1
+            $code = $LASTEXITCODE
+            if ($code -eq 3) {
+              if (Test-Path $report) { throw "$name produced samples on an unsupported path" }
+              Write-Host "$name capability unavailable on hosted WARP"
+            } elseif ($code -ne 0 -or -not (Test-Path $report)) {
+              throw "$name WARP command-path validation failed with exit $code"
+            }
+          }
       - name: Upload the production-package-bound executables
         uses: actions/upload-artifact@v4
         with:
@@ -301,8 +353,8 @@ jobs:
 
   build-validation-bundles:
     name: Build immutable validation bundle (${{ matrix.experiment }})
-    needs: [ci-impact, windows-experiment-build, windows-runtime-smoke, common-production-regression]
-    if: needs.windows-runtime-smoke.result == 'success' && needs.common-production-regression.result == 'success'
+    needs: [ci-impact, contract-and-capability-checks, windows-experiment-build, windows-runtime-smoke, common-production-regression]
+    if: needs.contract-and-capability-checks.result == 'success' && needs.windows-runtime-smoke.result == 'success' && needs.common-production-regression.result == 'success'
     runs-on: windows-2022
     strategy:
       fail-fast: false
@@ -343,29 +395,49 @@ jobs:
           $pythonRoot = python -c "import sys; print(sys.base_prefix)"
           python tools/nw11_pack_python_runtime.py --python-root "$pythonRoot" --output build/nw11-python-runtime.zip --json-out build/nw11-python-runtime.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Build deterministic bundle from repository artifacts
+      - name: Stage pinned validation-only presentation collector
         shell: pwsh
         run: |
-          python tools/nw11_build_bundle.py `
-            --output build/nw11-bundle-${{ matrix.slug }} `
-            --experiment-id "${{ matrix.experiment }}" `
-            --commit "${{ steps.revision.outputs.commit }}" `
-            --require-head `
-            --baseline-executable "build/nw11-artifacts/${{ matrix.baseline }}" `
-            --variant-executable "build/nw11-artifacts/${{ matrix.variant }}" `
-            --fallback-executable "build/nw11-artifacts/${{ matrix.fallback }}" `
-            --capability-probe "build/nw11-artifacts/nw11_capability_probe.exe" `
-            --graph-scene "build/nw11-artifacts/nw11_scene_generated.json" `
-            --toolchain-identity "build/nw11-artifacts/nw11-toolchain-identity.json" `
-            --shader-payloads "build/nw11-artifacts/nw11-shader-payloads.json" `
-            --dependency-report "build/nw11-artifacts/nw11-pe-dependencies.json" `
-            --python-runtime-zip "build/nw11-python-runtime.zip" `
-            --json-out "build/nw11-bundle-${{ matrix.slug }}-manifest.json"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/nw11_verify.py bundle `
-            --bundle-root "build/nw11-bundle-${{ matrix.slug }}" `
-            --expected-commit "${{ steps.revision.outputs.commit }}" `
-            --json-out "build/nw11-bundle-${{ matrix.slug }}-verification.json"
+          Invoke-WebRequest "https://github.com/GameTechDev/PresentMon/releases/download/v2.3.1/PresentMon-2.3.1-x64.exe" -OutFile build/presentmon.exe
+          if ((Get-FileHash build/presentmon.exe).Hash -ne "364e5d98d4d134bd54dd25c22ed2ca2f4883f8bc3ed6502bee0c151e3436d30c") {
+            throw "PresentMon SHA-256 changed"
+          }
+          Invoke-WebRequest "https://raw.githubusercontent.com/GameTechDev/PresentMon/717c5bf/LICENSE.txt" -OutFile build/presentmon-license.txt
+      - name: Build and compare validation bundles from both independent native builds
+        shell: pwsh
+        run: |
+          foreach ($arm in @("primary", "independent")) {
+            $native = if ($arm -eq "primary") { "build/nw11-artifacts" } else { "build/nw11-artifacts/independent" }
+            $output = if ($arm -eq "primary") { "build/nw11-bundle-${{ matrix.slug }}" } else { "build/nw11-bundle-${{ matrix.slug }}-independent" }
+            python tools/nw11_build_bundle.py `
+              --output $output `
+              --experiment-id "${{ matrix.experiment }}" `
+              --commit "${{ steps.revision.outputs.commit }}" `
+              --repository "${{ github.repository }}" `
+              --require-head `
+              --baseline-executable "$native/${{ matrix.baseline }}" `
+              --variant-executable "$native/${{ matrix.variant }}" `
+              --fallback-executable "$native/${{ matrix.fallback }}" `
+              --capability-probe "$native/nw11_capability_probe.exe" `
+              --graph-scene "$native/nw11_scene_generated.json" `
+              --toolchain-identity "$native/nw11-toolchain-identity.json" `
+              --shader-payloads "$native/nw11-shader-payloads.json" `
+              --dependency-report "$native/nw11-pe-dependencies.json" `
+              --python-runtime-zip "build/nw11-python-runtime.zip" `
+              --presentmon "build/presentmon.exe" `
+              --presentmon-license "build/presentmon-license.txt"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            python tools/nw11_verify.py bundle `
+              --bundle-root $output `
+              --expected-commit "${{ steps.revision.outputs.commit }}" `
+              --json-out "$output-verification.json"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $first = Get-Content "build/nw11-bundle-${{ matrix.slug }}-verification.json" -Raw | ConvertFrom-Json
+          $second = Get-Content "build/nw11-bundle-${{ matrix.slug }}-independent-verification.json" -Raw | ConvertFrom-Json
+          if ($first.bundle_id -ne $second.bundle_id -or $first.manifest_sha256 -ne $second.manifest_sha256) {
+            throw "Independent native build changed the validation bundle"
+          }
       - name: Prove the validation bundle runs with its bundled Python runtime
         shell: pwsh
         run: |
@@ -373,7 +445,10 @@ jobs:
           $output = "build/nw11-bundle-${{ matrix.slug }}-dry-run"
           & (Join-Path $bundle "run-validation.ps1") -BundleRoot $bundle -ExpectedCommit "${{ steps.revision.outputs.commit }}" -OutputDirectory $output -DryRun
           if ($LASTEXITCODE -ne 0) { throw "self-contained validation bundle dry-run failed with exit code $LASTEXITCODE" }
-          $summary = Get-Content (Join-Path $output "summary.json") -Raw | ConvertFrom-Json
+          $summaries = @(Get-ChildItem -Recurse $output -Filter "summary.json")
+          if ($summaries.Count -ne 1) { throw "dry run must emit exactly one summary" }
+          $summaryPath = $summaries[0].FullName
+          $summary = Get-Content $summaryPath -Raw | ConvertFrom-Json
           if ($summary.status -ne "dry_run") { throw "self-contained validation bundle did not complete dry-run verification" }
       - name: Report integrity and actual distribution sizes
         shell: pwsh
@@ -421,14 +496,14 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: nw11-validation-bundle-${{ matrix.slug }}-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/nw11-bundle-${{ matrix.slug }}
+          path: ${{ runner.temp }}/nw11-bundle-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slug }}
       - name: Verify and execute the immutable bundle
         shell: pwsh
         run: |
-          $bundle = Join-Path $env:RUNNER_TEMP "nw11-bundle-${{ matrix.slug }}"
+          $bundle = Join-Path $env:RUNNER_TEMP "nw11-bundle-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slug }}"
           $launcher = Join-Path $bundle "run-validation.ps1"
           if (-not (Test-Path -LiteralPath $launcher)) { throw "bundle launcher is missing" }
-          $evidenceDirectory = Join-Path $env:RUNNER_TEMP "nw11-evidence-${{ matrix.device_tier }}-${{ matrix.slug }}"
+          $evidenceDirectory = Join-Path $env:RUNNER_TEMP "nw11-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.device_tier }}-${{ matrix.slug }}"
           & $launcher `
             -BundleRoot $bundle `
             -ExpectedCommit "${{ github.event.pull_request.head.sha || github.sha }}" `
@@ -436,7 +511,7 @@ jobs:
             -OutputDirectory $evidenceDirectory
           $code = $LASTEXITCODE
           if ($code -eq 0) { exit 0 }
-          if ($code -eq 3) { Write-Host "Capability absence is explicitly unsupported; common/fallback evidence was preserved."; exit 0 }
+          if ($code -eq 3) { Write-Host "Common and fallback correctness verified. Optional capability unsupported and coverage incomplete."; exit 0 }
           if ($code -eq 11) { Write-Host "Required device coverage remains pending."; exit 11 }
           if ($code -eq 10) { Write-Host "Measured decision is rejected; evidence is preserved."; exit 0 }
           throw "NW-11 physical validation failed with exit code $code"
@@ -444,7 +519,47 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: nw11-evidence-${{ matrix.device_tier }}-${{ matrix.slug }}
+          name: nw11-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.device_tier }}-${{ matrix.slug }}
           path: |
-            ${{ runner.temp }}/nw11-evidence-${{ matrix.device_tier }}-${{ matrix.slug }}/**
+            ${{ runner.temp }}/nw11-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.device_tier }}-${{ matrix.slug }}/**
           if-no-files-found: warn
+
+  aggregate-physical-validation:
+    name: Verify both physical records (${{ matrix.slug }})
+    needs: [build-validation-bundles, physical-validation]
+    if: always() && github.event_name == 'workflow_dispatch' && needs.build-validation-bundles.result == 'success'
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        slug: [mesh, ray-query]
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: nw11-validation-bundle-${{ matrix.slug }}-${{ github.sha }}
+          path: build/nw11-bundle
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nw11-evidence-${{ github.run_id }}-${{ github.run_attempt }}-*-${{ matrix.slug }}
+          path: build/nw11-device-evidence
+      - name: Regenerate the same-bundle aggregate from both units of evidence
+        shell: pwsh
+        run: |
+          $records = @(Get-ChildItem build/nw11-device-evidence -Recurse -File -Filter "evidence.json")
+          if ($records.Count -ne 2) { throw "Expected exactly two physical evidence files" }
+          $env:PYTHONDONTWRITEBYTECODE = "1"
+          $bundle = "build/nw11-bundle"
+          $arguments = @("$bundle/tools/nw11/nw11_verify.py", "evidence",
+            "--bundle-root", $bundle, "--expected-commit", "${{ github.sha }}",
+            "--require-complete", "--json-out", "build/nw11-decisions.json")
+          foreach ($record in $records) { $arguments += @("--evidence", $record.FullName) }
+          python @arguments
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nw11-verified-decisions-${{ matrix.slug }}-${{ github.sha }}
+          path: build/nw11-decisions.json
+          if-no-files-found: error

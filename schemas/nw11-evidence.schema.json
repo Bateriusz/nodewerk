@@ -20,7 +20,9 @@
     "common_eligibility",
     "runs",
     "raw_per_sample_results_preserved",
-    "operator_supplied_values"
+    "operator_supplied_values",
+    "raw_inputs",
+    "canonical_release_correctness"
   ],
   "properties": {
     "format": {
@@ -137,43 +139,20 @@
           "measurement": {
             "type": "object",
             "required": [
-              "gpu_time_samples",
-              "cpu_submit_samples",
-              "frame_time_samples",
               "cold_initialization_ms",
               "distribution_bytes",
               "shader_count",
               "shader_ids",
               "peak_engine_committed_gpu_bytes",
-              "image"
+              "image",
+              "process_runs"
             ],
             "properties": {
-              "gpu_time_samples": {
-                "type": "array",
-                "minItems": 1,
-                "items": {
-                  "type": "number",
-                  "minimum": 0
-                }
-              },
-              "cpu_submit_samples": {
-                "type": "array",
-                "minItems": 1,
-                "items": {
-                  "type": "number",
-                  "minimum": 0
-                }
-              },
-              "frame_time_samples": {
-                "type": "array",
-                "minItems": 1,
-                "items": {
-                  "type": "number",
-                  "minimum": 0
-                }
-              },
               "cold_initialization_ms": {
-                "type": "number",
+                "type": [
+                  "number",
+                  "null"
+                ],
                 "minimum": 0
               },
               "distribution_bytes": {
@@ -222,6 +201,14 @@
                       "type": "integer"
                     }
                   }
+                }
+              },
+              "process_runs": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {
+                  "type": "object"
                 }
               }
             }
@@ -303,6 +290,17 @@
           "type": "array"
         }
       }
+    },
+    "raw_inputs": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    },
+    "canonical_release_correctness": {
+      "type": "object"
     }
   },
   "additionalProperties": false

@@ -25,6 +25,27 @@
       ]
     },
     {
+      "start": 116,
+      "old": [
+        "#endif",
+        "",
+        "namespace nw::player {",
+        "namespace {"
+      ],
+      "new": [
+        "#endif",
+        "",
+        "// NW-11 launches one player per process. Keep measurement state in this",
+        "// specialized translation unit so the frozen PackagePlayer ABI is unchanged.",
+        "namespace nw11 {",
+        "std::uint64_t peak_engine_committed_gpu_bytes = 0u;",
+        "std::uint64_t first_present_filetime = 0u;",
+        "}",
+        "namespace nw::player {",
+        "namespace {"
+      ]
+    },
+    {
       "start": 751,
       "old": [
         "    ID3D12Resource* timestamp_readback = nullptr;",
@@ -44,6 +65,40 @@
         "#endif",
         "};",
         ""
+      ]
+    },
+    {
+      "start": 1298,
+      "old": [
+        "    if (descriptor) ++stats_.engine_descriptor_count;",
+        "    if (heap) ++stats_.engine_heap_count;",
+        "}",
+        ""
+      ],
+      "new": [
+        "    if (descriptor) ++stats_.engine_descriptor_count;",
+        "    if (heap) ++stats_.engine_heap_count;",
+        "    (void)CheckMemoryBudget(\"allocation_high_water\");",
+        "}",
+        ""
+      ]
+    },
+    {
+      "start": 1339,
+      "old": [
+        "        stats_.engine_resource_bytes + stats_.engine_upload_bytes +",
+        "        descriptor_bytes + backbuffer_bytes;",
+        "    if (accounted <= config_.memory_budget_bytes) return ExitCode::Success;",
+        "    return Fail("
+      ],
+      "new": [
+        "        stats_.engine_resource_bytes + stats_.engine_upload_bytes +",
+        "        descriptor_bytes + backbuffer_bytes;",
+        "    nw11::peak_engine_committed_gpu_bytes =",
+        "        std::max(nw11::peak_engine_committed_gpu_bytes, accounted);",
+        "    if (std::strcmp(stage, \"allocation_high_water\") == 0) return ExitCode::Success;",
+        "    if (accounted <= config_.memory_budget_bytes) return ExitCode::Success;",
+        "    return Fail("
       ]
     },
     {
@@ -265,6 +320,20 @@
       ]
     },
     {
+      "start": 4809,
+      "old": [
+        "    const bool timestamping = state->timestamp_heap != nullptr &&",
+        "                              state->timestamp_readback != nullptr &&",
+        "                              state->timestamp_frequency != 0u;"
+      ],
+      "new": [
+        "    const bool timestamping = config_.wait_for_gpu_each_frame &&",
+        "                              state->timestamp_heap != nullptr &&",
+        "                              state->timestamp_readback != nullptr &&",
+        "                              state->timestamp_frequency != 0u;"
+      ]
+    },
+    {
       "start": 5407,
       "old": [
         "                                \"graphics pipeline was not created\");",
@@ -346,25 +415,24 @@
       ]
     },
     {
-      "start": 6009,
+      "start": 6089,
       "old": [
-        "#if NW_PACKAGE_PLAYER_D3D12_VALIDATION",
-        "    TraceD3D12ValidationStage(config_.enable_validation,",
-        "                              \"frame.queue.execute.before\");",
-        "#endif",
-        "    state->queue->ExecuteCommandLists(1u, lists);",
-        "#if NW_PACKAGE_PLAYER_D3D12_VALIDATION"
+        "                        \"present_failed\", \"present\", \"succeeded\", \"failed\",",
+        "                        \"renderAtTick\", \"IDXGISwapChain3::Present failed\");",
+        "        }",
+        "        ++frames_presented_;"
       ],
       "new": [
-        "#if NW_PACKAGE_PLAYER_D3D12_VALIDATION",
-        "    TraceD3D12ValidationStage(config_.enable_validation,",
-        "                              \"frame.queue.execute.before\");",
-        "#endif",
-        "#if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT && NW_PLAYER_DIAGNOSTICS",
-        "    instrumentation_.BeginFrame(frame_tick);",
-        "#endif",
-        "    state->queue->ExecuteCommandLists(1u, lists);",
-        "#if NW_PACKAGE_PLAYER_D3D12_VALIDATION"
+        "                        \"present_failed\", \"present\", \"succeeded\", \"failed\",",
+        "                        \"renderAtTick\", \"IDXGISwapChain3::Present failed\");",
+        "        }",
+        "        if (frames_presented_ == 0u) {",
+        "            FILETIME now{};",
+        "            GetSystemTimePreciseAsFileTime(&now);",
+        "            nw11::first_present_filetime =",
+        "                (std::uint64_t(now.dwHighDateTime) << 32u) | now.dwLowDateTime;",
+        "        }",
+        "        ++frames_presented_;"
       ]
     }
   ]

@@ -7,7 +7,7 @@
 
 cbuffer Nw06GraphicsParams : register(b0, space0)
 {
-    float Tick;
+    uint Tick;
     float FovDegrees;
     float Aspect;
     float NearPlane;
@@ -31,13 +31,7 @@ struct PSInput
     float3 camera_position : TEXCOORD4;
 };
 
-float3 AnalyticEnvironment(float3 direction)
-{
-    // Deterministic analytic sky/horizon; no environment texture, cubemap, or
-    // model weight is distributed.
-    float horizon = saturate(direction.y * 0.5 + 0.5);
-    return lerp(float3(0.21, 0.27, 0.36), float3(0.72, 0.78, 0.88), horizon);
-}
+#include "nw11_reflection_fixture.hlsli"
 
 float4 ScenePS(PSInput input) : SV_Target
 {
@@ -66,6 +60,7 @@ float4 ScenePS(PSInput input) : SV_Target
     float fresnel = pow(1.0 - saturate(dot(normal, view)), 5.0);
     float reflectivity = lerp(0.08, 0.55, fresnel) * (1.0 - roughness);
     float3 diffuse = albedo * (0.16 + 0.84 * ndotl);
-    float3 reflection = AnalyticEnvironment(reflected) * reflectivity;
+    float3 reflection = ReflectionRadiance(
+        reflected, ReflectionLimit(input.position.x) > ReflectionOffset) * reflectivity;
     return float4(diffuse + reflection, 1.0);
 }

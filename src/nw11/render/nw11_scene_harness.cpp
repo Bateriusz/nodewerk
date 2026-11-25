@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -26,14 +27,16 @@
 #include "player/embedded_package.h"
 
 namespace nw11 {
+extern std::uint64_t peak_engine_committed_gpu_bytes;
+extern std::uint64_t first_present_filetime;
 namespace {
 using nw::player::ExitCode;
 using Clock = std::chrono::steady_clock;
 constexpr int kExitOk = 0;
 constexpr int kExitUnsupported = 3;
 constexpr int kExitInitializationFailed = 4;
-const std::array<std::uint32_t, 5>& contract_reference_ticks() {
-    static const std::array<std::uint32_t, 5> ticks = {0u, 240000u, 480000u, 720000u, 959999u};
+const std::array<std::uint32_t, 6>& contract_reference_ticks() {
+    static const std::array<std::uint32_t, 6> ticks = {0u, 240000u, 480000u, 720000u, 959999u, 960000u};
     return ticks;
 }
 std::string JsonEscape(const std::string& value) {
@@ -71,7 +74,43 @@ std::string ReadFile(const std::string& path) {
     return buffer.str();
 }
 
-void WriteCaptureManifest(const RendererOptions& options_) {
+std::uint64_t FiletimeTicks(FILETIME value) {
+    return (std::uint64_t(value.dwHighDateTime) << 32u) | value.dwLowDateTime;
+}
+
+std::uint64_t ProcessCreationFiletime() {
+    FILETIME created{}, exited{}, kernel{}, user{};
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user))
+        throw std::runtime_error("cannot measure process creation time");
+    return FiletimeTicks(created);
+}
+
+double QpcMilliseconds() {
+    LARGE_INTEGER count{}, frequency{};
+    if (!QueryPerformanceCounter(&count) || !QueryPerformanceFrequency(&frequency))
+        throw std::runtime_error("cannot read presentation measurement clock");
+    return 1000.0 * double(count.QuadPart) / double(frequency.QuadPart);
+}
+
+struct RunIdentity {
+    std::string executable_hash;
+    std::string package_hash;
+    std::uint64_t process_creation_filetime = ProcessCreationFiletime();
+    double warmup_start_qpc_ms = 0;
+    double measurement_start_qpc_ms = 0;
+    double measurement_end_qpc_ms = 0;
+};
+
+void WriteIdentity(std::ostream& json, const RendererOptions& options, const RunIdentity& run) {
+    json << "  \"launch_id\": \"" << JsonEscape(options.launch_id) << "\",\n"
+         << "  \"tested_commit\": \"" << JsonEscape(options.commit) << "\",\n"
+         << "  \"executable_sha256\": \"" << run.executable_hash << "\",\n"
+         << "  \"package_sha256\": \"" << run.package_hash << "\",\n"
+         << "  \"process_id\": " << GetCurrentProcessId() << ",\n"
+         << "  \"process_creation_filetime\": " << run.process_creation_filetime << ",\n";
+}
+
+void WriteCaptureManifest(const RendererOptions& options_, const RunIdentity& run) {
     if (options_.capture_manifest.empty()) {
         return;
     }
@@ -83,7 +122,8 @@ void WriteCaptureManifest(const RendererOptions& options_) {
     json << "{\n";
     json << "  \"format\": \"nw11-capture-set\",\n";
     json << "  \"version\": 1,\n";
-    json << "  \"fixed_ticks\": [0, 240000, 480000, 720000, 959999],\n";
+    WriteIdentity(json, options_, run);
+    json << "  \"fixed_ticks\": [0, 240000, 480000, 720000, 959999, 960000],\n";
     json << "  \"images\": [\n";
     const auto ticks = contract_reference_ticks();
     for (std::size_t index = 0; index < ticks.size(); ++index) {
@@ -104,7 +144,7 @@ void WriteCaptureManifest(const RendererOptions& options_) {
     stream.write(text.data(), static_cast<std::streamsize>(text.size()));
 }
 
-void WriteReport(const RendererOptions& options_, const nw::player::PackagePlayer& player, const std::vector<float>& gpu_samples_ms_, const std::vector<float>& cpu_samples_ms_, const std::vector<float>& frame_samples_ms_, double cold_initialization_ms_, std::uint64_t peak) {
+void WriteReport(const RendererOptions& options_, const nw::player::PackagePlayer& player, const std::vector<float>& gpu_samples_ms_, const std::vector<float>& cpu_samples_ms_, const RunIdentity& run, double startup_ms) {
     if (options_.benchmark_json.empty()) {
         throw std::runtime_error("--benchmark-json is required for a measured run");
     }
@@ -116,11 +156,17 @@ void WriteReport(const RendererOptions& options_, const nw::player::PackagePlaye
         }
     }
     std::ostringstream json;
-    json << std::setprecision(9);
+    json << std::setprecision(17);
     json << "{\n";
     json << "  \"format\": \"nw11-raw-run.v1\",\n";
     json << "  \"version\": 1,\n";
     json << "  \"task\": \"NW-11\",\n";
+    WriteIdentity(json, options_, run);
+    json << "  \"timing\": {\"warmup_start_qpc_ms\": " << run.warmup_start_qpc_ms
+         << ", \"measurement_start_qpc_ms\": " << run.measurement_start_qpc_ms
+         << ", \"measurement_end_qpc_ms\": " << run.measurement_end_qpc_ms
+         << "},\n";
+
     json << "  \"role\": \"" << JsonEscape(options_.role) << "\",\n";
     json << "  \"device_tier\": \"" << JsonEscape(options_.device_tier) << "\",\n";
     json << "  \"device_key\": \"" << JsonEscape(options_.device_key) << "\",\n";
@@ -149,8 +195,7 @@ void WriteReport(const RendererOptions& options_, const nw::player::PackagePlaye
     };
     write_samples("gpu_time_samples", gpu_samples_ms_, false);
     write_samples("cpu_submit_samples", cpu_samples_ms_, false);
-    write_samples("frame_time_samples", frame_samples_ms_, false);
-    json << "    \"cold_initialization_ms\": " << cold_initialization_ms_
+    json << "    \"process_start_to_first_present_ms\": " << startup_ms
          << ",\n";
     json << "    \"distribution_bytes\": " << options_.distribution_bytes
          << ",\n";
@@ -163,15 +208,8 @@ void WriteReport(const RendererOptions& options_, const nw::player::PackagePlaye
         json << "\"" << JsonEscape(options_.shader_ids[index]) << "\"";
     }
     json << "],\n";
-    json << "    \"peak_engine_committed_gpu_bytes\": " << peak
-         << ",\n";
-    json << "    \"image\": {\n";
-    json << "      \"max_abs_channel_error\": 0.0,\n";
-    json << "      \"rmse\": 0.0,\n";
-    json << "      \"reference_kind\": \"" << JsonEscape(options_.reference_kind)
-         << "\",\n";
-    json << "      \"fixed_ticks\": [0, 240000, 480000, 720000, 959999]\n";
-    json << "    }\n";
+    json << "    \"peak_engine_committed_gpu_bytes\": " << peak_engine_committed_gpu_bytes
+         << "\n";
     json << "  },\n";
     json << "  \"shader_inventory\": [";
     for (std::size_t index = 0; index < options_.shader_ids.size(); ++index) {
@@ -199,19 +237,9 @@ void WriteReport(const RendererOptions& options_, const nw::player::PackagePlaye
 }
 
 
-double ProcessAgeMs() {
-    FILETIME created{}, exited{}, kernel{}, user{}, now{};
-    if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user))
-        throw std::runtime_error("cannot measure process creation time");
-    GetSystemTimePreciseAsFileTime(&now);
-    const auto ticks = [](FILETIME f) {
-        return (std::uint64_t(f.dwHighDateTime) << 32u) | f.dwLowDateTime;
-    };
-    if (ticks(now) < ticks(created)) throw std::runtime_error("invalid process clock");
-    return double(ticks(now) - ticks(created)) / 10000.0;
-}
-
 int RunProduction(const RendererOptions& options) {
+    if (options.fixed_quality != "nw07.quality.v1")
+        throw std::runtime_error("unexpected fixed-quality profile");
     if (options.runs != 1 || options.run_seconds == 0)
         throw std::runtime_error("each measurement requires one fresh process");
     if (!options.allow_software_adapter && (options.adapter_luid.empty() || options.headless))
@@ -223,11 +251,25 @@ int RunProduction(const RendererOptions& options) {
     if (!nw::player::LoadEmbeddedPackage(&embedded) ||
         !nw::player::ParseEmbeddedLinkMetadata(embedded, &metadata))
         throw std::runtime_error("missing or invalid embedded NW-07 production package");
+    RunIdentity run;
+    if (!options.launch_id.empty()) {
+        wchar_t module[32768]{};
+        const DWORD length = GetModuleFileNameW(nullptr, module, static_cast<DWORD>(std::size(module)));
+        if (length == 0 || length >= std::size(module))
+            throw std::runtime_error("cannot identify running executable");
+        std::ifstream image(std::filesystem::path(module), std::ios::binary);
+        const std::string image_bytes{std::istreambuf_iterator<char>(image), {}};
+        if (image_bytes.empty()) throw std::runtime_error("cannot hash running executable");
+        run.executable_hash = nw::package::Sha256Hex(image_bytes);
+        run.package_hash = nw::package::Sha256Hex(embedded.bytes, embedded.size);
+    }
     nw::player::PlayerConfig config;
     config.width = scene::kOutputWidth;
     config.height = scene::kOutputHeight;
     config.present_sync_interval = 0;
-    config.wait_for_gpu_each_frame = true;
+    // Hosted WARP smoke uses the player's synchronous timestamp readback.
+    // Physical runs use external GPU/display telemetry and normal frame retirement.
+    config.wait_for_gpu_each_frame = options.allow_software_adapter;
     config.allow_software_adapter = options.allow_software_adapter;
     config.headless = options.headless;
     config.create_window = !options.headless;
@@ -241,53 +283,75 @@ int RunProduction(const RendererOptions& options) {
         player.Report(true);
         return status == ExitCode::OptionalFeatureUnsupported ? kExitUnsupported : kExitInitializationFailed;
     }
-    std::uint64_t peak = 0;
     auto render = [&](std::uint64_t tick) {
         if (player.renderAtTick(tick) != ExitCode::Success || player.window_closed()) {
             player.Report(true);
             throw std::runtime_error("production frame execution failed");
         }
-        peak = std::max(peak, player.allocation_stats().engine_resource_bytes);
+        if (player.width() != scene::kOutputWidth || player.height() != scene::kOutputHeight)
+            throw std::runtime_error("production presentation dimensions changed");
     };
     render(0);
     if (!options.headless && !player.frames_presented())
         throw std::runtime_error("first production frame was not presented");
-    const double cold = ProcessAgeMs();
-    if (!options.capture_dir.empty()) {
-        std::filesystem::create_directories(options.capture_dir);
-        for (auto tick : contract_reference_ticks()) {
-            render(tick);
-            std::vector<std::uint8_t> pixels;
-            if (player.readbackPresentedOutput(&pixels) != ExitCode::Success ||
-                pixels.size() != std::uint64_t(scene::kOutputWidth) * scene::kOutputHeight * 16u)
-                throw std::runtime_error("production RGBA32F capture failed");
-            std::ofstream out(std::filesystem::path(options.capture_dir) /
-                (std::to_string(tick) + ".rgba"), std::ios::binary);
-            out.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
-            if (!out) throw std::runtime_error("cannot write production capture");
-        }
-        WriteCaptureManifest(options);
-    }
+    if (!options.headless && first_present_filetime < run.process_creation_filetime)
+        throw std::runtime_error("invalid first presentation timestamp");
+    const double startup_ms = options.headless ? 0.0 :
+        double(first_present_filetime - run.process_creation_filetime) / 10000.0;
+    run.warmup_start_qpc_ms = QpcMilliseconds();
     const auto origin = Clock::now();
     auto seconds = [&](auto t) { return std::chrono::duration<double>(t - origin).count(); };
     auto tick_at = [&](auto t) { return static_cast<std::uint64_t>(
         std::fmod(seconds(t) * scene::kTicksPerSecond, double(scene::kLoopTicks))); };
     while (seconds(Clock::now()) < options.warmup_seconds) render(tick_at(Clock::now()));
-    std::vector<float> gpu, cpu, frame;
+    std::vector<float> gpu, cpu;
+    run.measurement_start_qpc_ms = QpcMilliseconds();
     const auto start = Clock::now();
     while (std::chrono::duration<double>(Clock::now() - start).count() < options.run_seconds) {
         const auto begin = Clock::now();
         render(tick_at(begin));
         const auto& timing = player.instrumentation().timing();
-        if (!timing.gpu_available || !timing.cpu_available || timing.gpu_ms <= 0.0)
-            throw std::runtime_error("production GPU/CPU timing unavailable");
-        gpu.push_back(static_cast<float>(timing.gpu_ms));
+        if (!timing.cpu_available)
+            throw std::runtime_error("production CPU submission timing unavailable");
+        if (options.allow_software_adapter) {
+            if (!timing.gpu_available || timing.gpu_ms <= 0.0)
+                throw std::runtime_error("production GPU timing unavailable in WARP smoke");
+            gpu.push_back(static_cast<float>(timing.gpu_ms));
+        }
         cpu.push_back(static_cast<float>(timing.cpu_submit_ms));
-        frame.push_back(static_cast<float>(std::chrono::duration<double, std::milli>(Clock::now() - begin).count()));
     }
-    if (gpu.empty() || peak == 0 || player.allocation_stats().post_initialization_allocation_violation)
+    run.measurement_end_qpc_ms = QpcMilliseconds();
+    if (cpu.empty() || peak_engine_committed_gpu_bytes == 0 || player.allocation_stats().post_initialization_allocation_violation)
         throw std::runtime_error("missing samples or invalid engine allocation accounting");
-    WriteReport(options, player, gpu, cpu, frame, cold, peak);
+    WriteReport(options, player, gpu, cpu, run, startup_ms);
+    if (!options.capture_dir.empty()) {
+        std::filesystem::create_directories(options.capture_dir);
+        for (auto tick : contract_reference_ticks()) {
+            render(tick);
+            std::vector<std::uint8_t> pixels;
+            const auto capture = options.capture_display ? player.readbackDisplayOutput(&pixels)
+                                                         : player.readbackPresentedOutput(&pixels);
+            if (capture != ExitCode::Success)
+                throw std::runtime_error("production capture failed");
+            const auto pixel_count = std::uint64_t(scene::kOutputWidth) * scene::kOutputHeight;
+            if (options.capture_display) {
+                if (pixels.size() != pixel_count * 4u)
+                    throw std::runtime_error("production display capture size changed");
+                std::vector<float> rgba;
+                rgba.reserve(pixels.size());
+                for (auto channel : pixels) rgba.push_back(float(channel) / 255.0f);
+                const auto* bytes = reinterpret_cast<const std::uint8_t*>(rgba.data());
+                pixels.assign(bytes, bytes + rgba.size() * sizeof(float));
+            }
+            if (pixels.size() != pixel_count * 16u)
+                throw std::runtime_error("production RGBA32F capture size changed");
+            std::ofstream out(std::filesystem::path(options.capture_dir) /
+                (std::to_string(tick) + ".rgba"), std::ios::binary);
+            out.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
+            if (!out) throw std::runtime_error("cannot write production capture");
+        }
+        WriteCaptureManifest(options, run);
+    }
     return player.shutdown() == ExitCode::Success ? kExitOk : kExitInitializationFailed;
 }
 } // namespace

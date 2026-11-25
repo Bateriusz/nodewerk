@@ -28,6 +28,7 @@ import nw11_contract as contract  # noqa: E402
 CAPTURE_FORMAT = "nw11-capture-set"
 RESULT_FORMAT = "nw11-image-result"
 RESULT_VERSION = 1
+CAPTURE_TICKS = (*contract.REFERENCE_FIXED_TICKS, contract.LOOP_TICKS)
 
 
 class CaptureError(ValueError):
@@ -50,7 +51,7 @@ def _validate_manifest(
     if document.get("format") != CAPTURE_FORMAT:
         raise CaptureError(f"{label} capture manifest has the wrong format")
     ticks = document.get("fixed_ticks")
-    if not isinstance(ticks, list) or ticks != list(contract.REFERENCE_FIXED_TICKS):
+    if not isinstance(ticks, list) or ticks != list(CAPTURE_TICKS):
         raise CaptureError(f"{label} captures do not cover the frozen fixed ticks")
     images = document.get("images")
     if not isinstance(images, list) or len(images) != len(ticks):
@@ -159,8 +160,15 @@ def compare(
                 "tick": reference["tick"],
                 "max_abs_channel_error": max_abs,
                 "rmse": rmse,
+                "baseline_sha256": reference["sha256"],
+                "variant_sha256": candidate["sha256"],
             }
         )
+    loop_boundary = {}
+    for label, captures in (("baseline", baseline), ("variant", variant)):
+        maximum, rmse, _ = _compare_pair(captures[0]["path"], captures[-1]["path"])
+        loop_boundary[label] = {"max_abs_channel_error": maximum, "rmse": rmse}
+        overall_max = max(overall_max, maximum)
     return {
         "format": RESULT_FORMAT,
         "version": RESULT_VERSION,
@@ -173,6 +181,7 @@ def compare(
         "baseline_manifest_sha256": contract.sha256_file(baseline_manifest),
         "variant_manifest_sha256": contract.sha256_file(variant_manifest),
         "per_tick": per_tick,
+        "loop_boundary": loop_boundary,
     }
 
 

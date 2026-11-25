@@ -13,6 +13,7 @@ the clean-machine validation bundle.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -26,6 +27,7 @@ from nw11_contract import (  # type: ignore[import-not-found]
     EVIDENCE_STATUSES,
     IMPLEMENTATION_BASE,
     MIN_WINDOWS_BUILD,
+    NVIDIA_DRIVER_FLOOR,
     PROFILE_DEFINITIONS,
     SHADER_MODEL_ORDER,
     STRETCH_DISTRIBUTION_CEILING_BYTES,
@@ -274,6 +276,44 @@ def _rank(value: str, accepted_values: list[str], minimum_rank: int) -> int | No
     return rank if rank >= minimum else None
 
 
+def physical_device_tier(key: str) -> str | None:
+    """Classify physical coverage independently of feature eligibility."""
+    return next((tier for tier, board in DEVICE_TIERS.items()
+                 if board["device_key"] == key), None)
+
+
+def _runtime_diagnostics(observation: Mapping[str, Any], vendor_id: int) -> list[dict[str, Any]]:
+    diagnostics = []
+    os_version = re.fullmatch(r"10\.0\.(\d+)(?:\.\d+)?", str(observation.get("os_build")))
+    if os_version is None:
+        diagnostics.append({"code": "NW11-RUNTIME-PENDING", "field": "os_build"})
+    elif int(os_version[1]) < MIN_WINDOWS_BUILD:
+        diagnostics.append({"code": "NW11-RUNTIME-UNSUPPORTED", "field": "os_build",
+                            "minimum": MIN_WINDOWS_BUILD})
+    runtime = _require_mapping(observation.get("runtime", {}), "observation.runtime")
+    architecture = runtime.get("native_architecture")
+    if architecture in (None, "unavailable"):
+        diagnostics.append({"code": "NW11-RUNTIME-PENDING", "field": "native_architecture"})
+    elif architecture != "x64":
+        diagnostics.append({"code": "NW11-RUNTIME-UNSUPPORTED", "field": "native_architecture"})
+    for field in ("d3d12_dll_version", "dxgi_dll_version"):
+        if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", str(runtime.get(field))):
+            diagnostics.append({"code": "NW11-RUNTIME-PENDING", "field": field})
+    if vendor_id == 0x10DE:
+        driver = str(observation.get("driver_version"))
+        # The Windows class registry reports e.g. 32.0.16.1088 for 610.88.
+        windows_driver = re.fullmatch(r"\d+\.\d+\.(\d+)\.(\d{4})", driver)
+        if windows_driver:
+            digits = (windows_driver[1] + windows_driver[2])[-5:]
+            driver = f"{digits[:3]}.{digits[3:]}"
+        if not re.fullmatch(r"\d+\.\d{2}", driver):
+            diagnostics.append({"code": "NW11-RUNTIME-PENDING", "field": "driver_version"})
+        elif tuple(map(int, driver.split("."))) < tuple(map(int, NVIDIA_DRIVER_FLOOR.split("."))):
+            diagnostics.append({"code": "NW11-RUNTIME-UNSUPPORTED", "field": "driver_version",
+                                "minimum": NVIDIA_DRIVER_FLOOR})
+    return diagnostics
+
+
 def evaluate_observation(
     profile: Mapping[str, Any],
     observation: Mapping[str, Any],
@@ -287,6 +327,11 @@ def evaluate_observation(
     """
     record = validate_profile(profile)
     observation = _require_mapping(observation, "observation")
+    initialization = _require_mapping(observation.get("initialization", {}), "observation.initialization")
+    if initialization.get("status") == "failed" and "adapter" not in observation:
+        return {"status": "failed", "profile_id": record["profile_id"],
+                "requirements_digest": record["requirements_digest"],
+                "diagnostics": [dict(initialization)]}
     adapter = _require_mapping(observation.get("adapter"), "observation.adapter")
     vendor_id = _require_int(adapter.get("vendor_id"), "adapter.vendor_id")
     device_id = _require_int(adapter.get("device_id"), "adapter.device_id")
@@ -294,8 +339,6 @@ def evaluate_observation(
     os_build = _require_str(observation.get("os_build"), "os_build")
     features = _require_mapping(observation.get("features"), "observation.features")
 
-    initialization = observation.get("initialization") or {}
-    initialization = _require_mapping(initialization, "observation.initialization")
     if initialization.get("status") == "failed":
         return {
             "profile_id": record["profile_id"],
@@ -305,6 +348,7 @@ def evaluate_observation(
                 {
                     "code": "NW11-INITIALIZATION-FAILED",
                     "stage": str(initialization.get("stage", "unknown")),
+                    "hresult": initialization.get("hresult"),
                     "message": str(
                         initialization.get(
                             "message", "optional feature initialization failed"
@@ -331,9 +375,9 @@ def evaluate_observation(
             "satisfies_optional_profile": False,
         }
 
-    diagnostics: list[dict[str, Any]] = []
+    diagnostics = _runtime_diagnostics(observation, vendor_id)
     queried: dict[str, Any] = {}
-    pending = False
+    pending = any(item["code"] == "NW11-RUNTIME-PENDING" for item in diagnostics)
     for requirement in record["queried_capabilities"]:
         query_id = requirement["query_id"]
         value = features.get(query_id)
@@ -350,7 +394,12 @@ def evaluate_observation(
             continue
         queried[query_id] = value
         accepted_values = list(requirement.get("accepted_values") or [])
-        rank = _rank(str(value), accepted_values, int(requirement.get("minimum_rank", 0)))
+        minimum_rank = requirement["minimum_rank"]
+        if query_id == "raytracing_tier":
+            tier = _require_int(value, "raytracing_tier")
+            rank = tier if tier >= minimum_rank else None
+        else:
+            rank = _rank(str(value), accepted_values, minimum_rank)
         if rank is None:
             diagnostics.append(
                 {
@@ -366,7 +415,7 @@ def evaluate_observation(
                 }
             )
 
-    if diagnostics and any(d["code"] == "NW11-CAPABILITY-UNSUPPORTED" for d in diagnostics):
+    if any(d["code"].endswith("-UNSUPPORTED") for d in diagnostics):
         status = "unsupported"
     elif pending:
         status = "pending"
@@ -384,7 +433,10 @@ def evaluate_observation(
             device_id,
             driver,
             os_build,
-            observation.get("toolchain_identity"),
+            {"probe": observation.get("toolchain_identity"),
+             "runtime": observation.get("runtime"),
+             "board": {key: adapter.get(key) for key in ("subsystem_id", "revision", "dedicated_video_memory_bytes")},
+             "adapter_luid": adapter.get("adapter_luid")},
         ),
         "adapter": {
             "vendor_id": vendor_id,
@@ -392,6 +444,7 @@ def evaluate_observation(
             "adapter_luid": adapter.get("adapter_luid"),
             "adapter_name_metadata_only": adapter.get("adapter_name"),
         },
+        "physical_device_tier": physical_device_tier(device_key(vendor_id, device_id)),
         "driver_version": driver,
         "os_build": os_build,
         "queried": queried,

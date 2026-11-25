@@ -95,6 +95,7 @@ function(nw11_add_shader target_name hlsl_file entry_point profile symbol)
             -Vn "${symbol}"
             "${hlsl_file}"
         DEPENDS "${hlsl_file}" "${NW11_REPO_ROOT}/shaders/nw06/nw06_scene_data_cs.hlsl"
+                "${NW11_REPO_ROOT}/shaders/nw11/reflection/nw11_reflection_fixture.hlsli"
         COMMENT "Compiling NW-11 offline shader ${hlsl_file} (${entry_point}, ${profile})"
         VERBATIM
     )
@@ -160,9 +161,10 @@ add_custom_target(nw11_all_shaders DEPENDS
 add_executable(nw11_capability_probe capability_probe.cpp)
 target_compile_features(nw11_capability_probe PRIVATE cxx_std_17)
 target_compile_definitions(nw11_capability_probe PRIVATE UNICODE _UNICODE)
-target_link_libraries(nw11_capability_probe PRIVATE d3d12 dxgi advapi32 version)
+target_link_libraries(nw11_capability_probe PRIVATE d3d12 dxgi version gdi32 user32)
 if(MSVC)
-    target_compile_options(nw11_capability_probe PRIVATE /W4 /permissive- /EHsc)
+    target_compile_options(nw11_capability_probe PRIVATE /W4 /permissive- /EHsc /Brepro)
+    target_link_options(nw11_capability_probe PRIVATE /Brepro /INCREMENTAL:NO)
 endif()
 
 # Build the same runtime translation units as the production PackagePlayer.

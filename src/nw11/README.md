@@ -12,8 +12,9 @@ deliberately **not** part of the root NW-07 production build:
   launcher passes the probe-selected adapter LUID so a measurement can never
   silently move to another GPU.  The baseline consumes the generated indirect
   draw arguments, both arms run the frozen bloom/tonemap/display/present chain,
-  GPU time comes from timestamp queries, and VRAM comes from
-  `IDXGIAdapter3::QueryVideoMemoryInfo`.
+  PresentMon records physical GPU and displayed-frame timings. Production
+  instrumentation measures CPU submission and the engine allocation high-water
+  mark.
 - `CMakeLists.txt` builds `nw11_common_baseline` (raster scene PS),
   `nw11_common_analytic` (analytic reflection baseline), separately built
   `nw11_fallback_common`/`nw11_fallback_analytic`, `nw11_optional_mesh`,

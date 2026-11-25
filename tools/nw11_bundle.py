@@ -20,6 +20,7 @@ from nw11_contract import (  # type: ignore[import-not-found]
     BASE_GRAPH,
     BASE_GRAPH_SHA256,
     COMMON_PROFILE_ID,
+    COMMON_SHADER_TARGETS,
     IMPLEMENTATION_BASE,
     TASK,
     canonical_json_bytes,
@@ -60,7 +61,6 @@ DISTRIBUTED_ROLES = {
     ROLE_OPTIONAL_VARIANT,
     ROLE_FALLBACK,
     ROLE_RUNTIME_DEPENDENCY,
-    ROLE_SHADER,
 }
 
 # Any dependency whose name matches these tokens is optional; it may never be
@@ -177,7 +177,7 @@ def _safe_relative(path: str) -> str:
     if not isinstance(path, str) or not path.strip():
         raise BundleError("artifact path must be a non-empty string")
     candidate = PurePosixPath(path.replace("\\", "/"))
-    if candidate.is_absolute() or ".." in candidate.parts:
+    if candidate.is_absolute() or ".." in candidate.parts or ":" in path:
         raise BundleError(f"artifact path must be bundle-relative: {path}")
     return candidate.as_posix()
 
@@ -267,34 +267,24 @@ def _accounting(
         for item in artifacts
         if item["role"] == ROLE_OPTIONAL_VARIANT
     )
-    optional_shaders = sum(
-        item["distributed_bytes"]
-        for item in artifacts
-        if item["role"] == ROLE_SHADER and item["optional"]
-    )
-    optional_dependencies = sum(
-        int(item.get("distributed_bytes", 0))
-        for item in dependency_ledger
-        if item.get("optional")
-    )
-    common_shaders = sum(
-        item["distributed_bytes"]
-        for item in artifacts
-        if item["role"] == ROLE_SHADER and not item.get("optional")
-    )
-    # The variant distribution is the optional executable plus every optional
-    # shader and dependency byte that must ship with it.  Common/fallback
-    # shaders are part of the common distribution so incremental accounting
-    # reflects the actual payload added by the optional profile.
-    baseline_distribution = common + common_shaders
-    # Include the shared/common shader payloads the variant also needs so the
-    # reported variant and incremental distributions reflect every shipped
-    # byte.  Common shader bytes cancel in the incremental difference.
-    variant_distribution = (
-        optional + optional_shaders + common_shaders + optional_dependencies
-    )
+    def shaders(role: str) -> list[dict[str, Any]]:
+        entry = next(item for item in artifacts if item["role"] == role)
+        return entry["metadata"].get("shipped_shaders", [])
+
+    common_shaders = shaders(ROLE_COMMON_BASELINE)
+    optional_shaders = shaders(ROLE_OPTIONAL_VARIANT)
+    runtime = [item for item in artifacts if item["role"] == ROLE_RUNTIME_DEPENDENCY]
+    recorded = {(entry["name"], entry["optional"]): entry["distributed_bytes"]
+                for entry in dependency_ledger if entry.get("distributed_bytes", 0)}
+    shipped = {(Path(entry["path"]).name, entry["optional"]): entry["distributed_bytes"] for entry in runtime}
+    if recorded != shipped:
+        raise BundleError("deployment dependency ledger disagrees with the shipped runtime")
+    optional_dependencies = sum(item["distributed_bytes"] for item in runtime if item["optional"])
+    common_dependencies = sum(item["distributed_bytes"] for item in runtime if not item["optional"])
+    baseline_distribution = common + common_dependencies
+    variant_distribution = optional + common_dependencies + optional_dependencies
     incremental = variant_distribution - baseline_distribution
-    fallback_distribution = fallback + common_shaders
+    fallback_distribution = fallback + common_dependencies
     complete = max(baseline_distribution, variant_distribution, fallback_distribution)
     complete_ceiling = int(artifact_budget["complete_distribution_bytes_ceiling"])
     incremental_ceiling = int(
@@ -308,20 +298,12 @@ def _accounting(
         "baseline_distribution_bytes": baseline_distribution,
         "fallback_distribution_bytes": fallback_distribution,
         "optional_distribution_bytes": optional,
-        "optional_shader_bytes": optional_shaders,
-        "common_shader_bytes": common_shaders,
+        "optional_shader_bytes": sum(shader["bytes"] for shader in optional_shaders),
+        "common_shader_bytes": sum(shader["bytes"] for shader in common_shaders),
         "optional_dependency_bytes": optional_dependencies,
         "variant_distribution_bytes": variant_distribution,
-        "optional_shader_count": sum(
-            1
-            for item in artifacts
-            if item["role"] == ROLE_SHADER and item.get("optional")
-        ),
-        "common_shader_count": sum(
-            1
-            for item in artifacts
-            if item["role"] == ROLE_SHADER and not item.get("optional")
-        ),
+        "optional_shader_count": len(optional_shaders),
+        "common_shader_count": len(common_shaders),
         "incremental_distribution_bytes": incremental,
         "complete_distribution_bytes": complete,
         "total_bundle_bytes": sum(item["bytes"] for item in artifacts),
@@ -464,7 +446,7 @@ def _assert_optional_closure_separation(
                 f"common/fallback artifact '{item['path']}' must not be optional"
             )
         targets = set(item.get("shader_targets") or [])
-        if any(target.startswith(("as_", "ms_", "lib_")) for target in targets):
+        if not targets <= set(COMMON_SHADER_TARGETS):
             raise BundleError(
                 f"common/fallback artifact '{item['path']}' includes optional shader targets"
             )
@@ -538,6 +520,7 @@ def verify_manifest_structure(record: Mapping[str, Any]) -> dict[str, Any]:
     artifacts = manifest.get("artifacts")
     if not isinstance(artifacts, list) or not artifacts:
         raise BundleError("bundle artifacts must be a non-empty array")
+    artifacts = [_mapping(item, "artifact") for item in artifacts]
     if not any(a.get("role") == ROLE_COMMON_BASELINE for a in artifacts):
         raise BundleError("bundle has no common baseline artifact")
     if not any(a.get("role") == ROLE_OPTIONAL_VARIANT for a in artifacts):
@@ -580,6 +563,7 @@ def verify_bundle(
     root: Path | str,
     *,
     expected_commit: str | None = None,
+    fixture_only: bool = False,
 ) -> dict[str, Any]:
     bundle_root = Path(root).resolve()
     manifest = load_manifest(bundle_root)
@@ -595,10 +579,16 @@ def verify_bundle(
         )
 
     artifact_paths: set[str] = set()
+    windows_paths: set[str] = set()
     for artifact in manifest["artifacts"]:
         relative = _safe_relative(str(artifact.get("path", "")))
+        if relative.casefold() in windows_paths:
+            raise BundleError(f"duplicate artifact path: {relative}")
+        windows_paths.add(relative.casefold())
         artifact_paths.add(relative)
         path = bundle_root / relative
+        if bundle_root not in path.resolve().parents:
+            raise BundleError(f"artifact path escapes the bundle: {relative}")
         if not path.is_file():
             raise BundleError(f"bundle artifact is missing: {relative}")
         data = path.read_bytes()
@@ -613,21 +603,78 @@ def verify_bundle(
     proof_path = bundle_root / "manifests/nw11-common-regression.json"
     measured = [item for item in manifest["artifacts"] if item["role"] in
                 {ROLE_COMMON_BASELINE, ROLE_OPTIONAL_VARIANT, ROLE_FALLBACK}]
-    if proof_path.is_file() or any(item.get("metadata", {}).get("specialization") for item in measured):
+    if not fixture_only:
+        required_files = {
+            "manifests/nw11-common-regression.json", "runtime/python-runtime.zip",
+            "bin/nw11_capability_probe.exe", "bin/canonical_release.exe",
+            "bin/canonical_reference.exe", "runtime/presentmon.exe",
+            "runtime/presentmon-license.txt", "manifests/graph-scene.json",
+            "manifests/pe-dependencies.json", "manifests/shader-payloads.json",
+        }
+        if not required_files <= artifact_paths:
+            raise BundleError("production bundle is missing required native artifacts or runtime")
+        if not manifest.get("dependency_report") or not manifest.get("shader_payloads") or not manifest.get("toolchain", {}).get("measured"):
+            raise BundleError("production bundle is missing toolchain or dependency identities")
+        if len(measured) != 3 or {item["role"] for item in measured} != {ROLE_COMMON_BASELINE, ROLE_OPTIONAL_VARIANT, ROLE_FALLBACK}:
+            raise BundleError("production bundle must contain exactly one native executable per measured role")
+        runtime = bundle_root / "runtime/python-runtime.zip"
+        from zipfile import ZipFile, BadZipFile
+        try:
+            with ZipFile(runtime) as archive:
+                names = archive.namelist()
+                required_python = {"python.exe", "LICENSE.txt", "Lib/json/__init__.py", "Lib/encodings/__init__.py"}
+                if (not required_python <= set(names) or not archive.read("python.exe").startswith(b"MZ")
+                        or archive.testzip() is not None):
+                    raise BundleError("invalid bundled Python runtime")
+        except (BadZipFile, OSError) as exc:
+            raise BundleError("invalid bundled Python runtime") from exc
         try:
             import nw11_production_binding as binding
             proof = json.loads(proof_path.read_text(encoding="utf-8"))
             package_hash, manifest_hash = binding.verify_proof(proof, manifest["commit"])
+            from nw11_pe_dependencies import imports
+            from nw11_contract import PRESENTMON_SHA256
+            release = bundle_root / "bin/canonical_release.exe"
+            reference = bundle_root / "bin/canonical_reference.exe"
+            if sha256_bytes(reference.read_bytes()) == proof["candidate"]["executable_sha256"]:
+                raise ValueError("canonical reference must be separately linked")
+            release_bytes = release.read_bytes()
+            _, release_package, release_manifest_binding = binding.embedded_payloads(release_bytes)
+            if (sha256_bytes(release_bytes) != proof["candidate"]["executable_sha256"]
+                    or sha256_bytes(release_package) != package_hash
+                    or release_manifest_binding.hex() != manifest_hash
+                    or sorted(name.casefold() for name in imports(release)) !=
+                       sorted(name.casefold() for name in proof["candidate"]["pe_imports"])):
+                raise ValueError("canonical release executable differs from the byte proof")
+            if sha256_bytes((bundle_root / "runtime/presentmon.exe").read_bytes()) != PRESENTMON_SHA256:
+                raise ValueError("validation PresentMon does not match the pinned release")
+            dependencies = json.loads((bundle_root / "manifests/pe-dependencies.json").read_bytes())
+            expected_imports = {entry["path"]: entry["dlls"] for entry in dependencies["executables"]}
+            probe_imports = imports(bundle_root / "bin/nw11_capability_probe.exe")
+            if probe_imports != expected_imports.get("nw11_capability_probe.exe"):
+                raise ValueError("capability probe differs from the native dependency report")
             payloads = binding.read_payloads(bundle_root / "manifests/compiled-specializations")
             ray = manifest["experiment_id"] == "nw11.ray-query-vs-analytic-reflection.v1"
+            role_names = {
+                ROLE_COMMON_BASELINE: ("baseline", "nw11_common_analytic.exe" if ray else "nw11_common_baseline.exe"),
+                ROLE_OPTIONAL_VARIANT: ("variant", "nw11_optional_ray.exe" if ray else "nw11_optional_mesh.exe"),
+                ROLE_FALLBACK: ("fallback", "nw11_fallback_analytic.exe" if ray else "nw11_fallback_common.exe"),
+            }
             for item in measured:
-                specialization = ("ray" if ray else "mesh") if item["role"] == ROLE_OPTIONAL_VARIANT else ("analytic" if ray else "common")
-                observed = binding.inspect((bundle_root / item["path"]).read_bytes(),
-                    commit=manifest["commit"], specialization=specialization,
-                    package_sha256=package_hash, manifest_sha256=manifest_hash,
-                    payloads=payloads)
-                if observed != _production_binding_metadata(item.get("metadata")):
-                    raise ValueError("recorded native binding differs from executable bytes")
+                role, native_name = role_names[item["role"]]
+                path = bundle_root / item["path"]
+                specialization = ("ray" if ray else "mesh") if role == "variant" else ("analytic" if ray else "common")
+                observed = binding.inspect(path.read_bytes(), commit=manifest["commit"],
+                    specialization=specialization, package_sha256=package_hash,
+                    manifest_sha256=manifest_hash, payloads=payloads)
+                ids = sorted(shader["id"] for shader in observed["shipped_shaders"])
+                if (observed != _production_binding_metadata(item.get("metadata"))
+                        or not ids or manifest["shader_inventory"]["roles"][role] != ids
+                        or imports(path) != expected_imports.get(native_name)):
+                    raise ValueError("recorded native binding, shaders or imports differ from executable bytes")
+            binding.inspect(reference.read_bytes(), commit=manifest["commit"],
+                            specialization="common", package_sha256=package_hash,
+                            manifest_sha256=manifest_hash, payloads=payloads)
         except (ValueError, OSError, KeyError, TypeError) as exc:
             raise BundleError(f"production binding verification failed: {exc}") from exc
 
@@ -859,7 +906,7 @@ def verify_bundle(
     if accounting != manifest["accounting"]:
         raise BundleError("bundle accounting does not match recorded artifact bytes")
     return {
-        "status": "verified",
+        "status": "fixture_only" if fixture_only else "verified",
         "bundle_id": manifest["bundle_id"],
         "commit": manifest["commit"],
         "experiment_id": manifest["experiment_id"],

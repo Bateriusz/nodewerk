@@ -33,33 +33,19 @@ struct PSInput
     float3 camera_position : TEXCOORD4;
 };
 
-// Keep the DXR arm's reference image identical to the analytic baseline.
-// The query is still traversed and the committed status keeps the traversal
-// live; the 1e-6 marker is below the frozen 1e-4 image tolerance.
-float3 AnalyticEnvironment(float3 direction)
-{
-    float horizon = saturate(direction.y * 0.5 + 0.5);
-    return lerp(float3(0.21, 0.27, 0.36), float3(0.72, 0.78, 0.88), horizon);
-}
+#include "nw11_reflection_fixture.hlsli"
 
-float3 TraceAnalyticReference(float3 origin, float3 direction)
+bool TraceReflectedSurface(float3 surface, float3 outward, float limit)
 {
     RayDesc ray;
-    ray.Origin = origin;
-    ray.Direction = direction;
-    ray.TMin = 0.001;
-    ray.TMax = 100.0;
-    RayQuery<RAY_FLAG_NONE> query;
+    ray.Origin = surface + outward * ReflectionOffset;
+    ray.Direction = -outward;
+    ray.TMin = 0.0;
+    ray.TMax = limit;
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH> query;
     query.TraceRayInline(NwScene, RAY_FLAG_NONE, 0xFF, ray);
-    while (query.Proceed())
-    {
-        // No any-hit work is required for the opaque NW-07 torus scene.  The
-        // explicit loop keeps all committed candidates visible to the compiler
-        // and to the resource-lifetime audit.
-    }
-    float hit_marker =
-        query.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 1.0 : 0.0;
-    return AnalyticEnvironment(direction) + hit_marker * 1e-6;
+    while (query.Proceed()) {}
+    return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
 }
 
 float4 ScenePS(PSInput input) : SV_Target
@@ -89,9 +75,10 @@ float4 ScenePS(PSInput input) : SV_Target
     float fresnel = pow(1.0 - saturate(dot(normal, view)), 5.0);
     float reflectivity = lerp(0.08, 0.55, fresnel) * (1.0 - roughness);
     float3 diffuse = albedo * (0.16 + 0.84 * ndotl);
-    // Offset the reflection origin off the surface to avoid self-intersection;
-    // the BLAS/TLAS and all buffers must outlive the frame command list.
-    float3 reflection = TraceAnalyticReference(
-        input.world_position + normal * 0.002, reflected);
+    // Tilt grazing rays outward so the segment crosses the raster surface.
+    float3 outward = normalize(reflected + 2.0 * normal);
+    bool hit = TraceReflectedSurface(
+        input.world_position, outward, ReflectionLimit(input.position.x));
+    float3 reflection = ReflectionRadiance(reflected, hit);
     return float4(diffuse + reflection * reflectivity, 1.0);
 }

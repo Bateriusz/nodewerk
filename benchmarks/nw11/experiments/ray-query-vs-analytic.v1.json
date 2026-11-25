@@ -27,6 +27,13 @@
     "image": {
       "criterion": "max_abs_channel_error_and_rmse",
       "fixed_quality": true,
+      "fixture": {
+        "hit_miss_pattern": "alternating 32-pixel screen-space bands on the torus",
+        "outward_offset": 0.02,
+        "hit_segment_length": 0.021,
+        "miss_segment_length": 0.015,
+        "reference": "analytic tangent-plane intersection at the raster surface"
+      },
       "fixed_ticks": [
         0,
         240000,
@@ -47,7 +54,7 @@
       "evaluation": "independent_per_device_environment",
       "metric": "p99_gpu_time_ms",
       "relative_reduction_percent_min": 10.0,
-      "statistic": "nearest-rank p99 across raw per-frame GPU samples"
+      "statistic": "nearest-rank p99 per 60-second process; require every matched run pair to improve"
     }
   },
   "evidence_status": "pending",

@@ -92,6 +92,8 @@ int main(int argc, char** argv) {
             options.self_check = true;
         } else if (std::strcmp(argv[index], "--allow-software") == 0) {
             options.allow_software_adapter = true;
+        } else if (std::strcmp(argv[index], "--capture-display") == 0) {
+            options.capture_display = true;
         } else if (std::strcmp(argv[index], "--headless") == 0) {
             options.headless = true;
         } else if (Consume(index, argc, argv, "--benchmark-json", text)) {
@@ -104,6 +106,10 @@ int main(int argc, char** argv) {
             options.role = text;
         } else if (Consume(index, argc, argv, "--artifact-path", text)) {
             options.artifact_path = text;
+        } else if (Consume(index, argc, argv, "--launch-id", text)) {
+            options.launch_id = text;
+        } else if (Consume(index, argc, argv, "--commit", text)) {
+            options.commit = text;
         } else if (Consume(index, argc, argv, "--device-tier", text)) {
             options.device_tier = text;
         } else if (Consume(index, argc, argv, "--device-key", text)) {

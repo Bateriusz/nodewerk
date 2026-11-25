@@ -10,13 +10,13 @@
       "feature": "vulkan_1_4",
       "content_hypothesis": "A Vulkan 1.4 backend could broaden supported platforms, but the frozen NW-07 production is a Windows D3D12 graph-derived artifact and a second production backend is explicitly out of scope.",
       "exact_feature_queries": [
-        "vkEnumerateInstanceVersion >= VK_API_VERSION_1_4",
-        "VK_KHR_maintenance7",
-        "VK_KHR_shader_subgroup_rotate",
-        "VK_EXT_graphics_pipeline_library"
+        "vkEnumerateInstanceVersion returns at least VK_API_VERSION_1_4",
+        "vkGetPhysicalDeviceProperties2: VkPhysicalDeviceProperties.apiVersion >= VK_API_VERSION_1_4",
+        "vkGetPhysicalDeviceFeatures2: VkPhysicalDeviceVulkan14Features.shaderSubgroupRotate == VK_TRUE if subgroup rotation is used",
+        "vkEnumerateDeviceExtensionProperties plus vkGetPhysicalDeviceFeatures2: VK_EXT_graphics_pipeline_library and VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT.graphicsPipelineLibrary if pipeline libraries are used"
       ],
       "api_requirements": "Vulkan 1.4 loader plus instance/device extension promotion; SPIR-V 1.6 shader modules",
-      "shader_targets": ["SPIR-V 1.6 vertex/fragment/compute", "lib_6_5 equivalent SPIR-V"],
+      "shader_targets": ["SPIR-V 1.6 vertex/fragment/compute", "Vulkan 1.4 target environment"],
       "toolchain_requirements": "glslang or DXC SPIR-V backend; Vulkan SDK validation layers during development only",
       "runtime_requirements": "Vulkan 1.4 loader and ICD on the target machine; Windows 11 driver support",
       "deployment_constraints": [
@@ -45,8 +45,8 @@
       "content_hypothesis": "Overlapping NW-07 bloom/tonemap compute work with the instanced raster pass might reduce end-to-end frame time on devices with an independent compute queue.",
       "exact_feature_queries": [
         "ID3D12Device::CreateCommandQueue(D3D12_COMMAND_LIST_TYPE_COMPUTE) returns S_OK",
-        "D3D12_FEATURE_ARCHITECTURE1",
-        "D3D12_FEATURE_D3D12_OPTIONS1"
+        "ID3D12CommandQueue::GetTimestampFrequency returns S_OK on the compute and direct queues",
+        "D3D12_FEATURE_ARCHITECTURE1 with NodeIndex=0: record UMA and CacheCoherentUMA; measure actual overlap"
       ],
       "api_requirements": "D3D12 compute queue plus cross-queue fences; no new API tier",
       "shader_targets": ["cs_6_0"],
@@ -71,13 +71,12 @@
       "feature": "work_graphs",
       "content_hypothesis": "Work Graphs could collapse the NW-07 initialization dispatches into a single GPU-driven producer/consumer graph, but initialization is already amortized and the benefit is content-dependent.",
       "exact_feature_queries": [
-        "D3D12_FEATURE_D3D12_OPTIONS21.WorkGraphsTier == D3D12_WORK_GRAPHS_TIER_1_0",
-        "D3D12_FEATURE_D3D12_OPTIONS21.WorkGraphsSupported",
-        "D3D12_FEATURE_SHADER_MODEL.HighestShaderModel >= D3D12_SHADER_MODEL_6_8"
+        "D3D12_FEATURE_D3D12_OPTIONS21.WorkGraphsTier >= D3D12_WORK_GRAPHS_TIER_1_0",
+        "D3D12_FEATURE_SHADER_MODEL.HighestShaderModel >= D3D_SHADER_MODEL_6_8"
       ],
       "api_requirements": "Agility SDK exposing D3D12 Work Graphs; D3D12_FEATURE_D3D12_OPTIONS21",
-      "shader_targets": ["lib_6_8", "cs_6_8"],
-      "toolchain_requirements": "Agility SDK matching the Work Graphs contract; DXC with Work Graphs support",
+      "shader_targets": ["lib_6_8"],
+      "toolchain_requirements": "Agility SDK 1.613.3 and DXC 1.8.2403 or newer with lib_6_8",
       "runtime_requirements": "Windows 11 plus Agility SDK redistributable or inbox-equivalent support",
       "deployment_constraints": [
         "Agility SDK binaries must be counted if bundled",
@@ -104,13 +103,14 @@
       "feature": "shader_execution_reordering",
       "content_hypothesis": "SER might improve ray-query variant divergence if the NW-07 torus reflection workload showed coherent hit grouping, but the initial ray-query experiment must first establish end-to-end benefit.",
       "exact_feature_queries": [
-        "D3D12_FEATURE_D3D12_OPTIONS21.ShaderExecutionReorderingTier >= D3D12_SHADER_EXECUTION_REORDERING_TIER_1",
-        "D3D12_FEATURE_SHADER_MODEL.HighestShaderModel >= D3D12_SHADER_MODEL_6_6"
+        "D3D12_FEATURE_D3D12_OPTIONS22.ShaderExecutionReorderingActuallyReorders == TRUE",
+        "D3D12_FEATURE_D3D12_OPTIONS5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_1 for inline traversal",
+        "D3D12_FEATURE_SHADER_MODEL.HighestShaderModel >= D3D_SHADER_MODEL_6_9"
       ],
-      "api_requirements": "D3D12 SER API; Agility SDK exposing D3D12_OPTIONS21",
-      "shader_targets": ["lib_6_6", "ps_6_6"],
-      "toolchain_requirements": "DXC with SER intrinsics; Agility SDK matching SER",
-      "runtime_requirements": "Windows 11 plus Agility SDK or driver support",
+      "api_requirements": "Agility SDK 1.619; CheckFeatureSupport(OPTIONS22, SHADER_MODEL, OPTIONS5); RaytracingTier >= 1.1 for inline ray queries",
+      "shader_targets": ["lib_6_9", "ps_6_9"],
+      "toolchain_requirements": "DXC 1.9.2602.16 with Shader Model 6.9, and Agility SDK 1.619 headers",
+      "runtime_requirements": "Windows 11 with the Agility SDK 1.619 runtime and a driver exposing the queried features",
       "deployment_constraints": [
         "cannot be combined with the initial NW-11 ray-query experiment",
         "must retain the separately exported common fallback",
@@ -132,12 +132,12 @@
       "feature": "opacity_micromaps",
       "content_hypothesis": "Opacity micromaps could accelerate alpha-tested foliage, but the NW-07 torus workload is fully opaque and contains no alpha-test content, so there is no content hypothesis for this task.",
       "exact_feature_queries": [
-        "D3D12_FEATURE_D3D12_OPTIONS18.OpacityMicromapSupported",
-        "D3D12_FEATURE_D3D12_OPTIONS5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_2"
+        "D3D12_FEATURE_D3D12_OPTIONS5.RaytracingTier >= D3D12_RAYTRACING_TIER_1_2",
+        "D3D12_FEATURE_SHADER_MODEL.HighestShaderModel >= D3D_SHADER_MODEL_6_9 for inline ray queries with RAYQUERY_FLAG_ALLOW_OPACITY_MICROMAPS"
       ],
       "api_requirements": "D3D12 opacity micromap build/copy APIs; Agility SDK or equivalent",
-      "shader_targets": ["lib_6_5", "ps_6_5"],
-      "toolchain_requirements": "DXC with opacity micromap support; Agility SDK matching the API",
+      "shader_targets": ["lib_6_9", "ps_6_9"],
+      "toolchain_requirements": "DXC 1.9.2602.16 and Agility SDK 1.619 for shader-model 6.9 inline micromap traversal",
       "runtime_requirements": "Windows 11 plus required Agility SDK redistribution",
       "deployment_constraints": [
         "no relevant content in the frozen torus workload",
@@ -160,14 +160,13 @@
       "feature": "micromesh_clustered_geometry",
       "content_hypothesis": "Micromesh/clustered geometry could reduce the NW-07 torus vertex/index footprint or improve tiny-triangle rasterization, but the current torus is only 2,048 vertices and sparse; the byte/benefit hypothesis is weak.",
       "exact_feature_queries": [
-        "D3D12_FEATURE_D3D12_OPTIONS7.MeshShaderTier >= D3D12_MESH_SHADER_TIER_1",
-        "VK_EXT_mesh_shader",
-        "VK_NV_mesh_shader"
+        "D3D12_FEATURE_D3D12_OPTIONS5.RaytracingTier >= D3D12_RAYTRACING_TIER_2_0 for the D3D12 clustered geometry tier",
+        "D3D12_FEATURE_SHADER_MODEL.HighestShaderModel >= D3D_SHADER_MODEL_6_10 for the scoped preview comparison"
       ],
-      "api_requirements": "Mesh shaders plus vendor micromesh extension/SDK",
-      "shader_targets": ["ms_6_5", "amplification_6_5", "SPIR-V mesh shader"],
-      "toolchain_requirements": "Vendor SDK/toolchain for micromesh preprocessing; pinned DXC for mesh shaders",
-      "runtime_requirements": "Vendor driver support plus optional SDK runtime",
+      "api_requirements": "D3D12 clustered BLAS build and traversal via Agility SDK 1.722-preview; previously shipped vendor micromesh SDKs require separate licensing review",
+      "shader_targets": ["lib_6_10", "ps_6_10"],
+      "toolchain_requirements": "Agility SDK 1.722-preview headers and DXC 1.10.2605.2; pin any optional vendor preprocessing tool separately",
+      "runtime_requirements": "Windows 11 with Agility SDK 1.722-preview and a compatible driver",
       "deployment_constraints": [
         "vendor SDK bytes and model/preprocessed data must be counted",
         "substantial licensing review required",
@@ -193,14 +192,13 @@
       "feature": "tensor_neural_shading",
       "content_hypothesis": "Tensor/neural shading could denoise the ray-query reflection or infer material response, but it introduces model weights and vendor runtime dependencies that are disproportionate to the 256-instance torus scene.",
       "exact_feature_queries": [
-        "cooperative matrix / tensor core extension queries exposed by the selected vendor runtime",
-        "D3D12_FEATURE_D3D12_OPTIONS.../shader model support for the selected neural shader target",
-        "vendor runtime capability enumeration before any model load"
+        "D3D12_FEATURE_SHADER_MODEL.HighestShaderModel >= D3D_SHADER_MODEL_6_10",
+        "D3D12_FEATURE_LINEAR_ALGEBRA_MATRIX_OPERATION_SUPPORT: OperationType = D3D12_LINEAR_ALGEBRA_OPERATION_TYPE_THREAD_VECTOR_MATRIX_MULTIPLY; FP16 vector, matrix and result; no bias; require D3D12_LINEAR_ALGEBRA_MULTIPLICATION_SUPPORT_FLAG_SUPPORTED"
       ],
-      "api_requirements": "Vendor neural-shading SDK/runtime plus D3D12 or Vulkan cooperative-matrix support",
-      "shader_targets": ["neural shader target supplied by vendor toolkit", "cs_6_8"],
-      "toolchain_requirements": "Vendor model compiler/runtime; exact version must be pinned per experiment",
-      "runtime_requirements": "Vendor inference runtime and compatible driver",
+      "api_requirements": "D3D12 Shader Model 6.10 linear algebra preview; query the selected vector/matrix types before loading weights",
+      "shader_targets": ["cs_6_10"],
+      "toolchain_requirements": "DXC 1.10.2605.2 and Agility SDK 1.722-preview headers; separately pin any model tooling",
+      "runtime_requirements": "Agility SDK 1.722-preview runtime and compatible driver; vendor inference runtimes are separate optional dependencies",
       "deployment_constraints": [
         "model weights and runtime DLLs are optional and fully counted",
         "model weights must never enter a common or fallback artifact",
