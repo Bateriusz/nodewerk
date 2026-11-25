@@ -86,7 +86,8 @@ def _host_observation(device_id: int = 0x2805, *, hypervisor: bool = False) -> d
         "display_devices": [{"VendorID": "0x10DE", "DeviceID": f"0x{device_id:04x}",
                              "SubSysID": "0x000010DE", "DriverModel": "WDDM 3.2"}],
         "nvidia_smi_xml": f"""<nvidia_smi_log><driver_version>610.88</driver_version><gpu>
-            <uuid>GPU-example</uuid><pci><pci_device_id>0x{device_id:04x}10DE</pci_device_id>
+            <uuid>GPU-example</uuid><gpu_virtualization_mode><virtualization_mode>None</virtualization_mode></gpu_virtualization_mode>
+            <pci><pci_device_id>0x{device_id:04x}10DE</pci_device_id>
             <pci_sub_system_id>0x000010DE</pci_sub_system_id><pci_bus_id>00000000:01:00.0</pci_bus_id></pci>
             <performance_state>P0</performance_state>
             <gpu_power_readings><enforced_power_limit>165 W</enforced_power_limit></gpu_power_readings>
@@ -557,8 +558,13 @@ def test_nw11_physical_tier_and_environment_bind_host_provenance(tmp_path: Path)
     assert optional["diagnostics"][0]["code"] == "NW11-POWER-PROFILE-MISMATCH"
     observation["host_observation"] = _host_observation(hypervisor=True)
     hypervisor = capability.evaluate_observation(profile, observation)
-    assert hypervisor["physical_device_tier"] is None
-    assert hypervisor["status"] == "eligible"  # Capabilities and coverage are independent.
+    assert hypervisor["physical_device_tier"] == "desktop_ada_representative"
+    assert hypervisor["physical_provenance"]["execution_environment"]["hypervisor_present"] is True
+    assert hypervisor["physical_provenance"]["execution_environment"]["gpu_virtualization_mode"] == "None"
+    observation["host_observation"]["cim"]["system"]["Manufacturer"] = "VMware, Inc."
+    virtual_machine = capability.evaluate_observation(profile, observation)
+    assert virtual_machine["physical_device_tier"] is None
+    assert virtual_machine["status"] == "eligible"  # Capabilities and coverage are independent.
 
 
 def test_nw11_bundle_is_deterministic_and_self_contained(tmp_path: Path) -> None:
@@ -936,6 +942,15 @@ def test_nw11_runtime_floors_and_future_dxr_tier() -> None:
     observation["os_build"] = "10.0.22631"
     observation["driver_version"] = "32.0.16.1087"
     assert capability.evaluate_observation(ray, observation)["status"] == "unsupported"
+
+
+def test_nw11_host_accepts_nvidia_pci_ids_without_0x_prefix() -> None:
+    raw = _host_observation(hypervisor=True)
+    raw["nvidia_smi_xml"] = raw["nvidia_smi_xml"].replace("<pci_device_id>0x", "<pci_device_id>")
+    qualified = host.qualify(raw, {"vendor_id": 0x10DE, "device_id": 0x2805, "subsystem_id": 0x10DE})
+    assert qualified is not None
+    assert qualified["execution_environment"]["hypervisor_present"] is True
+    assert qualified["execution_environment"]["gpu_virtualization_mode"] == "None"
 
 
 def test_nw11_host_output_decoding_is_independent_of_cp1250(monkeypatch) -> None:
