@@ -20,6 +20,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
+import hardware_evidence_host as hardware_host
 import nw07_clean_system as clean_system_contract
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -362,9 +363,7 @@ def _clean_summary(
             "clean-system host exposes virtualization markers: "
             + ", ".join(sorted({str(item) for item in markers}))
         )
-    evaluation = clean_system_contract.evaluate_physical_virtualization_probe(
-        probe
-    )
+    evaluation = hardware_host.evaluate_physical_virtualization_probe(probe)
     if evaluation["virtualization_indicators"]:
         raise ValueError(
             "clean-system physical identity exposes VM markers: "
