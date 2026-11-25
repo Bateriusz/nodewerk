@@ -496,7 +496,16 @@ jobs:
       - name: Run the downloaded launcher and reject an unlisted import
         shell: pwsh
         run: |
-          $PSNativeCommandUseErrorActionPreference = $false
+          function Invoke-PwshExitCode([string[]]$Arguments) {
+            $psi = [Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = (Get-Command pwsh -ErrorAction Stop).Source
+            $psi.UseShellExecute = $false
+            foreach ($argument in $Arguments) { [void]$psi.ArgumentList.Add($argument) }
+            $process = [Diagnostics.Process]::Start($psi)
+            if ($null -eq $process) { throw "failed to launch child pwsh" }
+            $process.WaitForExit()
+            return $process.ExitCode
+          }
           $root = Join-Path $env:RUNNER_TEMP "nw11 runner with spaces"
           $bundle = Join-Path $root "validation bundle"
           $launcher = Join-Path $root "trusted CI/run-validation.ps1"
@@ -505,8 +514,8 @@ jobs:
           $arguments = @("-NoProfile", "-File", $launcher, "-BundleRoot", $bundle, "-TrustRecord", $trust,
                          "-ExpectedCommit", "${{ github.event.pull_request.head.sha || github.sha }}",
                          "-OutputDirectory", $output, "-DryRun")
-          & pwsh @arguments
-          if ($LASTEXITCODE -ne 0) { throw "downloaded validation dry-run failed with exit code $LASTEXITCODE" }
+          $code = Invoke-PwshExitCode $arguments
+          if ($code -ne 0) { throw "downloaded validation dry-run failed with exit code $code" }
           $summaries = @(Get-ChildItem -LiteralPath $output -Recurse -Filter "summary.json")
           if ($summaries.Count -ne 1) { throw "dry run must emit exactly one summary" }
           $summary = Get-Content -LiteralPath $summaries[0].FullName -Raw | ConvertFrom-Json
@@ -514,8 +523,8 @@ jobs:
           $unexpected = Join-Path $bundle "tools/nw11/nw11_evidence.pyc"
           try {
             Set-Content -LiteralPath $unexpected -Value "unexpected bytecode"
-            & pwsh @arguments
-            if ($LASTEXITCODE -ne 6) { throw "launcher did not reject the unlisted Python import" }
+            $code = Invoke-PwshExitCode $arguments
+            if ($code -ne 6) { throw "launcher did not reject the unlisted Python import; exit code $code" }
           } finally {
             Remove-Item -LiteralPath $unexpected -Force
           }
@@ -561,9 +570,14 @@ jobs:
             "-DeviceTier", "${{ matrix.device_tier }}",
             "-OutputDirectory", $evidenceDirectory
           )
-          $PSNativeCommandUseErrorActionPreference = $false
-          & pwsh @arguments
-          $code = $LASTEXITCODE
+          $psi = [Diagnostics.ProcessStartInfo]::new()
+          $psi.FileName = (Get-Command pwsh -ErrorAction Stop).Source
+          $psi.UseShellExecute = $false
+          foreach ($argument in $arguments) { [void]$psi.ArgumentList.Add($argument) }
+          $process = [Diagnostics.Process]::Start($psi)
+          if ($null -eq $process) { throw "failed to launch validation child pwsh" }
+          $process.WaitForExit()
+          $code = $process.ExitCode
           if ($code -eq 0) { exit 0 }
           if ($code -eq 3) {
             $files = @(Get-ChildItem -LiteralPath $evidenceDirectory -Recurse -File -Filter "summary.json")
