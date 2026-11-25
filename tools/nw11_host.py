@@ -107,10 +107,44 @@ def _system() -> Path:
     return Path(os.environ["SystemRoot"]) / "System32"
 
 
+def _windows_code_pages() -> tuple[str, ...]:
+    """Return explicit Windows console/ANSI encodings without consulting Python locale."""
+    if os.name != "nt":
+        return ()
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    pages = []
+    for getter_name in ("GetOEMCP", "GetACP"):
+        getter = getattr(kernel32, getter_name)
+        getter.argtypes = []
+        getter.restype = ctypes.c_uint
+        page = int(getter())
+        if page > 0:
+            encoding = f"cp{page}"
+            if encoding not in pages:
+                pages.append(encoding)
+    return tuple(pages)
+
+
+def _decode_process_output(payload: bytes) -> str:
+    """Decode trusted Windows tool output deterministically and fail closed."""
+    if payload.startswith((b"\\xff\\xfe", b"\\xfe\\xff")):
+        return payload.decode("utf-16")
+    if payload.startswith(b"\\xef\\xbb\\xbf"):
+        return payload.decode("utf-8-sig")
+    errors = []
+    for encoding in ("utf-8", *_windows_code_pages()):
+        try:
+            return payload.decode(encoding)
+        except (UnicodeDecodeError, LookupError) as exc:
+            errors.append(f"{encoding}: {exc}")
+    raise UnicodeError("unable to decode subprocess output; " + "; ".join(errors))
+
+
 def _run(exe: Path, *args: str, timeout: int = 10) -> str:
-    return subprocess.run([str(exe), *args], capture_output=True, text=True,
-                          timeout=timeout, check=True,
-                          creationflags=subprocess.CREATE_NO_WINDOW).stdout
+    completed = subprocess.run([str(exe), *args], capture_output=True,
+                               timeout=timeout, check=True,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
+    return _decode_process_output(completed.stdout)
 
 
 def observe_operating(executables: Path) -> dict[str, Any]:
