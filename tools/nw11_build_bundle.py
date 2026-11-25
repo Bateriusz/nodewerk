@@ -42,6 +42,7 @@ TOOL_FILES = (
     "nw11_production_binding.py",
     "nw11_pe_dependencies.py",
     "nw11_measurements.py",
+    "hardware_evidence_host.py",
     "nw11_host.py",
     "nw11_cold_start.py",
     "nw07_presentmon_collector.py",
