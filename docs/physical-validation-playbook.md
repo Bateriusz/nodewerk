@@ -134,6 +134,16 @@ a physical windowed Present requirement. PresentMon collection must be tied to
 the intended executable/process and must retain enough raw timing evidence to
 validate warm-up, duration, sample density and first-present semantics.
 
+Separate fixed-resolution GPU resource readback from presentation geometry.
+An ordinary maximized window can still lose pixels to window chrome and the
+work area. When a proof specifically requires the full composed native client
+of a stripped release, use the shared explicit borderless mode before rendering;
+a Full HD primary monitor suffices for a 1920×1080 proof. Diagnose the display
+stage independently and perform it before expensive warm measurement loops,
+after required first-use startup evidence has been collected. Do not lower the
+image tolerance or resize captured pixels to compensate for missing native
+presentation evidence.
+
 Do not infer physical performance from another GPU generation or normalize by
 theoretical throughput unless a separately versioned contract explicitly
 defines and validates that method.
