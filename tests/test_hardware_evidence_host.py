@@ -90,3 +90,22 @@ def test_nw11_device_tiers_are_projected_from_shared_gpu_registry() -> None:
     assert devices.physical_device_tier(0x10DE, 0x2803) == "desktop_ada_representative"
     assert devices.physical_device_tier(0x10DE, 0x2805) is None
     assert devices.physical_device_tier(0x10DE, 0x2C05) == "desktop_blackwell_representative"
+
+
+def test_cold_start_audit_uses_shared_unicode_subprocess_boundary(monkeypatch) -> None:
+    import subprocess
+    import validation_cold_start as cold_start
+
+    path = r"C:\Walidacja\zażółć gęślą\common_baseline.exe"
+    audit = {"launches": [{"path": path}]}
+    payload = json.dumps(audit, ensure_ascii=False).encode("utf-8")
+    monkeypatch.setenv("SystemRoot", r"C:\Windows")
+    monkeypatch.setattr(cold_start, "_audit_flags", lambda system: 1)
+
+    def fake_run(command, **kwargs):
+        assert "text" not in kwargs and "encoding" not in kwargs
+        assert "UTF8Encoding" in command[-1]
+        return subprocess.CompletedProcess(command, 0, payload, b"")
+
+    monkeypatch.setattr(host.subprocess, "run", fake_run)
+    assert cold_start.observe() == {**audit, "process_creation_audit_flags": 1}
