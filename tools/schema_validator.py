@@ -1069,6 +1069,8 @@ ARTIFACT_SCHEMA_MAPPINGS: list[tuple[str, str]] = [
     ("benchmarks/nw11/profiles/optional-ray-query.v1.json", "schemas/nw11-capability-profile.schema.json"),
     ("benchmarks/nw11/experiments/mesh-shader-vs-indexed.v1.json", "schemas/nw11-experiment.schema.json"),
     ("benchmarks/nw11/experiments/ray-query-vs-analytic.v1.json", "schemas/nw11-experiment.schema.json"),
+    ("benchmarks/nw11/experiments/mesh-shader-vs-indexed.v2.json", "schemas/nw11-experiment.schema.json"),
+    ("benchmarks/nw11/experiments/ray-query-vs-analytic.v2.json", "schemas/nw11-experiment.schema.json"),
     ("benchmarks/nw11/follow-up-matrix.v1.json", "schemas/nw11-follow-up-matrix.schema.json"),
     ("benchmarks/nw11/evidence-status.v1.json", "schemas/nw11-evidence-status.schema.json"),
     ("benchmarks/nw11/decisions/mesh-shader.v1.json", "schemas/nw11-decision.schema.json"),
