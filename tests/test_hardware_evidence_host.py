@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
+import hardware_evidence_devices as devices  # noqa: E402
 import hardware_evidence_host as host  # noqa: E402
+import nw11_contract  # noqa: E402
 
 
 def _probe(*, hypervisor: bool = False, vbs: int = 0) -> dict:
@@ -67,3 +70,23 @@ def test_pci_hex_accepts_nvidia_smi_and_dxdiag_formats() -> None:
 def test_windows_output_decode_uses_oem_before_ansi_when_utf8_fails(monkeypatch) -> None:
     monkeypatch.setattr(host, "_windows_code_pages", lambda: ("cp852", "cp1250"))
     assert host.decode_windows_output(bytes([0x98])) == "ś"
+
+
+def test_physical_gpu_registry_matches_verified_nw01_baselines() -> None:
+    for tier, identity in devices.PHYSICAL_DEVICE_TIERS.items():
+        path = REPO_ROOT / identity["verified_baseline"]
+        record = json.loads(path.read_text(encoding="utf-8"))
+        assert record["verification_status"] == "verified", tier
+        assert record["benchmark_passed"] is True, tier
+        metadata = record["environment_metadata"]
+        assert int(metadata["gpu_vendor_id"], 0) == identity["vendor_id"], tier
+        assert int(metadata["gpu_device_id"], 0) == identity["device_id"], tier
+        assert metadata["gpu_model"] == identity["representative_model"], tier
+        assert devices.device_key(identity["vendor_id"], identity["device_id"]) == identity["device_key"]
+
+
+def test_nw11_device_tiers_are_projected_from_shared_gpu_registry() -> None:
+    assert nw11_contract.DEVICE_TIERS == devices.nw11_device_tiers()
+    assert devices.physical_device_tier(0x10DE, 0x2803) == "desktop_ada_representative"
+    assert devices.physical_device_tier(0x10DE, 0x2805) is None
+    assert devices.physical_device_tier(0x10DE, 0x2C05) == "desktop_blackwell_representative"
