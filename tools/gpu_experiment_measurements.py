@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import re
 from pathlib import Path
 import runpy
 from typing import Any
@@ -51,9 +52,10 @@ def evaluate_profiles(root: Path, manifest: dict, observation: dict,
 
 
 def validate_release_adapter(observation: dict) -> None:
-    if (not observation["adapter"].get("adapter_luid")
-            or observation.get("release_default_adapter_luid") != observation["adapter"]["adapter_luid"]):
-        raise evidence.EvidenceError("The canonical release would select a different adapter")
+    # The canonical release and every experiment explicitly select this LUID.
+    # The adapter that would be selected without an override is metadata only.
+    if not re.fullmatch(r"[0-9a-fA-F]{8}:[0-9a-fA-F]{8}", str(observation["adapter"].get("adapter_luid") or "")):
+        raise evidence.EvidenceError("The selected adapter LUID is missing or malformed")
 
 
 def role_paths(manifest: dict, optional: dict) -> dict[str, str]:
@@ -357,7 +359,7 @@ def _canonical_capture(root: Path, directory: Path, manifest: dict, common: dict
         for key, value in {
             "tick": tick, "player_exit_code": 0, "capture_exit_code": 0,
             "commit": manifest["commit"], "bundle_id": manifest["bundle_id"],
-            "executable_sha256": release_sha,
+            "executable_sha256": release_sha, "adapter_luid": common["adapter"]["adapter_luid"],
         }.items():
             _equal(execution.get(key), value, f"canonical capture {key}")
         command = execution["command"]
@@ -384,7 +386,12 @@ def _canonical_capture(root: Path, directory: Path, manifest: dict, common: dict
             raise evidence.EvidenceError("Canonical scene was not observed on the desktop within the startup ceiling")
         log = release / f"{tick}.log"
         _equal(contract.sha256_file(log), execution["player_log_sha256"], "canonical release process log")
-        if f"NW05_EXPLICIT_TICK={tick}" not in log.read_text(encoding="utf-8").splitlines():
+        log_lines = log.read_text(encoding="utf-8").splitlines()
+        selected = [line.partition("=")[2].upper() for line in log_lines
+                    if line.startswith("NODEWERK_SELECTED_ADAPTER_LUID=")]
+        if selected != [common["adapter"]["adapter_luid"].upper()]:
+            raise evidence.EvidenceError("Canonical release did not select the measured adapter")
+        if f"NW05_EXPLICIT_TICK={tick}" not in log_lines:
             raise evidence.EvidenceError(f"Canonical executable did not report the requested tick {tick}")
         launch_ids.add(identity)
     result = compare(baseline_manifest=_capture(reference_folder, reference),
