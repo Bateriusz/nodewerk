@@ -50,7 +50,10 @@
         "tools/build_attestation.py",
         "tools/validation_*.py",
         "tools/hardware_evidence_*.py",
-        "tools/presentation_metrics.py"
+        "tools/presentation_metrics.py",
+        "tools/audio_*.py",
+        "tests/test_nw12_*.py",
+        "tests/audio_contract.cpp"
       ],
       "propagates_to": [
         "nw01",

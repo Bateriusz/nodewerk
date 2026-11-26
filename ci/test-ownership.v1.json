@@ -118,6 +118,14 @@
       ],
       "broad_gate": "ci.yml:schema-and-contract-checks",
       "platform_gate": "nw11-advanced-gpu.yml:contract-and-capability-checks"
+    },
+    {
+      "name": "nw12",
+      "patterns": [
+        "tests/test_nw12_*.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "ci.yml:schema-and-contract-checks"
     }
   ]
 }

@@ -1,0 +1,78 @@
+import csv
+import json
+import os
+from pathlib import Path
+import shutil
+import struct
+import subprocess
+import sys
+import wave
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+from audio_song import compile_song
+
+def fixture():
+    return json.loads((ROOT / "fixtures/audio/sync_song.json").read_text(encoding="utf-8"))
+
+def test_song_encoding_is_canonical_and_bounded():
+    model = fixture()
+    data = compile_song(model)
+    assert data == compile_song(model)
+    assert struct.unpack_from("<4sIQI", data) == (b"NWAS", 1, 192000, 4)
+    assert len(data) == 20 + 20 * 4
+    for field, value in (("duration_ticks", 0), ("version", True), ("events", [])):
+        with pytest.raises(ValueError):
+            compile_song({**model, field: value})
+    for field, value in (("tick", -1), ("duration", 0), ("gain", 32768),
+                         ("frequency_millihz", 20000001)):
+        changed = fixture()
+        changed["events"][0][field] = value
+        with pytest.raises(ValueError):
+            compile_song(changed)
+
+@pytest.fixture(scope="module")
+def native_tools(tmp_path_factory):
+    if os.name == "nt":
+        pytest.skip("portable native test is executed on hosted Linux; use NW_BUILD_AUDIO on Windows")
+    compiler = shutil.which("c++")
+    assert compiler, "native audio contract requires a C++ compiler"
+    out = tmp_path_factory.mktemp("native-audio")
+    for source, name in (("tests/audio_contract.cpp", "contract"),
+                         ("fixtures/audio/offline.cpp", "offline")):
+        subprocess.run([compiler, "-std=c++20", "-Wall", "-Wextra", "-Werror",
+                        "-fno-exceptions", "-fno-rtti", "-O2", "-I", str(ROOT / "src"),
+                        str(ROOT / "src/audio/procedural_audio.cpp"), str(ROOT / source),
+                        "-o", str(out / name)], check=True)
+    return out
+
+def test_native_audio_contract(native_tools):
+    subprocess.run([str(native_tools / "contract")], check=True)
+
+def test_offline_pcm_and_frame_plan_are_reproducible(native_tools, tmp_path):
+    song = tmp_path / "song.nwas"
+    song.write_bytes(compile_song(fixture()))
+    results = []
+    for i in range(2):
+        wav = tmp_path / f"song{i}.wav"
+        plan = tmp_path / f"plan{i}.csv"
+        subprocess.run([str(native_tools / "offline"), str(song), str(wav), str(plan)],
+                       check=True)
+        results.append((wav.read_bytes(), plan.read_bytes()))
+        with wave.open(str(wav), "rb") as stream:
+            assert (stream.getnchannels(), stream.getsampwidth(), stream.getframerate(),
+                    stream.getnframes()) == (1, 2, 48000, 192000)
+            pcm = struct.unpack("<192000h", stream.readframes(192000))
+        assert pcm[47999] == 0 and pcm[48000] != 0
+        assert pcm[50400] == 0
+        rows = list(csv.DictReader(plan.read_text().splitlines()))
+        assert len(rows) == 240
+        assert rows[60] == {"frame": "60", "tick": "48000", "sample": "48000"}
+    assert results[0] == results[1]
+    for broken in (b"", song.read_bytes() + b"\x00", song.read_bytes()[:-1]):
+        song.write_bytes(broken) if broken else song.write_bytes(b"")
+        result = subprocess.run([str(native_tools / "offline"), str(song),
+                                 str(tmp_path / "bad.wav"), str(tmp_path / "bad.csv")])
+        assert result.returncode != 0
