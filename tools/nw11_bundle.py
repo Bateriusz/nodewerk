@@ -292,8 +292,11 @@ def _accounting(
     )
     within_complete = complete <= complete_ceiling
     within_incremental = incremental <= incremental_ceiling
+    policy = artifact_budget.get("distribution_size_policy")
+    if policy not in {"gated", "report_only"}:
+        raise BundleError("unknown distribution size policy")
     return {
-        "distribution_size_policy": "gated",
+        "distribution_size_policy": policy,
         "common_distribution_bytes": common,
         "baseline_distribution_bytes": baseline_distribution,
         "fallback_distribution_bytes": fallback_distribution,
@@ -311,6 +314,7 @@ def _accounting(
         "within_complete_ceiling": within_complete,
         "within_incremental_budget": within_incremental,
         "adoption_budget_status": (
+            "report_only" if policy == "report_only" else
             "accepted" if within_complete and within_incremental else "rejected"
         ),
     }
@@ -868,8 +872,8 @@ def verify_bundle(
     experiment_budget = _mapping(
         experiment_document.get("artifact_budget"), "experiment.artifact_budget"
     )
-    if recorded_budget.get("distribution_size_policy") != "gated":
-        raise BundleError("bundle accounting distribution policy is not gated")
+    if recorded_budget.get("distribution_size_policy") != experiment_budget.get("distribution_size_policy"):
+        raise BundleError("bundle accounting distribution policy does not match experiment")
     for key in (
         "complete_distribution_bytes_ceiling",
         "incremental_distribution_bytes_ceiling",
@@ -905,7 +909,9 @@ def verify_bundle(
         dependency_ledger=list(manifest.get("dependency_ledger") or []),
     )
     expected_adoption = (
-        "accepted"
+        "report_only"
+        if accounting["distribution_size_policy"] == "report_only"
+        else "accepted"
         if accounting["within_complete_ceiling"]
         and accounting["within_incremental_budget"]
         else "rejected"

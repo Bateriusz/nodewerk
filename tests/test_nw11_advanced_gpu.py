@@ -416,7 +416,7 @@ def test_nw11_experiments_freeze_the_nw07_workload_and_success_criterion(
         else contract.RAY_FALLBACK_ARTIFACT_ID
     )
     assert (
-        document["artifact_budget"]["distribution_size_policy"] == "gated"
+        document["artifact_budget"]["distribution_size_policy"] == "report_only"
     )
     assert document["artifact_budget"]["complete_distribution_bytes_ceiling"] <= 262144
     assert (
@@ -615,7 +615,7 @@ def test_nw11_bundle_is_deterministic_and_self_contained(tmp_path: Path) -> None
     ):
         assert required in paths
     assert first_manifest["verification"]["operator_supplied_values_allowed"] is False
-    assert first_manifest["accounting"]["distribution_size_policy"] == "gated"
+    assert first_manifest["accounting"]["distribution_size_policy"] == "report_only"
     fallback = next(
         artifact
         for artifact in first_manifest["artifacts"]
@@ -1580,7 +1580,7 @@ def test_nw11_experiment_runtime_validator_enforces_frozen_guardrails() -> None:
         experiment.validate_experiment(weakened)
 
     weakened = copy.deepcopy(document)
-    weakened["artifact_budget"]["distribution_size_policy"] = "report_only"
+    weakened["artifact_budget"]["distribution_size_policy"] = "gated"
     with pytest.raises(experiment.ExperimentError):
         experiment.validate_experiment(weakened)
 
@@ -1677,7 +1677,7 @@ def test_nw11_failed_run_cannot_be_hidden_in_aggregate() -> None:
         device_key="pci:10de:2803", environment_key="host",
     )
     assert result["status"] == "rejected"
-    assert "NW11-NW07-REFERENCE-GATE" in {reason["code"] for reason in result["reasons"]}
+    assert "NW11-PRIMARY-NOT-MET" in {reason["code"] for reason in result["reasons"]}
 
 
 def test_nw11_capture_comparator_computes_metrics_from_pixels(
@@ -1893,7 +1893,7 @@ def test_experimental_player_compiles_the_common_source_directly() -> None:
     assert "defined(NW11_PRODUCTION_EXPERIMENT)" in production
 
 
-def test_nw11_distribution_budget_is_gated(tmp_path: Path) -> None:
+def test_distribution_size_is_report_only_for_active_experiments(tmp_path: Path) -> None:
     files = _source_artifacts(tmp_path)
     complete = tmp_path / "complete-oversize"
     files["variant.exe"].write_bytes(b"MZ" + b"x" * 300_000)
@@ -1909,13 +1909,13 @@ def test_nw11_distribution_budget_is_gated(tmp_path: Path) -> None:
     )
     assert complete_manifest["accounting"]["within_complete_ceiling"] is False
     assert (
-        complete_manifest["accounting"]["adoption_budget_status"] == "rejected"
+        complete_manifest["accounting"]["adoption_budget_status"] == "report_only"
     )
     assert (
         bundle.verify_bundle(complete, expected_commit=COMMIT, fixture_only=True)["accounting"][
             "adoption_budget_status"
         ]
-        == "rejected"
+        == "report_only"
     )
 
     files["variant.exe"].write_bytes(b"MZ" + b"x" * 40_000)
@@ -1932,7 +1932,7 @@ def test_nw11_distribution_budget_is_gated(tmp_path: Path) -> None:
     )
     assert incremental_manifest["accounting"]["within_incremental_budget"] is False
     assert (
-        incremental_manifest["accounting"]["adoption_budget_status"] == "rejected"
+        incremental_manifest["accounting"]["adoption_budget_status"] == "report_only"
     )
 
     result = experiment.evaluate_experiment(
@@ -1946,8 +1946,7 @@ def test_nw11_distribution_budget_is_gated(tmp_path: Path) -> None:
         device_key="device",
         environment_key="environment",
     )
-    assert result["status"] == "rejected"
-    assert "NW11-INCREMENTAL-BUDGET" in {
+    assert "NW11-INCREMENTAL-BUDGET" not in {
         reason["code"] for reason in result["reasons"]
     }
 

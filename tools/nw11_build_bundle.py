@@ -468,7 +468,7 @@ def build(
         "msvc": profile["toolchain"]["msvc"],
         "windows_sdk_minimum": profile["toolchain"]["windows_sdk_minimum"],
         "commit": commit,
-        "evidence_contract": contract.PERF_CONTRACT_ID,
+        "evidence_contract": document["protocol"]["perf_contract"],
     }
     if measured_toolchain_document is not None:
         toolchain["measured"] = measured_toolchain_document
@@ -476,7 +476,7 @@ def build(
         query["query_id"] for query in profile["queried_capabilities"]
     ] + list(profile["shader_targets"])
     budget = {
-        "distribution_size_policy": "gated",
+        "distribution_size_policy": document["artifact_budget"]["distribution_size_policy"],
         "complete_distribution_bytes_ceiling": int(
             document["artifact_budget"]["complete_distribution_bytes_ceiling"]
         ),

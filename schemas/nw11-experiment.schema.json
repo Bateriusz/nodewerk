@@ -29,7 +29,7 @@
   ],
   "properties": {
     "format": { "const": "nw11-experiment" },
-    "version": { "const": 1 },
+    "version": { "enum": [1, 2] },
     "task": { "const": "NW-11" },
     "implementation_base": { "const": "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b" },
     "experiment_id": {
@@ -39,7 +39,8 @@
       ]
     },
     "kind": { "enum": ["mesh_shading", "ray_query_reflection"] },
-    "status": { "const": "frozen" },
+    "status": { "enum": ["frozen", "active"] },
+    "validation_policy": { "type": "object" },
     "baseline_profile_id": { "const": "nw.common.d3d12.fl12_0.sm6_0.v1" },
     "variant_profile_id": {
       "enum": [
@@ -183,7 +184,7 @@
         "independent_per_device"
       ],
       "properties": {
-        "perf_contract": { "const": "nw07_perf_ref_v1" },
+        "perf_contract": { "enum": ["nw07_perf_ref_v1", "matched-gpu-comparison.v2"] },
         "perf_protocol": { "const": "nw07-perf-run.v1" },
         "warmup_seconds": { "const": 5 },
         "runs": { "const": 3 },
@@ -277,7 +278,7 @@
         "optional_dependency_bytes_policy"
       ],
       "properties": {
-        "distribution_size_policy": { "const": "gated" },
+        "distribution_size_policy": { "enum": ["gated", "report_only"] },
         "complete_distribution_bytes_ceiling": { "type": "integer", "maximum": 262144 },
         "incremental_distribution_bytes_ceiling": { "type": "integer", "maximum": 65536 },
         "shader_count_increment_ceiling": { "type": "integer", "maximum": 2 },

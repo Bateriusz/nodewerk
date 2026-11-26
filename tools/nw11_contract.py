@@ -313,8 +313,8 @@ PROFILE_PATH_BY_ID = {
 }
 
 EXPERIMENT_PATH_BY_ID = {
-    EXPERIMENT_MESH_ID: "benchmarks/nw11/experiments/mesh-shader-vs-indexed.v1.json",
-    EXPERIMENT_RAY_ID: "benchmarks/nw11/experiments/ray-query-vs-analytic.v1.json",
+    EXPERIMENT_MESH_ID: "benchmarks/nw11/experiments/mesh-shader-vs-indexed.v2.json",
+    EXPERIMENT_RAY_ID: "benchmarks/nw11/experiments/ray-query-vs-analytic.v2.json",
 }
 
 FOLLOWUP_MATRIX_PATH = "benchmarks/nw11/follow-up-matrix.v1.json"

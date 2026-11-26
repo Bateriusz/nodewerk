@@ -60,7 +60,12 @@ from nw11_contract import (  # type: ignore[import-not-found]
 )
 
 EXPERIMENT_FORMAT = "nw11-experiment"
-EXPERIMENT_VERSION = 1
+EXPERIMENT_VERSION = 2
+VALIDATION_POLICY_V2 = {
+    "ci": {"command_path": "headless_warp", "requires_present": False},
+    "physical": {"requires_real_gpu": True, "requires_real_present": True, "requires_cold_start": True},
+    "performance": "matched_relative",
+}
 
 EXPERIMENT_KINDS = {
     EXPERIMENT_MESH_ID: "mesh_shading",
@@ -163,6 +168,8 @@ def _validate_workload(document: Mapping[str, Any]) -> None:
 def _validate_protocol(document: Mapping[str, Any]) -> dict[str, Any]:
     protocol = _mapping(document.get("protocol"), "protocol")
     expected = frozen_protocol()
+    if document.get("version") == 2:
+        expected["perf_contract"] = "matched-gpu-comparison.v2"
     for key in (
         "perf_contract",
         "perf_protocol",
@@ -234,8 +241,9 @@ def _validate_criteria(document: Mapping[str, Any], kind: str) -> None:
         raise ExperimentError("experiment weakened the preserved CPU-submit gate")
 
     budget = _mapping(document.get("artifact_budget"), "artifact_budget")
-    if budget.get("distribution_size_policy") != "gated":
-        raise ExperimentError("distribution size must be a gated acceptance criterion")
+    expected_policy = "report_only" if document.get("version") == 2 else "gated"
+    if budget.get("distribution_size_policy") != expected_policy:
+        raise ExperimentError("distribution size policy does not match the experiment version")
     for key in (
         "complete_distribution_bytes_ceiling",
         "incremental_distribution_bytes_ceiling",
@@ -420,8 +428,8 @@ def validate_experiment(
     document = _mapping(record, "experiment")
     if document.get("format") != EXPERIMENT_FORMAT:
         raise ExperimentError("experiment format is not nw11-experiment")
-    if document.get("version") != EXPERIMENT_VERSION:
-        raise ExperimentError("experiment version is not 1")
+    if type(document.get("version")) is not int or document["version"] not in (1, EXPERIMENT_VERSION):
+        raise ExperimentError("unsupported experiment definition version")
     if document.get("task") != TASK:
         raise ExperimentError("experiment task is not NW-11")
     if document.get("implementation_base") != IMPLEMENTATION_BASE:
@@ -431,10 +439,11 @@ def validate_experiment(
         raise ExperimentError(f"unknown experiment id '{experiment_id}'")
     if document.get("kind") != EXPERIMENT_KINDS[experiment_id]:
         raise ExperimentError("experiment kind does not match its identifier")
-    if document.get("status") != "frozen":
-        raise ExperimentError(
-            "experiments must freeze their definition before measurement"
-        )
+    if document.get("version") == 2:
+        if document.get("status") != "active" or document.get("validation_policy") != VALIDATION_POLICY_V2:
+            raise ExperimentError("active experiment requires its explicit CI and physical validation policy")
+    elif document.get("status") != "frozen" or "validation_policy" in document:
+        raise ExperimentError("invalid historical v1 experiment definition")
     if document.get("baseline_profile_id") != COMMON_PROFILE_ID:
         raise ExperimentError("the baseline must use the common profile")
     expected_variant = (
@@ -579,7 +588,10 @@ def summarize_process_runs(arm: Mapping[str, Any], label: str, protocol: Mapping
             for index, run in enumerate(processes, 1)]
 
 
-def reference_gate_failures(device_key: str, runs: list[dict[str, Any]]) -> list[str]:
+def reference_gate_failures(device_key: str, runs: list[dict[str, Any]], experiment: Mapping[str, Any] | None = None) -> list[str]:
+    # The legacy absolute Ada reference gate is not inherited by a relative experiment.
+    if experiment is not None and experiment.get("version") == 2:
+        return []
     # NW-07 specifies an absolute Ada reference gate and a separate Blackwell
     # development series. Qualification of the exact NW-07 host is independent.
     if device_key != DEVICE_TIERS["desktop_ada_representative"]["device_key"]:
@@ -643,7 +655,7 @@ def evaluate_experiment(
         reasons.append({"code": code, "message": message})
 
     for label, arm_runs in (("baseline", baseline_runs), ("variant", variant_runs)):
-        for failure in reference_gate_failures(device_key, arm_runs):
+        for failure in reference_gate_failures(device_key, arm_runs, document):
             reject("NW11-NW07-REFERENCE-GATE", f"{label} {failure}")
     for index, (left, right, improvement) in enumerate(zip(baseline_runs, variant_runs, reductions), 1):
         if improvement < float(primary["relative_reduction_percent_min"]):
@@ -658,7 +670,8 @@ def evaluate_experiment(
             reject("NW11-CPU-SUBMIT-GATE", f"run {index} p99 CPU submission exceeded the experiment ceiling")
         if right["cpu_submit"]["p99"] > left["cpu_submit"]["p99"]:
             reject("NW11-CPU-REGRESSION", f"run {index} p99 CPU submission regressed")
-    if max(baseline["distribution_bytes"], variant["distribution_bytes"]) > int(
+    size_gated = document["artifact_budget"]["distribution_size_policy"] == "gated"
+    if size_gated and max(baseline["distribution_bytes"], variant["distribution_bytes"]) > int(
         document["artifact_budget"]["complete_distribution_bytes_ceiling"]
     ):
         reject(
@@ -666,7 +679,7 @@ def evaluate_experiment(
             "baseline or variant complete distribution exceeds the frozen ceiling",
         )
     incremental_bytes = variant["distribution_bytes"] - baseline["distribution_bytes"]
-    if incremental_bytes > int(
+    if size_gated and incremental_bytes > int(
         document["artifact_budget"]["incremental_distribution_bytes_ceiling"]
     ):
         reject(
@@ -742,6 +755,7 @@ def evaluate_experiment(
         "aggregate": {
             "baseline": {**baseline, "process_runs": baseline_runs},
             "variant": {**variant, "process_runs": variant_runs},
+            "distribution_size_policy": document["artifact_budget"]["distribution_size_policy"],
             "incremental_distribution_bytes": incremental_bytes,
             "incremental_shader_count": shader_increment,
             "baseline_distribution_bytes": baseline["distribution_bytes"],

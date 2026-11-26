@@ -528,7 +528,7 @@ def _decide_group(
             raise EvidenceError("Common baseline and fallback did not both execute successfully")
     fallback_measurement = fallback["measurement"]
     fallback_runs = summarize_process_runs(fallback_measurement, "fallback", experiment["protocol"])
-    fallback_failures = reference_gate_failures(device_key, fallback_runs)
+    fallback_failures = reference_gate_failures(device_key, fallback_runs, experiment)
     optional_status = str(optional_eligibility.get("status"))
     if optional_status in {"unsupported", "pending"}:
         return {
@@ -661,7 +661,7 @@ def build_decision_document(
         bundle_adoption_status = str(
             bundle_accounting.get("adoption_budget_status") or ""
         )
-        if bundle_adoption_status not in {"accepted", "rejected"}:
+        if bundle_adoption_status not in {"accepted", "rejected", "report_only"}:
             raise EvidenceError(
                 "the verified bundle does not expose a valid adoption budget status"
             )
@@ -834,7 +834,7 @@ def validate_decision_document(document: Mapping[str, Any]) -> dict[str, Any]:
         raise EvidenceError("aggregate decision status is not a known NW-11 status")
     bundle_adoption = record.get("bundle_adoption_budget_status")
     if bundle_adoption is not None:
-        if bundle_adoption not in {"accepted", "rejected"}:
+        if bundle_adoption not in {"accepted", "rejected", "report_only"}:
             raise EvidenceError("bundle adoption budget status is not valid")
         if bundle_adoption == "rejected" and any(
             item.get("status") == "accepted" for item in devices

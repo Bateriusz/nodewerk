@@ -76,7 +76,7 @@
     },
     "fallback_tested": { "type": "boolean" },
     "bundle_adoption_budget_status": {
-      "enum": ["accepted", "rejected"]
+      "enum": ["accepted", "rejected", "report_only"]
     },
     "cross_device_equivalence": { "type": "object" },
     "satisfies_completion": { "type": "boolean" },

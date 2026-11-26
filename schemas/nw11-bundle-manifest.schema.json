@@ -155,10 +155,10 @@
         "adoption_budget_status"
       ],
       "properties": {
-        "distribution_size_policy": { "const": "gated" },
+        "distribution_size_policy": { "enum": ["gated", "report_only"] },
         "within_complete_ceiling": { "type": "boolean" },
         "within_incremental_budget": { "type": "boolean" },
-        "adoption_budget_status": { "enum": ["accepted", "rejected"] }
+        "adoption_budget_status": { "enum": ["accepted", "rejected", "report_only"] }
       }
     },
     "verification": {
