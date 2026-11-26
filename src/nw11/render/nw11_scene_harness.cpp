@@ -34,7 +34,44 @@ using nw::player::ExitCode;
 using Clock = std::chrono::steady_clock;
 constexpr int kExitOk = 0;
 constexpr int kExitUnsupported = 3;
-constexpr int kExitInitializationFailed = 4;
+
+enum class HarnessExitCode : int {
+    InvalidMeasurementContract = 80,
+    ArtifactIdentityUnavailable = 81,
+    EvidenceIoFailure = 82,
+    PresentationSourceGeometryMismatch = 83,
+    PresentationClientGeometryMismatch = 84,
+    PresentationWindowClosed = 85,
+    MeasurementUnavailable = 86,
+    CaptureValidationFailed = 87,
+    UnhandledFailure = 89,
+};
+
+class RendererFailure final : public std::runtime_error {
+public:
+    RendererFailure(int exit_code, std::string code, std::string message)
+        : std::runtime_error(std::move(message)),
+          exit_code_(exit_code),
+          code_(std::move(code)) {}
+
+    int exit_code() const noexcept { return exit_code_; }
+    const std::string& code() const noexcept { return code_; }
+
+private:
+    int exit_code_;
+    std::string code_;
+};
+
+[[noreturn]] void FailHarness(HarnessExitCode code, const char* name,
+                              const std::string& message) {
+    throw RendererFailure(static_cast<int>(code), name, message);
+}
+
+[[noreturn]] void FailPlayer(ExitCode status, const char* stage) {
+    throw RendererFailure(
+        static_cast<int>(status), ExitCodeName(status),
+        std::string(stage) + " failed with PackagePlayer " + ExitCodeName(status));
+}
 const std::array<std::uint32_t, 6>& contract_reference_ticks() {
     static const std::array<std::uint32_t, 6> ticks = {0u, 240000u, 480000u, 720000u, 959999u, 960000u};
     return ticks;
