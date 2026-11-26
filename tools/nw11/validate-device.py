@@ -163,7 +163,7 @@ def launch_renderer(root: Path, manifest: dict, settings: dict, decision: dict,
     return launch
 
 
-def capture_release(root: Path, manifest: dict, output: Path) -> None:
+def capture_release(root: Path, manifest: dict, output: Path, adapter_luid: str) -> None:
     relative = "bin/canonical_release.exe"
     release = checked_path(root, manifest, relative)
     probe = checked_path(root, manifest, "bin/nw11_capability_probe.exe")
@@ -178,7 +178,8 @@ def capture_release(root: Path, manifest: dict, output: Path) -> None:
         with (output / f"{tick}.log").open("wb") as log, capture_path.open("wb") as capture_log:
             start = filetime()
             started_qpc = qpc_ms()
-            with subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT) as player:
+            with subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
+                                  env={**os.environ, "NODEWERK_ADAPTER_LUID": adapter_luid}) as player:
                 try:
                     capture = subprocess.run(
                         [str(probe), "--capture-release-pid", str(player.pid), str(path), str(reference),
@@ -193,6 +194,7 @@ def capture_release(root: Path, manifest: dict, output: Path) -> None:
             "commit": manifest["commit"], "bundle_id": manifest["bundle_id"],
             "executable_sha256": contract.sha256_file(release),
             "process_id": player.pid, "tick": tick, "command": command,
+            "adapter_luid": adapter_luid,
             "start_filetime": start, "end_filetime": filetime(),
             "player_exit_code": exit_code, "capture_exit_code": capture.returncode,
             "player_log_sha256": contract.sha256_file(output / f"{tick}.log"),
@@ -217,7 +219,7 @@ def validate_device(root: Path, manifest: dict, output: Path, args: argparse.Nam
     probe = checked_path(root, manifest, "bin/nw11_capability_probe.exe")
     observation_path = output / "capability-snapshot.json"
     probe_command = [str(probe), "--json", str(observation_path)]
-    if adapter := os.environ.get("NW11_ADAPTER_LUID"):
+    if adapter := (os.environ.get("NODEWERK_ADAPTER_LUID") or os.environ.get("NW11_ADAPTER_LUID")):
         probe_command += ["--adapter-luid", adapter]
     probe_start = filetime()
     with subprocess.Popen(probe_command) as process:
@@ -300,7 +302,7 @@ def validate_device(root: Path, manifest: dict, output: Path, args: argparse.Nam
     launch_renderer(root, manifest, settings, common, output / "canonical-reference",
                     "canonical_reference", "bin/canonical_reference.exe",
                     mode="canonical_reference", capture=True)
-    capture_release(root, manifest, output / "canonical-release")
+    capture_release(root, manifest, output / "canonical-release", common["adapter"]["adapter_luid"])
 
     record = measurements.collect(root, manifest, output, "evidence.json")
     write_json(output / "evidence.json", record)
