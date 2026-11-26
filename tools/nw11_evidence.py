@@ -634,6 +634,14 @@ def _decide_group(
     return evaluation
 
 
+def _aggregate_status(devices: list[Mapping[str, Any]], comparison: Mapping[str, Any] | None = None) -> str:
+    if comparison and comparison.get("status") == "failed":
+        return "failed"
+    statuses = {item["status"] for item in devices}
+    return next(status for status in ("failed", "pending", "unsupported", "rejected", "accepted")
+                if status in statuses)
+
+
 def build_decision_document(
     *,
     evidence: Mapping[str, Any],
@@ -686,17 +694,7 @@ def build_decision_document(
                 )
     order = list(DEVICE_TIERS)
     decisions.sort(key=lambda item: (order.index(item["device_tier"]), item["device_key"] or ""))
-    aggregate_status = (
-        "accepted"
-        if decisions and all(item["status"] == "accepted" for item in decisions)
-        else "pending"
-        if any(item["status"] == "pending" for item in decisions)
-        else "unsupported"
-        if any(item["status"] == "unsupported" for item in decisions)
-        else "failed"
-        if any(item["status"] == "failed" for item in decisions)
-        else "rejected"
-    )
+    aggregate_status = _aggregate_status(decisions)
     document = {
         "format": DECISIONS_FORMAT,
         "version": DECISIONS_VERSION,
@@ -769,8 +767,7 @@ def aggregate_verified_decisions(documents: list[dict[str, Any]], *,
         devices.append(device)
     result = dict(first, devices=sorted(devices, key=lambda d: (d["device_tier"], d["environment_key"])))
     statuses = {entry["status"] for entry in devices}
-    result["aggregate_status"] = next(status for status in ("failed", "pending", "unsupported", "rejected", "accepted")
-                                      if status in statuses)
+    result["aggregate_status"] = _aggregate_status(devices, cross_device_equivalence)
     result["fallback_tested"] = all(item.get("fallback_tested") is True for item in devices)
     if cross_device_equivalence is not None:
         result["cross_device_equivalence"] = cross_device_equivalence
@@ -808,7 +805,7 @@ def _cross_device_verified(comparison: Mapping[str, Any], devices: list[dict[str
                .get("status") == "verified" for item in devices)
 
 
-def validate_decision_document(document: Mapping[str, Any]) -> dict[str, Any]:
+def validate_decision_document(document: Mapping[str, Any], *, published: bool = False) -> dict[str, Any]:
     record = _mapping(document, "decision document")
     if record.get("format") != DECISIONS_FORMAT:
         raise EvidenceError("decision document has the wrong format")
@@ -844,16 +841,33 @@ def validate_decision_document(document: Mapping[str, Any]) -> dict[str, Any]:
             )
     comparison = _mapping(record.get("cross_device_equivalence", {}), "cross-device comparison")
     cross_verified = _cross_device_verified(comparison, devices)
-    if comparison.get("status") == "failed" and aggregate != "failed":
-        raise EvidenceError("aggregate status must preserve a cross-device correctness failure")
-    if record.get("satisfies_completion") is True:
-        if not cross_verified:
-            raise EvidenceError("completion requires verified crossed canonical release captures")
-        if ({item["device_tier"] for item in devices} != set(DEVICE_TIERS)
-                or any(item["status"] not in {"accepted", "rejected"} for item in devices)):
-            raise EvidenceError("completion requires a measured decision for both physical targets")
-        if record.get("fallback_tested") is not True:
-            raise EvidenceError("completion requires the separate common fallback to be executed")
+    if aggregate != _aggregate_status(devices, comparison):
+        raise EvidenceError("aggregate status disagrees with device decisions")
+    fallback = all(item.get("fallback_tested") is True for item in devices)
+    if record.get("fallback_tested") is not fallback:
+        raise EvidenceError("aggregate fallback status disagrees with device decisions")
+    tiers = {item.get("device_tier") for item in devices}
+    if not tiers <= set(DEVICE_TIERS):
+        raise EvidenceError("unknown device tier in decision")
+    measured = all(item["status"] in {"accepted", "rejected"} for item in devices)
+    complete = cross_verified and tiers == set(DEVICE_TIERS) and measured and fallback
+    if record.get("satisfies_completion") is not complete:
+        raise EvidenceError("completion disagrees with measured device coverage, fallback or cross-device comparison")
+    if published and (aggregate == "accepted" or complete):
+        if not complete or len(devices) != len(DEVICE_TIERS):
+            raise EvidenceError("published acceptance requires complete representative device coverage")
+        if not re.fullmatch(r"[0-9a-f]{40}", str(record.get("commit") or "")):
+            raise EvidenceError("published acceptance requires a tested commit")
+        if not re.fullmatch(r"sha256:v1:[0-9a-f]{64}", str(record.get("bundle_id") or "")):
+            raise EvidenceError("published acceptance requires a tested bundle identity")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(record.get("bundle_manifest_sha256") or "")):
+            raise EvidenceError("published acceptance requires a tested manifest hash")
+        for item in devices:
+            if (not item.get("device_key") or not item.get("environment_key")
+                    or not item.get("evidence_file")
+                    or not re.fullmatch(r"[0-9a-f]{64}", str(item.get("evidence_sha256") or ""))
+                    or item.get("satisfies_completion") is not True):
+                raise EvidenceError("published acceptance requires bound evidence for each physical device")
     if record.get("decision_id") != decision_id(record):
         raise EvidenceError("decision_id does not match the decision document identity")
     return dict(record)
