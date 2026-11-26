@@ -281,11 +281,16 @@ def _qualify_impl(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[st
             f"0x{adapter['subsystem_id']:08x}"
         )
 
-    displays = [row for row in raw["display_devices"] if
-                str(row.get("VendorID", "")).casefold() == f"0x{vendor_id:04x}"
-                and str(row.get("DeviceID", "")).casefold() == f"0x{device_id:04x}"
-                and (not row.get("SubSysID") or
-                     str(row["SubSysID"]).casefold() == f"0x{adapter['subsystem_id']:08x}")]
+    def display_matches(row: dict) -> bool:
+        try:
+            return (hardware_host.parse_pci_hex(row.get("VendorID")) == vendor_id
+                    and hardware_host.parse_pci_hex(row.get("DeviceID")) == device_id
+                    and (not row.get("SubSysID")
+                         or hardware_host.parse_pci_hex(row["SubSysID"]) == adapter["subsystem_id"]))
+        except ValueError:
+            return False
+
+    displays = [row for row in raw["display_devices"] if display_matches(row)]
     if not displays:
         raise ValueError("dxdiag did not expose a display device matching DXGI vendor/device/subsystem identity")
     wddm = {_text(row["DriverModel"]) for row in displays}
