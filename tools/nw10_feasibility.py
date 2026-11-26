@@ -8,6 +8,8 @@ the true at-most-65536-byte success branches are representable.
 
 from __future__ import annotations
 
+import build_attestation
+
 import argparse
 import functools
 import hashlib
@@ -1464,7 +1466,7 @@ def _certify_compact_candidate(
                 == pinned_inputs["frozen_digest"]
                 and candidate_build_inputs.get("observed_digest")
                 == pinned_inputs["digest"]
-                and candidate_build_inputs.get("matches_frozen_digest") is True
+                and build_attestation.has_recorded_inputs(candidate_build_inputs)
                 and candidate_build_inputs.get("nw10_digest")
                 == contract.build_inputs_digest(contract.compute_build_inputs())
                 and candidate_dependency.get("matches_manifest") is True

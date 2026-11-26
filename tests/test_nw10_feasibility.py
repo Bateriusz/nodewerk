@@ -495,6 +495,7 @@ def _performance() -> dict:
                 "nw07_frozen_digest": pinned["frozen_digest"],
                 "observed_digest": pinned["digest"],
                 "matches_frozen_digest": pinned["matches_frozen_digest"],
+                "source_inputs_recorded": pinned["source_inputs_recorded"],
                 "nw10_digest": contract.build_inputs_digest(
                     contract.compute_build_inputs()
                 ),

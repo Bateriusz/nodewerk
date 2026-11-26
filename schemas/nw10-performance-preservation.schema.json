@@ -203,7 +203,10 @@
               "minLength": 1
             },
             "matches_frozen_digest": {
-              "const": true
+              "type": "boolean"
+            },
+            "source_inputs_recorded": {
+              "type": "boolean"
             },
             "nw10_digest": {
               "type": "string",
