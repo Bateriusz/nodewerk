@@ -2194,6 +2194,16 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
         measurements.collect(root, manifest, output, "evidence.json")
     put(windowed_report, report)
 
+    execution_path = release / "0-execution.json"
+    original_execution = measurements.load_json(execution_path)
+    put(execution_path, dict(original_execution, command=original_execution["command"][:-1]))
+    with pytest.raises(evidence.EvidenceError, match="Invalid canonical release execution"):
+        measurements.validate_canonical_capture(root, output, manifest, common, _experiment()["protocol"])
+    put(execution_path, original_execution)
+    assert measurements.validate_canonical_capture(
+        root, output, manifest, common, _experiment()["protocol"]
+    )["numeric_loop_boundary"]["status"] == "verified"
+
     wrong_adapter_log = release / "0.log"
     correct_log = wrong_adapter_log.read_bytes()
     wrong_adapter_log.write_bytes(correct_log.replace(common["adapter"]["adapter_luid"].encode(), b"00000000:00001234"))
@@ -2456,3 +2466,35 @@ def test_workflow_does_not_warn_report_only_and_preserves_negative_aggregate() -
     workflow = (REPO_ROOT / ".github/workflows/nw11-advanced-gpu.yml").read_text()
     assert 'if ($accounting.adoption_budget_status -eq "rejected")' in workflow
     assert "if: ${{ !cancelled() && hashFiles('build/nw11-decisions.json') != '' }}" in workflow
+
+
+def test_native_presentation_modes_are_opt_in_and_canonical_check_precedes_warm_runs() -> None:
+    from nw05_export import generate_player_source
+
+    source = generate_player_source(package_sha256="a" * 64, manifest_sha256="b" * 64,
+                                    width=1920, height=1080)
+    # Both the frozen release and the diagnostic generated entrypoints expose
+    # ordinary presentation modes, not diagnostic capture controls.
+    assert source.count('std::strcmp(argv[index], "--borderless")') == 2
+    assert source.count('std::strcmp(argv[index], "--maximized")') == 2
+    assert source.count("config.borderless_window = true;") == 2
+    assert source.count("config.maximized_window = true;") == 2
+    assert source.index("config.borderless_window = true;") < source.index("PackagePlayer player(config)")
+    platform = (REPO_ROOT / "src/platform/win32_window.cpp").read_text(encoding="utf-8")
+    assert "config.borderless ? WS_POPUP : WS_OVERLAPPEDWINDOW" in platform
+    assert "GetSystemMetrics(SM_CXSCREEN) - window_width" in platform
+    assert "GetSystemMetrics(SM_CYSCREEN) - window_height" in platform
+    assert "SW_SHOWMAXIMIZED : SW_SHOW" in platform
+    assert platform.index("SetProcessDPIAware()") < platform.index("CreateWindowExW(")
+    runner = (REPO_ROOT / "tools/nw11/validate-device.py").read_text(encoding="utf-8")
+    assert '"--frames", "1", "--borderless"' in runner
+    assert runner.index("audit = nw11_cold_start.observe()") < runner.index(
+        'capture_release(root, manifest, output / "canonical-release"'
+    ) < runner.index("measurements.validate_canonical_capture(") < runner.index(
+        "for role, index in measurements.warm_run_schedule"
+    )
+    observer = (REPO_ROOT / "src/nw11/capture_release_frame.h").read_text(encoding="utf-8")
+    for reason in ("native_client_not_fully_visible", "foreground_window_not_observed",
+                   "reference_anchors_mismatch", "startup_deadline_exceeded"):
+        assert reason in observer
+    assert "best_anchor_error" in observer
