@@ -106,7 +106,12 @@ def validate(template: Path, dxc: str, root: Path) -> dict:
     # existing build/runtime split and its SHA-bound transfer manifest.
     runtime = root / "headless-runtime"
     runtime.mkdir()
-    shutil.copy2(audio_build / "nw_package_player_fixture.exe", runtime / "player.exe")
+    # nw_attach_dependency_check sets the fixture target output directory to
+    # staging/package_player, not the CMake build root (also used by NW-04 CI).
+    fixture = audio_build / "staging" / "package_player" / "nw_package_player_fixture.exe"
+    if not fixture.is_file():
+        raise FileNotFoundError(f"built audio-capable player fixture is missing: {fixture}")
+    shutil.copy2(fixture, runtime / "player.exe")
     shutil.copy2(audio_package, runtime / "audio.nwp")
     (runtime / "identity.json").write_text(json.dumps({
         "package_sha256": _hash(audio.package_bytes),
