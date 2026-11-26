@@ -863,7 +863,8 @@ def validate_decision_document(document: Mapping[str, Any], *, published: bool =
         if not re.fullmatch(r"[0-9a-f]{64}", str(record.get("bundle_manifest_sha256") or "")):
             raise EvidenceError("published acceptance requires a tested manifest hash")
         for item in devices:
-            if (not item.get("device_key") or not item.get("environment_key")
+            if (item.get("device_key") != DEVICE_TIERS[item["device_tier"]]["device_key"]
+                    or not re.fullmatch(r"sha256:v1:[0-9a-f]{64}", str(item.get("environment_key") or ""))
                     or not item.get("evidence_file")
                     or not re.fullmatch(r"[0-9a-f]{64}", str(item.get("evidence_sha256") or ""))
                     or item.get("satisfies_completion") is not True):
