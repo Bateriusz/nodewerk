@@ -299,6 +299,7 @@ def validate_device(root: Path, manifest: dict, output: Path, args: argparse.Nam
                     "canonical_reference", "bin/canonical_reference.exe",
                     mode="canonical_reference", capture=True)
     capture_release(root, manifest, output / "canonical-release", common["adapter"]["adapter_luid"])
+    measurements.validate_canonical_capture(root, output, manifest, common, settings["protocol"])
     for role, index in measurements.warm_run_schedule(settings, roles):
         decision = optional if role == "variant" else common
         launch_renderer(root, manifest, settings, decision,
