@@ -529,7 +529,10 @@ def _decide_group(
         if run.get("status") not in {"eligible", "measured"} or run.get("measurement") is None:
             raise EvidenceError("Common baseline and fallback did not both execute successfully")
     fallback_measurement = fallback["measurement"]
-    fallback_runs = summarize_process_runs(fallback_measurement, "fallback", experiment["protocol"])
+    from nw11_contract import role_protocol
+    fallback_runs = summarize_process_runs(fallback_measurement, "fallback", role_protocol(experiment, "fallback"))
+    if experiment["version"] >= 4 and any(type(run.get("presented_frames")) is not int or run["presented_frames"] <= 0 for run in fallback_runs):
+        raise EvidenceError("Fallback requires successful native Present")
     fallback_failures = reference_gate_failures(device_key, fallback_runs, experiment)
     optional_status = str(optional_eligibility.get("status"))
     if optional_status in {"unsupported", "pending"}:
@@ -545,7 +548,7 @@ def _decide_group(
             ),
             "metrics": {
                 "baseline": {**baseline["measurement"], "process_runs":
-                             summarize_process_runs(baseline["measurement"], "baseline", experiment["protocol"])},
+                             summarize_process_runs(baseline["measurement"], "baseline", role_protocol(experiment, "baseline"))},
                 "fallback": {**fallback_measurement, "process_runs": fallback_runs},
             },
             "fallback_reference_gate_failures": fallback_failures,
@@ -617,7 +620,7 @@ def _decide_group(
     evaluation["aggregate"]["fallback"] = {**fallback_measurement, "process_runs": fallback_runs}
     if any(run["measurement"].get("operating_conditions_matched") is False
            for run in (baseline, variant, fallback)):
-        if experiment["version"] == 3:
+        if experiment["version"] >= 3:
             evaluation["performance_status"] = "inconclusive"
         else:
             evaluation["status"] = "pending"
@@ -631,7 +634,7 @@ def _decide_group(
     evaluation["device_tier"] = None
     evaluation["reason"] = (
         "optional RTX execution verified; image equivalence and performance are separate results"
-        if experiment["version"] == 3 and evaluation["status"] == "accepted"
+        if experiment["version"] >= 3 and evaluation["status"] == "accepted"
         else "matched p99 GPU-time, end-to-end, distribution, and fixed-quality criteria passed"
         if evaluation["status"] == "accepted"
         else ". ".join(reason["message"] for reason in evaluation["reasons"])

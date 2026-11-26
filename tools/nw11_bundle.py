@@ -639,7 +639,7 @@ def verify_bundle(
             proof = json.loads(proof_path.read_text(encoding="utf-8"))
             package_hash, manifest_hash = binding.verify_proof(proof, manifest["commit"])
             from nw11_pe_dependencies import deployment_closure, imports
-            from nw11_contract import PRESENTMON_SHA256
+            from nw11_contract import PRESENTMON_SHA256, LEGACY_PRESENTMON_SHA256
             native_paths = [item["path"] for item in manifest["artifacts"]
                             if item["path"].lower().endswith(".exe")]
             payload_paths = [item["path"] for item in manifest["artifacts"]
@@ -661,7 +661,9 @@ def verify_bundle(
                     or sorted(name.casefold().removesuffix(".dll") for name in imports(release)) !=
                        sorted(name.casefold().removesuffix(".dll") for name in proof["candidate"]["pe_imports"])):
                 raise ValueError("canonical release executable differs from the byte proof")
-            if sha256_bytes((bundle_root / "runtime/presentmon.exe").read_bytes()) != PRESENTMON_SHA256:
+            definition = json.loads((bundle_root / manifest["experiment_definition"]["path"]).read_bytes())
+            pinned_presentmon = PRESENTMON_SHA256 if definition["version"] >= 4 else LEGACY_PRESENTMON_SHA256
+            if sha256_bytes((bundle_root / "runtime/presentmon.exe").read_bytes()) != pinned_presentmon:
                 raise ValueError("validation PresentMon does not match the pinned release")
             dependencies = json.loads((bundle_root / "manifests/pe-dependencies.json").read_bytes())
             expected_imports = {entry["path"]: entry["dlls"] for entry in dependencies["executables"]}

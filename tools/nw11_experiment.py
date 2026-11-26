@@ -60,7 +60,7 @@ from nw11_contract import (  # type: ignore[import-not-found]
 )
 
 EXPERIMENT_FORMAT = "nw11-experiment"
-EXPERIMENT_VERSION = 3
+EXPERIMENT_VERSION = 4
 VALIDATION_POLICY_V2 = {
     "ci": {"command_path": "headless_warp", "requires_present": False},
     "physical": {
@@ -83,6 +83,18 @@ VALIDATION_POLICY_V3 = {
     "physical": {**VALIDATION_POLICY_V2["physical"], "requires_cold_start": False},
     "performance": "report_only",
     "completion": "functional_execution",
+}
+
+# V4 is an execution smoke protocol, not a matched performance benchmark.
+VALIDATION_POLICY_V4 = {
+    **VALIDATION_POLICY_V3,
+    "physical": {
+        **VALIDATION_POLICY_V3["physical"],
+        "warm_run_order": [["baseline", "variant", "fallback"]],
+        "common_smoke_seconds": 1,
+        "presentmon": "optional",
+    },
+    "performance": "report_only_unmatched",
 }
 
 
@@ -187,8 +199,10 @@ def _validate_workload(document: Mapping[str, Any]) -> None:
 def _validate_protocol(document: Mapping[str, Any]) -> dict[str, Any]:
     protocol = _mapping(document.get("protocol"), "protocol")
     expected = frozen_protocol()
-    if document.get("version") in (2, 3):
+    if document.get("version") in (2, 3, 4):
         expected["perf_contract"] = "matched-gpu-comparison.v2"
+    if document["version"] == 4:
+        expected.update(perf_contract="functional-gpu-execution.v4", runs=1)
     for key in (
         "perf_contract",
         "perf_protocol",
@@ -259,7 +273,7 @@ def _validate_criteria(document: Mapping[str, Any], kind: str) -> None:
         raise ExperimentError("experiment weakened the preserved CPU-submit gate")
 
     budget = _mapping(document.get("artifact_budget"), "artifact_budget")
-    expected_policy = "report_only" if document.get("version") in (2, 3) else "gated"
+    expected_policy = "report_only" if document.get("version") in (2, 3, 4) else "gated"
     if budget.get("distribution_size_policy") != expected_policy:
         raise ExperimentError("distribution size policy does not match the experiment version")
     for key in (
@@ -446,7 +460,7 @@ def validate_experiment(
     document = _mapping(record, "experiment")
     if document.get("format") != EXPERIMENT_FORMAT:
         raise ExperimentError("experiment format is not nw11-experiment")
-    if type(document.get("version")) is not int or document["version"] not in (1, 2, EXPERIMENT_VERSION):
+    if type(document.get("version")) is not int or document["version"] not in (1, 2, 3, EXPERIMENT_VERSION):
         raise ExperimentError("unsupported experiment definition version")
     if document.get("task") != TASK:
         raise ExperimentError("experiment task is not NW-11")
@@ -457,8 +471,8 @@ def validate_experiment(
         raise ExperimentError(f"unknown experiment id '{experiment_id}'")
     if document.get("kind") != EXPERIMENT_KINDS[experiment_id]:
         raise ExperimentError("experiment kind does not match its identifier")
-    if document.get("version") in (2, 3):
-        expected_policy = VALIDATION_POLICY_V3 if document["version"] == 3 else VALIDATION_POLICY_V2
+    if document.get("version") in (2, 3, 4):
+        expected_policy = {2: VALIDATION_POLICY_V2, 3: VALIDATION_POLICY_V3, 4: VALIDATION_POLICY_V4}[document["version"]]
         if document.get("status") != "active" or document.get("validation_policy") != expected_policy:
             raise ExperimentError("active experiment requires its explicit CI and physical validation policy")
         execution = _mapping(document.get("execution"), "execution")
@@ -578,6 +592,28 @@ def _require_metric(mapping: Mapping[str, Any], key: str, label: str) -> Any:
 
 
 def _summarize_run(run: Mapping[str, Any], label: str, protocol: Mapping[str, Any]) -> dict[str, Any]:
+    telemetry = run.get("presentation_telemetry_status")
+    if telemetry in {"unavailable", "not_collected"}:
+        if protocol["perf_contract"] not in {"matched-gpu-comparison.v2", "functional-gpu-execution.v4"}:
+            raise ExperimentError("historical performance experiment requires ETW")
+        cpu = _require_metric(run, "cpu_submit_samples", label)
+        if not isinstance(cpu, list) or len(cpu) < int(protocol["min_raw_samples_per_run"]):
+            raise ExperimentError(f"{label} missing native CPU samples")
+        presented = run.get("presented_frames")
+        if type(presented) is not int or presented <= 0:
+            raise ExperimentError(f"{label} has no successful native Present")
+        return {
+            "gpu_time": None, "frame_time": None,
+            "cpu_submit": summarize_samples(cpu),
+            "raw_gpu_time_samples": None, "raw_frame_time_samples": None,
+            "raw_cpu_submit_samples": [float(value) for value in cpu],
+            "displayed_presents": None, "dropped_presents": None,
+            "presented_frames": presented,
+            "presentation_telemetry_status": telemetry,
+            "startup_ms": _number(_require_metric(run, "process_start_to_first_present_ms", label), label),
+            **{key: int(_require_metric(run, key, label)) for key in
+               ("distribution_bytes", "shader_count", "peak_engine_committed_gpu_bytes")},
+        }
     gpu = _require_metric(run, "gpu_time_samples", label)
     cpu = _require_metric(run, "cpu_submit_samples", label)
     frame = _require_metric(run, "frame_time_samples", label)
@@ -588,6 +624,7 @@ def _summarize_run(run: Mapping[str, Any], label: str, protocol: Mapping[str, An
                 f"{protocol['min_raw_samples_per_run']} raw samples per run"
             )
     return {
+        **({"presented_frames": run["presented_frames"]} if "presented_frames" in run else {}),
         "gpu_time": summarize_samples(gpu),
         "cpu_submit": summarize_samples(cpu),
         "frame_time": summarize_samples(frame),
@@ -620,7 +657,7 @@ def summarize_process_runs(arm: Mapping[str, Any], label: str, protocol: Mapping
 
 def reference_gate_failures(device_key: str, runs: list[dict[str, Any]], experiment: Mapping[str, Any] | None = None) -> list[str]:
     # The legacy absolute Ada reference gate is not inherited by a relative experiment.
-    if experiment is not None and experiment.get("version") in (2, 3):
+    if experiment is not None and experiment.get("version") in (2, 3, 4):
         return []
     # NW-07 specifies an absolute Ada reference gate and a separate Blackwell
     # development series. Qualification of the exact NW-07 host is independent.
@@ -663,17 +700,21 @@ def evaluate_experiment(
     protocol = document["protocol"]
     baseline = _mapping(measurement.get("baseline"), "measurement.baseline")
     variant = _mapping(measurement.get("variant"), "measurement.variant")
-    baseline_runs = summarize_process_runs(baseline, "baseline", protocol)
-    variant_runs = summarize_process_runs(variant, "variant", protocol)
+    from nw11_contract import role_protocol
+    baseline_runs = summarize_process_runs(baseline, "baseline", role_protocol(document, "baseline"))
+    variant_runs = summarize_process_runs(variant, "variant", role_protocol(document, "variant"))
+    comparable = document["version"] < 4 and all(run["gpu_time"] is not None for run in baseline_runs + variant_runs)
+    if not comparable and document["version"] < 3:
+        raise ExperimentError("historical performance experiment requires complete ETW")
     reductions = [
         (left["gpu_time"]["p99"] - right["gpu_time"]["p99"]) / left["gpu_time"]["p99"] * 100
         if left["gpu_time"]["p99"] > 0 else 0.0
         for left, right in zip(baseline_runs, variant_runs)
-    ]
-    reduction = min(reductions)
-    worst_pair = reductions.index(reduction)
-    baseline_p99 = baseline_runs[worst_pair]["gpu_time"]["p99"]
-    variant_p99 = variant_runs[worst_pair]["gpu_time"]["p99"]
+    ] if comparable else []
+    reduction = min(reductions) if reductions else None
+    worst_pair = reductions.index(reduction) if reductions else None
+    baseline_p99 = baseline_runs[worst_pair]["gpu_time"]["p99"] if comparable else None
+    variant_p99 = variant_runs[worst_pair]["gpu_time"]["p99"] if comparable else None
     criteria = document["criteria"]
     primary = criteria["primary"]
     guardrails = criteria["guardrails"]
@@ -722,7 +763,7 @@ def evaluate_experiment(
             "NW11-SHADER-COUNT-BUDGET",
             "variant shader-count increment exceeds the frozen experiment budget",
         )
-    functional_only = document["version"] == 3
+    functional_only = document["version"] >= 3
     missing_cold = False
     for label, arm, arm_runs in (("baseline", baseline, baseline_runs), ("variant", variant, variant_runs)):
         if not functional_only:
@@ -765,15 +806,22 @@ def evaluate_experiment(
     if functional_only:
         # The collector binds these measurements to exact executable launches.
         for arm_runs in (baseline_runs, variant_runs):
-            if any(run["displayed_presents"] <= 0 for run in arm_runs):
-                raise ExperimentError("functional execution requires displayed frames")
+            for run in arm_runs:
+                if document["version"] >= 4 or run.get("presentation_telemetry_status") in {"unavailable", "not_collected"}:
+                    if type(run.get("presented_frames")) is not int or run["presented_frames"] <= 0:
+                        raise ExperimentError("functional execution requires successful native Present")
+                elif run["displayed_presents"] <= 0:
+                    raise ExperimentError("functional execution requires displayed frames")
         image_reasons = [reason for reason in reasons if reason["code"].startswith("NW11-IMAGE-")]
         performance_reasons = [reason for reason in reasons if reason not in image_reasons]
+        if not comparable:
+            reject("NW11-PERFORMANCE-NOT-COMPARABLE", "No qualified matched baseline/variant ETW series; native execution is separate")
         status = "accepted"
         separate_results = {
             "functional_status": "verified",
             "image_equivalence_status": "different" if image_reasons else "matched",
-            "performance_status": "target_not_met" if performance_reasons else "target_met",
+            "performance_status": ("inconclusive" if not comparable else
+                                   "target_not_met" if performance_reasons else "target_met"),
             "default_adoption_status": "not_decided",
         }
     else:

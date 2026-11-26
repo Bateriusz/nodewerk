@@ -53,7 +53,7 @@ def checked_path(root: Path, manifest: dict, relative: str) -> Path:
 
 
 @contextlib.contextmanager
-def presentmon(exe: Path, target: Path, output: Path, launch_id: str):
+def presentmon(exe: Path, target: Path, output: Path, launch_id: str, *, optional: bool = False):
     command = [
         str(exe), "--process_name", target.name, "--session_name", f"NW11-{launch_id}",
         "--output_file", str(output / "presentmon.csv"), "--qpc_time_ms",
@@ -61,14 +61,30 @@ def presentmon(exe: Path, target: Path, output: Path, launch_id: str):
         "--timed", "100", "--terminate_after_timed",
     ]
     with (output / "presentmon.log").open("wb") as log:
-        trace = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+        try:
+            trace = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+        except OSError:
+            if not optional:
+                raise
+            log.write(b"PresentMon could not start\n")
+            yield
+            return
         try:
             time.sleep(1)
-            if trace.poll() is not None:
+            if trace.poll() is not None and not optional:
                 raise ValidationError("PresentMon ended before the measured process started")
             yield
-            if trace.wait(timeout=105) != 0:
-                raise ValidationError("PresentMon failed during collection")
+            try:
+                code = trace.wait(timeout=105)
+            except subprocess.TimeoutExpired:
+                if not optional:
+                    raise
+                log.write(b"PresentMon collection timed out\n")
+                return
+            if code != 0:
+                if not optional:
+                    raise ValidationError("PresentMon failed during collection")
+                log.write(b"PresentMon collection failed\n")
         finally:
             if trace.poll() is None:
                 trace.terminate()
@@ -91,7 +107,7 @@ def launch_renderer(root: Path, manifest: dict, settings: dict, decision: dict,
     decision_path = folder / "capability-decision.json"
     write_json(decision_path, decision)
     capture_manifest = folder / "captures.json"
-    timing = settings["protocol"]
+    timing = contract.role_protocol(settings, role)
     measured = mode == "warm"
     command = [
         str(executable), "--runs", "1",
@@ -113,7 +129,8 @@ def launch_renderer(root: Path, manifest: dict, settings: dict, decision: dict,
     if mode == "canonical_reference":
         command.append("--capture-display")
     monitor = (
-        presentmon(checked_path(root, manifest, "runtime/presentmon.exe"), executable, folder, launch_id)
+        presentmon(checked_path(root, manifest, "runtime/presentmon.exe"), executable, folder, launch_id,
+                   optional=settings["version"] >= 4)
         if measured else contextlib.nullcontext()
     )
     with monitor, (folder / "renderer.log").open("wb") as log:
@@ -304,7 +321,7 @@ def validate_device(root: Path, manifest: dict, output: Path, args: argparse.Nam
     for role, index in measurements.warm_run_schedule(settings, roles):
         decision = optional if role == "variant" else common
         launch_renderer(root, manifest, settings, decision,
-                        output / "raw" / role / f"run-{index}", role, roles[role], mode="warm",
+                        output / "raw" / role / f"run-{index}", role, roles[role], mode=("smoke" if settings["version"] >= 4 and role != "variant" else "warm"),
                         capture=index == settings["protocol"]["runs"])
 
     record = measurements.collect(root, manifest, output, "evidence.json")

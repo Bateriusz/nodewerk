@@ -66,7 +66,7 @@ def role_paths(manifest: dict, optional: dict) -> dict[str, str]:
 
 def warm_run_schedule(settings: dict, roles: dict) -> list[tuple[str, int]]:
     """One predeclared order, used by the launcher and by evidence reconstruction."""
-    if settings.get("version") in (2, 3):
+    if settings.get("version") in (2, 3, 4):
         order = settings["validation_policy"]["physical"]["warm_run_order"]
         return [(role, index) for index, row in enumerate(order, 1)
                 for role in row if role in roles]
@@ -288,13 +288,13 @@ def operating_conditions(folder: Path, launch: dict, report: dict, host: dict,
             "samples": sorted(telemetry, key=lambda sample: sample["start_qpc_ms"])}
 
 
-def _warm_run(folder: Path, launch: dict, report: dict, protocol: dict) -> dict:
+def _warm_run(folder: Path, launch: dict, report: dict, protocol: dict, *, optional_etw: bool = False) -> dict:
     timing = report["timing"]
     warmup = timing["warmup_start_qpc_ms"]
     begin, end = timing["measurement_start_qpc_ms"], timing["measurement_end_qpc_ms"]
     elapsed_filetime_ms = (launch["end_filetime"] - launch["start_filetime"]) / 10000
     if (elapsed_filetime_ms + 1000 < end - warmup
-            or not launch["start_qpc_ms"] <= warmup < begin < end <= launch["end_qpc_ms"]
+            or not launch["start_qpc_ms"] <= warmup <= begin < end <= launch["end_qpc_ms"]
             or begin - warmup < protocol["warmup_seconds"] * 1000
             or end - begin < protocol["run_seconds"] * 1000):
         raise evidence.EvidenceError(f"Invalid measurement interval in {folder}")
@@ -304,9 +304,20 @@ def _warm_run(folder: Path, launch: dict, report: dict, protocol: dict) -> dict:
     if (not isinstance(cpu, list) or len(cpu) < minimum
             or any(type(value) not in (int, float) or not math.isfinite(value) or value < 0 for value in cpu)):
         raise evidence.EvidenceError(f"Missing per-process CPU submission samples in {folder}")
-    display = presentation_samples(folder / "presentmon.csv", launch, timing, minimum)
-    if abs(display["presents"] - len(cpu)) > 2:
-        raise evidence.EvidenceError("ETW present count disagrees with the production frame count")
+    if launch["mode"] == "smoke":
+        return {**samples, "presentation_telemetry_status": "not_collected",
+                "launch": launch, "timing": timing}
+    try:
+        display = presentation_samples(folder / "presentmon.csv", launch, timing, minimum)
+        if abs(display["presents"] - len(cpu)) > 2:
+            raise evidence.EvidenceError("ETW present count disagrees with the production frame count")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        # Never synthesize GPU/display measurements from submitted frames.
+        # Preserve the raw log (including ETW loss) and any incomplete CSV.
+        if not optional_etw or not (folder / "presentmon.log").is_file():
+            raise
+        return {**samples, "presentation_telemetry_status": "unavailable",
+                "launch": launch, "timing": timing}
     return {**samples, **display, "launch": launch, "timing": timing}
 
 
@@ -523,16 +534,22 @@ def collect(root: Path, manifest: dict, directory: Path, evidence_file: str) -> 
             raise evidence.EvidenceError("Unscheduled startup launch in functional experiment")
         for index in range(1, protocol["runs"] + 1):
             folder = path / f"run-{index}"
-            launch, report = _validate_launch(folder, manifest, decision, relative, "warm", role, launch_ids, protocol)
+            arm_protocol = contract.role_protocol(settings, role)
+            mode = "smoke" if settings["version"] >= 4 and role != "variant" else "warm"
+            launch, report = _validate_launch(folder, manifest, decision, relative, mode, role, launch_ids, arm_protocol)
             if launch["start_filetime"] < previous_end:
                 raise evidence.EvidenceError("Warm run started before the preceding process exited")
             previous_end = launch["end_filetime"]
             warm_launches.append((role, index, launch))
             processes.append({
-                **_warm_run(folder, launch, report, protocol),
+                **_warm_run(folder, launch, report, arm_protocol, optional_etw=settings["version"] >= 3),
                 "operating_conditions": operating_conditions(folder, launch, report,
                                                               host, observation["adapter"], initial),
             })
+        expected_folders = {f"run-{i}" for i in range(1, protocol["runs"] + 1)}
+        if requires_cold:
+            expected_folders.add("startup")
+        _equal({entry.name for entry in path.iterdir()}, expected_folders, "executed run directories")
         captures[role] = _capture(folder, report)
         operating = [run["operating_conditions"] for run in processes]
         startup_metrics = {}
@@ -559,7 +576,7 @@ def collect(root: Path, manifest: dict, directory: Path, evidence_file: str) -> 
                                                       "status", "artifact_path", "adapter", "capability_decision")},
                       "measurement": metrics}
     validate_warm_run_order(settings, roles, warm_launches)
-    if "variant" in roles:
+    if "variant" in roles and settings["version"] < 4:
         baseline_runs = runs["baseline"]["measurement"]["process_runs"]
         variant_runs = runs["variant"]["measurement"]["process_runs"]
         for index, (left, right) in enumerate(zip(baseline_runs, variant_runs), 1):

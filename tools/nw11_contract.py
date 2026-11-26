@@ -127,7 +127,8 @@ AGILITY_SDK_NOTE = (
 )
 MIN_WINDOWS_BUILD = 22_631
 NVIDIA_DRIVER_FLOOR = "610.88"
-PRESENTMON_SHA256 = "364e5d98d4d134bd54dd25c22ed2ca2f4883f8bc3ed6502bee0c151e3436d30c"
+LEGACY_PRESENTMON_SHA256 = "364e5d98d4d134bd54dd25c22ed2ca2f4883f8bc3ed6502bee0c151e3436d30c"
+PRESENTMON_SHA256 = "b2a706bc6ad475749e3b7e3409263aa1e6906d45bdcf993f6dbc0f660188f1af"
 
 COMMON_SHADER_TARGETS = ("vs_6_0", "ps_6_0", "cs_6_0")
 MESH_SHADER_TARGETS = ("as_6_5", "ms_6_5", "ps_6_0", "cs_6_0")
@@ -313,8 +314,8 @@ PROFILE_PATH_BY_ID = {
 }
 
 EXPERIMENT_PATH_BY_ID = {
-    EXPERIMENT_MESH_ID: "benchmarks/nw11/experiments/mesh-shader-vs-indexed.v3.json",
-    EXPERIMENT_RAY_ID: "benchmarks/nw11/experiments/ray-query-vs-analytic.v3.json",
+    EXPERIMENT_MESH_ID: "benchmarks/nw11/experiments/mesh-shader-vs-indexed.v4.json",
+    EXPERIMENT_RAY_ID: "benchmarks/nw11/experiments/ray-query-vs-analytic.v4.json",
 }
 
 FOLLOWUP_MATRIX_PATH = "benchmarks/nw11/follow-up-matrix.v1.json"
@@ -363,6 +364,14 @@ def experiment_path(experiment_id: str) -> Path:
         return Path(EXPERIMENT_PATH_BY_ID[experiment_id])
     except KeyError as exc:
         raise KeyError(f"unknown NW-11 experiment '{experiment_id}'") from exc
+
+
+def role_protocol(document: dict, role: str) -> dict:
+    """V4 uses a single measured RTX run and one-second common smoke tests."""
+    protocol = dict(document["protocol"])
+    if document["version"] >= 4 and role in {"baseline", "fallback"}:
+        protocol.update(warmup_seconds=0, run_seconds=1, min_raw_samples_per_run=1)
+    return protocol
 
 
 def frozen_protocol() -> dict[str, Any]:

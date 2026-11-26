@@ -406,11 +406,11 @@ jobs:
       - name: Stage pinned validation-only presentation collector
         shell: pwsh
         run: |
-          Invoke-WebRequest "https://github.com/GameTechDev/PresentMon/releases/download/v2.3.1/PresentMon-2.3.1-x64.exe" -OutFile build/presentmon.exe
-          if ((Get-FileHash build/presentmon.exe).Hash -ne "364e5d98d4d134bd54dd25c22ed2ca2f4883f8bc3ed6502bee0c151e3436d30c") {
+          Invoke-WebRequest "https://github.com/GameTechDev/PresentMon/releases/download/v2.6.0/PresentMon-2.6.0-x64.exe" -OutFile build/presentmon.exe
+          if ((Get-FileHash build/presentmon.exe).Hash -ne "b2a706bc6ad475749e3b7e3409263aa1e6906d45bdcf993f6dbc0f660188f1af") {
             throw "PresentMon SHA-256 changed"
           }
-          Invoke-WebRequest "https://raw.githubusercontent.com/GameTechDev/PresentMon/717c5bf/LICENSE.txt" -OutFile build/presentmon-license.txt
+          Invoke-WebRequest "https://raw.githubusercontent.com/GameTechDev/PresentMon/v2.6.0/LICENSE.txt" -OutFile build/presentmon-license.txt
       - name: Build and compare validation bundles from both independent native builds
         shell: pwsh
         run: |

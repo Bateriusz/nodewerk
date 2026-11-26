@@ -61,16 +61,21 @@ def _build_bundle(
 ) -> tuple[Path, dict]:
     files = _source_artifacts(tmp_path)
     target = tmp_path / output
-    manifest = build_bundle.build(
-        output_directory=target,
-        experiment_id=experiment_id,
-        commit=COMMIT,
-        baseline_executable=files["baseline.exe"],
-        variant_executable=files["variant.exe"],
-        fallback_executable=files["fallback.exe"],
-        capability_probe=files["probe.exe"],
-        repo_root=REPO_ROOT,
-    )
+    # Existing nine-process fixtures exercise the historical v3 protocol.
+    from unittest.mock import patch
+    with patch.dict(contract.EXPERIMENT_PATH_BY_ID, {
+        experiment_id: contract.EXPERIMENT_PATH_BY_ID[experiment_id].replace(".v4.json", ".v3.json")
+    }):
+        manifest = build_bundle.build(
+            output_directory=target,
+            experiment_id=experiment_id,
+            commit=COMMIT,
+            baseline_executable=files["baseline.exe"],
+            variant_executable=files["variant.exe"],
+            fallback_executable=files["fallback.exe"],
+            capability_probe=files["probe.exe"],
+            repo_root=REPO_ROOT,
+        )
     return target, manifest
 
 
@@ -300,9 +305,9 @@ def _evidence(
     }
 
 
-def _experiment(experiment_id: str = contract.EXPERIMENT_MESH_ID) -> dict:
+def _experiment(experiment_id: str = contract.EXPERIMENT_MESH_ID, *, version: int = 3) -> dict:
     return experiment.load_experiment(
-        REPO_ROOT / contract.EXPERIMENT_PATH_BY_ID[experiment_id]
+        REPO_ROOT / contract.EXPERIMENT_PATH_BY_ID[experiment_id].replace(".v4.json", f".v{version}.json")
     )
 
 
@@ -708,7 +713,7 @@ def test_nw11_matched_run_evaluation_rejects_regressions(
     measurement: dict, expected: str, tmp_path: Path
 ) -> None:
     _root, manifest = _build_bundle(tmp_path)
-    document = experiment.load_experiment(REPO_ROOT / contract.EXPERIMENT_PATH_BY_ID[contract.EXPERIMENT_MESH_ID].replace(".v3.json", ".v2.json"))
+    document = experiment.load_experiment(REPO_ROOT / contract.EXPERIMENT_PATH_BY_ID[contract.EXPERIMENT_MESH_ID].replace(".v4.json", ".v2.json"))
     payload = {
         "device_key": "pci:10de:2803",
         "environment_key": "sha256:v1:" + "a" * 64,
@@ -2251,6 +2256,23 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
     assert measurements.load_json(output / "decisions.json")["devices"][0]["performance_status"] == "inconclusive"
     put(settings_path, original)
 
+    # Reconstruct an old, complete native run after ETW lost its CSV.
+    csv_path = output / "raw/variant/run-1/presentmon.csv"
+    csv_bytes = csv_path.read_bytes()
+    csv_path.unlink()
+    log_path = csv_path.with_suffix(".log")
+    log_path.write_text("warning: 12429050 ETW events were lost.\n")
+    recovered = measurements.collect(root, manifest, output, "evidence.json")
+    assert recovered["runs"][1]["measurement"]["process_runs"][0]["presentation_telemetry_status"] == "unavailable"
+    put(output / "evidence.json", recovered)
+    assert verify.main([*arguments, "--require-accepted"]) == verify.EXIT_OK
+    recovered_decision = measurements.load_json(output / "decisions.json")["devices"][0]
+    assert recovered_decision["functional_status"] == "verified"
+    assert recovered_decision["performance_status"] == "inconclusive"
+    assert recovered_decision["primary"]["relative_reduction_percent"] is None
+    csv_path.write_bytes(csv_bytes)
+    log_path.unlink()
+
     # Editing only the derived aggregate must not change a decision.
     record["runs"][0]["measurement"]["process_runs"][0]["gpu_time_samples"][0] = 3
     put(output / "evidence.json", record)
@@ -2387,13 +2409,13 @@ def test_canonical_adapter_override_accepts_valid_mixed_gpu_host() -> None:
 @pytest.mark.parametrize("experiment_id", [contract.EXPERIMENT_MESH_ID, contract.EXPERIMENT_RAY_ID])
 def test_active_experiment_schema_and_single_process_command(experiment_id, tmp_path) -> None:
     from schema_validator import ARTIFACT_SCHEMA_MAPPINGS, SchemaValidationError, validate_file_against_schema
-    document = _experiment(experiment_id)
+    document = _experiment(experiment_id, version=4)
     relative = contract.EXPERIMENT_PATH_BY_ID[experiment_id]
     schema = "schemas/nw11-experiment.schema.json"
     assert (relative, schema) in ARTIFACT_SCHEMA_MAPPINGS
     arguments = document["execution"]["arguments"]
     assert arguments[arguments.index("--runs") + 1] == "1"
-    assert document["protocol"]["runs"] == 3
+    assert document["protocol"]["runs"] == 1
     for invalid in ("missing", "three-processes"):
         broken = copy.deepcopy(document)
         if invalid == "missing":
@@ -2477,7 +2499,7 @@ def test_native_presentation_modes_are_opt_in_and_canonical_check_precedes_warm_
 def test_functional_experiment_retains_legacy_decisions_and_reports_quality_separately():
     current = _experiment()
     historical = experiment.load_experiment(
-        REPO_ROOT / contract.EXPERIMENT_PATH_BY_ID[contract.EXPERIMENT_MESH_ID].replace(".v3.json", ".v2.json"))
+        REPO_ROOT / contract.EXPERIMENT_PATH_BY_ID[contract.EXPERIMENT_MESH_ID].replace(".v4.json", ".v2.json"))
     baseline, variant = _measurement(gpu=10.0), _measurement(gpu=12.0, image_error=0.01)
     for arm in (baseline, variant):
         arm["cold_initialization_ms"] = None
@@ -2493,3 +2515,35 @@ def test_functional_experiment_retains_legacy_decisions_and_reports_quality_sepa
     variant["process_runs"][0]["displayed_presents"] = 0
     with pytest.raises(experiment.ExperimentError, match="displayed frames"):
         experiment.evaluate_experiment(current, data, device_key=data["device_key"], environment_key="host")
+
+
+def test_v4_single_rtx_minute_and_common_smoke_protocol():
+    settings = _experiment(version=4)
+    assert settings["version"] == 4
+    assert measurements.warm_run_schedule(settings, dict.fromkeys(measurements.ROLE_ORDER)) == [
+        ("baseline", 1), ("variant", 1), ("fallback", 1)]
+    for role in ("baseline", "fallback"):
+        p = contract.role_protocol(settings, role)
+        assert (p["runs"], p["warmup_seconds"], p["run_seconds"]) == (1, 0, 1)
+    p = contract.role_protocol(settings, "variant")
+    assert (p["runs"], p["warmup_seconds"], p["run_seconds"]) == (1, 5, 60)
+    baseline, variant = _measurement(), _measurement(image_error=0.01)
+    for arm, telemetry in ((baseline, "not_collected"), (variant, "unavailable")):
+        arm["process_runs"] = arm["process_runs"][:1]
+        run = arm["process_runs"][0]
+        run["presentation_telemetry_status"] = telemetry
+        run["presented_frames"] = 600
+        run.pop("displayed_presents")
+        run.pop("dropped_presents")
+        run["gpu_time_samples"] = []
+        run["frame_time_samples"] = []
+    data = {"device_key": "pci:10de:2803", "environment_key": "host", "baseline": baseline, "variant": variant}
+    result = experiment.evaluate_experiment(settings, data, device_key=data["device_key"], environment_key="host")
+    assert result["functional_status"] == "verified"
+    assert result["performance_status"] == "inconclusive"
+    assert result["primary"]["baseline"] is None
+    assert result["primary"]["relative_reduction_percent"] is None
+    assert result["aggregate"]["variant"]["process_runs"][0]["displayed_presents"] is None
+    variant["process_runs"][0]["presented_frames"] = 0
+    with pytest.raises(experiment.ExperimentError, match="native Present"):
+        experiment.evaluate_experiment(settings, data, device_key=data["device_key"], environment_key="host")
