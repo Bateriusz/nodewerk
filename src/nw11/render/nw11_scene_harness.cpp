@@ -20,6 +20,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 #include "nw11_scene_harness.h"
 #include "nw11_scene_generated.h"
@@ -287,24 +288,45 @@ std::string ExecutableSha256() {
 }
 
 int RunProduction(const RendererOptions& options) {
-    if (options.fixed_quality != "nw07.quality.v1")
-        throw std::runtime_error("unexpected fixed-quality profile");
-    if (options.runs != 1 || options.run_seconds == 0)
-        throw std::runtime_error("each measurement requires one fresh process");
-    if (!options.allow_software_adapter && (options.adapter_luid.empty() || options.headless))
-        throw std::runtime_error("physical validation requires a probe-selected adapter and presentation");
-    if (!SetEnvironmentVariableA("NW11_ADAPTER_LUID", options.adapter_luid.empty() ? nullptr : options.adapter_luid.c_str()))
-        throw std::runtime_error("cannot select probe adapter");
+    if (options.fixed_quality != "nw07.quality.v1") {
+        FailHarness(HarnessExitCode::InvalidMeasurementContract,
+                    "invalid_fixed_quality",
+                    "unexpected fixed-quality profile: " + options.fixed_quality);
+    }
+    if (options.runs != 1 || options.run_seconds == 0) {
+        FailHarness(HarnessExitCode::InvalidMeasurementContract,
+                    "invalid_measurement_process_contract",
+                    "each measurement requires one fresh process and a non-zero run duration");
+    }
+    if (!options.allow_software_adapter &&
+        (options.adapter_luid.empty() || options.headless)) {
+        FailHarness(HarnessExitCode::InvalidMeasurementContract,
+                    "physical_adapter_or_presentation_missing",
+                    "physical validation requires a probe-selected adapter and presentation");
+    }
+    if (!SetEnvironmentVariableA(
+            "NW11_ADAPTER_LUID",
+            options.adapter_luid.empty() ? nullptr : options.adapter_luid.c_str())) {
+        FailHarness(HarnessExitCode::InvalidMeasurementContract,
+                    "adapter_selection_environment_failed",
+                    "cannot select the probe-qualified adapter");
+    }
+
     nw::player::EmbeddedPackage embedded;
     nw::player::EmbeddedLinkMetadata metadata;
     if (!nw::player::LoadEmbeddedPackage(&embedded) ||
-        !nw::player::ParseEmbeddedLinkMetadata(embedded, &metadata))
-        throw std::runtime_error("missing or invalid embedded NW-07 production package");
+        !nw::player::ParseEmbeddedLinkMetadata(embedded, &metadata)) {
+        FailHarness(HarnessExitCode::ArtifactIdentityUnavailable,
+                    "embedded_production_package_invalid",
+                    "missing or invalid embedded NW-07 production package");
+    }
+
     RunIdentity run;
     if (!options.launch_id.empty()) {
         run.executable_hash = ExecutableSha256();
         run.package_hash = nw::package::Sha256Hex(embedded.bytes, embedded.size);
     }
+
     nw::player::PlayerConfig config;
     config.width = scene::kOutputWidth;
     config.height = scene::kOutputHeight;
@@ -319,82 +341,223 @@ int RunProduction(const RendererOptions& options) {
     config.query_optional_wave_ops = metadata.wave_ops;
     config.query_optional_fp16_shader_ops = metadata.fp16_shader_ops;
     config.query_optional_int64_shader_ops = metadata.int64_shader_ops;
+
     nw::player::PackagePlayer player(config);
-    auto status = player.initialize(embedded.bytes, embedded.size);
+    const ExitCode status = player.initialize(embedded.bytes, embedded.size);
     if (status != ExitCode::Success) {
         player.Report(true);
-        return status == ExitCode::OptionalFeatureUnsupported ? kExitUnsupported : kExitInitializationFailed;
-    }
-    auto render = [&](std::uint64_t tick) {
-        if (player.renderAtTick(tick) != ExitCode::Success || player.window_closed()) {
-            player.Report(true);
-            throw std::runtime_error("production frame execution failed");
+        if (status == ExitCode::OptionalFeatureUnsupported) {
+            std::fprintf(
+                stderr,
+                "[NW11-PRODUCTION-ERR][process_exit_code=%d]"
+                "[player_exit_code=%d][code=%s] PackagePlayer initialization "
+                "reported an unsupported optional feature\n",
+                kExitUnsupported, static_cast<int>(status), ExitCodeName(status));
+            return kExitUnsupported;
         }
-        if (player.width() != scene::kOutputWidth || player.height() != scene::kOutputHeight)
-            throw std::runtime_error("production presentation dimensions changed");
+        std::fprintf(
+            stderr,
+            "[NW11-PRODUCTION-ERR][exit_code=%d][code=%s] "
+            "PackagePlayer initialization failed\n",
+            static_cast<int>(status), ExitCodeName(status));
+        return static_cast<int>(status);
+    }
+
+    if (player.present_source_width() != scene::kOutputWidth ||
+        player.present_source_height() != scene::kOutputHeight) {
+        FailHarness(
+            HarnessExitCode::PresentationSourceGeometryMismatch,
+            "presentation_source_geometry_mismatch",
+            "production source geometry expected " +
+                std::to_string(scene::kOutputWidth) + "x" +
+                std::to_string(scene::kOutputHeight) + " but PackagePlayer bound " +
+                std::to_string(player.present_source_width()) + "x" +
+                std::to_string(player.present_source_height()));
+    }
+
+    // Win32 may initially choose a different client size for an overlapped
+    // 1920x1080 window (work-area constraints, DPI, placement).  NW-11's
+    // matched physical benchmark requires an exact presentation client size,
+    // so correct it explicitly through the existing PackagePlayer resize path
+    // rather than conflating client geometry with package source geometry.
+    if (!options.headless &&
+        (player.width() != scene::kOutputWidth ||
+         player.height() != scene::kOutputHeight)) {
+        const ExitCode resize =
+            player.resize(scene::kOutputWidth, scene::kOutputHeight);
+        if (resize != ExitCode::Success) {
+            player.Report(true);
+            FailPlayer(resize, "presentation resize");
+        }
+        if (player.width() != scene::kOutputWidth ||
+            player.height() != scene::kOutputHeight) {
+            FailHarness(
+                HarnessExitCode::PresentationClientGeometryMismatch,
+                "presentation_client_geometry_mismatch",
+                "presentation client expected " +
+                    std::to_string(scene::kOutputWidth) + "x" +
+                    std::to_string(scene::kOutputHeight) + " but resize produced " +
+                    std::to_string(player.width()) + "x" +
+                    std::to_string(player.height()));
+        }
+    }
+
+    auto render = [&](std::uint64_t tick) {
+        const ExitCode frame_status = player.renderAtTick(tick);
+        if (frame_status != ExitCode::Success) {
+            player.Report(true);
+            FailPlayer(frame_status, "production frame execution");
+        }
+        if (player.window_closed()) {
+            FailHarness(HarnessExitCode::PresentationWindowClosed,
+                        "presentation_window_closed",
+                        "production presentation window closed during the measured run");
+        }
+        if (!options.headless &&
+            (player.width() != scene::kOutputWidth ||
+             player.height() != scene::kOutputHeight)) {
+            FailHarness(
+                HarnessExitCode::PresentationClientGeometryMismatch,
+                "presentation_client_geometry_changed",
+                "presentation client changed from required " +
+                    std::to_string(scene::kOutputWidth) + "x" +
+                    std::to_string(scene::kOutputHeight) + " to " +
+                    std::to_string(player.width()) + "x" +
+                    std::to_string(player.height()));
+        }
     };
+
     render(0);
-    if (!options.headless && !player.frames_presented())
-        throw std::runtime_error("first production frame was not presented");
-    if (!options.headless && first_present_filetime < run.process_creation_filetime)
-        throw std::runtime_error("invalid first presentation timestamp");
-    const double startup_ms = options.headless ? 0.0 :
-        double(first_present_filetime - run.process_creation_filetime) / 10000.0;
+    if (!options.headless && !player.frames_presented()) {
+        FailHarness(HarnessExitCode::MeasurementUnavailable,
+                    "first_present_unavailable",
+                    "first production frame was not presented");
+    }
+    if (!options.headless &&
+        first_present_filetime < run.process_creation_filetime) {
+        FailHarness(HarnessExitCode::MeasurementUnavailable,
+                    "first_present_timestamp_invalid",
+                    "first presentation timestamp predates process creation");
+    }
+
+    const double startup_ms = options.headless
+                                  ? 0.0
+                                  : double(first_present_filetime -
+                                           run.process_creation_filetime) /
+                                        10000.0;
     run.warmup_start_qpc_ms = QpcMilliseconds();
     const auto origin = Clock::now();
-    auto seconds = [&](auto t) { return std::chrono::duration<double>(t - origin).count(); };
-    auto tick_at = [&](auto t) { return static_cast<std::uint64_t>(
-        std::fmod(seconds(t) * scene::kTicksPerSecond, double(scene::kLoopTicks))); };
-    while (seconds(Clock::now()) < options.warmup_seconds) render(tick_at(Clock::now()));
+    auto seconds = [&](auto t) {
+        return std::chrono::duration<double>(t - origin).count();
+    };
+    auto tick_at = [&](auto t) {
+        return static_cast<std::uint64_t>(
+            std::fmod(seconds(t) * scene::kTicksPerSecond,
+                      double(scene::kLoopTicks)));
+    };
+
+    while (seconds(Clock::now()) < options.warmup_seconds) {
+        render(tick_at(Clock::now()));
+    }
+
     std::vector<float> gpu, cpu;
     run.measurement_start_qpc_ms = QpcMilliseconds();
     const auto start = Clock::now();
-    while (std::chrono::duration<double>(Clock::now() - start).count() < options.run_seconds) {
+    while (std::chrono::duration<double>(Clock::now() - start).count() <
+           options.run_seconds) {
         const auto begin = Clock::now();
         render(tick_at(begin));
         const auto& timing = player.instrumentation().timing();
-        if (!timing.cpu_available)
-            throw std::runtime_error("production CPU submission timing unavailable");
+        if (!timing.cpu_available) {
+            FailHarness(HarnessExitCode::MeasurementUnavailable,
+                        "cpu_submission_timing_unavailable",
+                        "production CPU submission timing unavailable");
+        }
         if (options.allow_software_adapter) {
-            if (!timing.gpu_available || timing.gpu_ms <= 0.0)
-                throw std::runtime_error("production GPU timing unavailable in WARP smoke");
+            if (!timing.gpu_available || timing.gpu_ms <= 0.0) {
+                FailHarness(HarnessExitCode::MeasurementUnavailable,
+                            "gpu_timing_unavailable",
+                            "production GPU timing unavailable in WARP smoke");
+            }
             gpu.push_back(static_cast<float>(timing.gpu_ms));
         }
         cpu.push_back(static_cast<float>(timing.cpu_submit_ms));
     }
     run.measurement_end_qpc_ms = QpcMilliseconds();
-    if (cpu.empty() || peak_engine_committed_gpu_bytes == 0 || player.allocation_stats().post_initialization_allocation_violation)
-        throw std::runtime_error("missing samples or invalid engine allocation accounting");
+
+    if (cpu.empty() || peak_engine_committed_gpu_bytes == 0 ||
+        player.allocation_stats().post_initialization_allocation_violation) {
+        FailHarness(HarnessExitCode::MeasurementUnavailable,
+                    "measurement_accounting_unavailable",
+                    "missing samples or invalid engine allocation accounting");
+    }
+
     WriteReport(options, player, gpu, cpu, run, startup_ms);
     if (!options.capture_dir.empty()) {
         std::filesystem::create_directories(options.capture_dir);
         for (auto tick : contract_reference_ticks()) {
             render(tick);
             std::vector<std::uint8_t> pixels;
-            const auto capture = options.capture_display ? player.readbackDisplayOutput(&pixels)
-                                                         : player.readbackPresentedOutput(&pixels);
-            if (capture != ExitCode::Success)
-                throw std::runtime_error("production capture failed");
-            const auto pixel_count = std::uint64_t(scene::kOutputWidth) * scene::kOutputHeight;
+            const ExitCode capture =
+                options.capture_display
+                    ? player.readbackDisplayOutput(&pixels)
+                    : player.readbackPresentedOutput(&pixels);
+            if (capture != ExitCode::Success) {
+                player.Report(true);
+                FailPlayer(capture, "production capture");
+            }
+
+            const auto pixel_count =
+                std::uint64_t(scene::kOutputWidth) * scene::kOutputHeight;
             if (options.capture_display) {
-                if (pixels.size() != pixel_count * 4u)
-                    throw std::runtime_error("production display capture size changed");
+                if (pixels.size() != pixel_count * 4u) {
+                    FailHarness(
+                        HarnessExitCode::CaptureValidationFailed,
+                        "display_capture_size_mismatch",
+                        "production display capture size changed");
+                }
                 std::vector<float> rgba;
                 rgba.reserve(pixels.size());
-                for (auto channel : pixels) rgba.push_back(float(channel) / 255.0f);
-                const auto* bytes = reinterpret_cast<const std::uint8_t*>(rgba.data());
-                pixels.assign(bytes, bytes + rgba.size() * sizeof(float));
+                for (auto channel : pixels) {
+                    rgba.push_back(float(channel) / 255.0f);
+                }
+                const auto* bytes =
+                    reinterpret_cast<const std::uint8_t*>(rgba.data());
+                pixels.assign(bytes,
+                              bytes + rgba.size() * sizeof(float));
             }
-            if (pixels.size() != pixel_count * 16u)
-                throw std::runtime_error("production RGBA32F capture size changed");
-            std::ofstream out(std::filesystem::path(options.capture_dir) /
-                (std::to_string(tick) + ".rgba"), std::ios::binary);
-            out.write(reinterpret_cast<const char*>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
-            if (!out) throw std::runtime_error("cannot write production capture");
+            if (pixels.size() != pixel_count * 16u) {
+                FailHarness(HarnessExitCode::CaptureValidationFailed,
+                            "rgba32f_capture_size_mismatch",
+                            "production RGBA32F capture size changed");
+            }
+
+            std::ofstream out(
+                std::filesystem::path(options.capture_dir) /
+                    (std::to_string(tick) + ".rgba"),
+                std::ios::binary);
+            out.write(reinterpret_cast<const char*>(pixels.data()),
+                      static_cast<std::streamsize>(pixels.size()));
+            if (!out) {
+                FailHarness(HarnessExitCode::EvidenceIoFailure,
+                            "capture_write_failed",
+                            "cannot write production capture");
+            }
         }
         WriteCaptureManifest(options, run);
     }
-    return player.shutdown() == ExitCode::Success ? kExitOk : kExitInitializationFailed;
+
+    const ExitCode shutdown = player.shutdown();
+    if (shutdown != ExitCode::Success) {
+        player.Report(true);
+        std::fprintf(
+            stderr,
+            "[NW11-PRODUCTION-ERR][exit_code=%d][code=%s] "
+            "PackagePlayer shutdown failed\n",
+            static_cast<int>(shutdown), ExitCodeName(shutdown));
+        return static_cast<int>(shutdown);
+    }
+    return kExitOk;
 }
 } // namespace
 int RunSceneRenderer(const RendererOptions& options) {
@@ -404,9 +567,18 @@ int RunSceneRenderer(const RendererOptions& options) {
             return kExitOk;
         }
         return RunProduction(options);
+    } catch (const RendererFailure& error) {
+        std::fprintf(stderr,
+                     "[NW11-PRODUCTION-ERR][exit_code=%d][code=%s] %s\n",
+                     error.exit_code(), error.code().c_str(), error.what());
+        return error.exit_code();
     } catch (const std::exception& error) {
-        std::fprintf(stderr, "[NW11-PRODUCTION-ERR] %s\n", error.what());
-        return kExitInitializationFailed;
+        const int code = static_cast<int>(HarnessExitCode::UnhandledFailure);
+        std::fprintf(stderr,
+                     "[NW11-PRODUCTION-ERR][exit_code=%d]"
+                     "[code=unhandled_harness_failure] %s\n",
+                     code, error.what());
+        return code;
     }
 }
-} // namespace nw11
+11
