@@ -63,7 +63,16 @@ EXPERIMENT_FORMAT = "nw11-experiment"
 EXPERIMENT_VERSION = 2
 VALIDATION_POLICY_V2 = {
     "ci": {"command_path": "headless_warp", "requires_present": False},
-    "physical": {"requires_real_gpu": True, "requires_real_present": True, "requires_cold_start": True},
+    "physical": {
+        "requires_real_gpu": True, "requires_real_present": True, "requires_cold_start": True,
+        "warm_run_order": [
+            ["baseline", "variant", "fallback"],
+            ["variant", "baseline", "fallback"],
+            ["baseline", "variant", "fallback"],
+        ],
+        "max_start_temperature_delta_c": 5,
+        "max_start_clock_delta_fraction_of_max": 0.20,
+    },
     "performance": "matched_relative",
 }
 
@@ -442,6 +451,17 @@ def validate_experiment(
     if document.get("version") == 2:
         if document.get("status") != "active" or document.get("validation_policy") != VALIDATION_POLICY_V2:
             raise ExperimentError("active experiment requires its explicit CI and physical validation policy")
+        execution = _mapping(document.get("execution"), "execution")
+        expected_arguments = [
+            "--benchmark-json", "{output}", "--warmup-seconds", str(WARMUP_SECONDS),
+            "--runs", "1", "--run-seconds", str(PERF_RUN_SECONDS),
+            "--fixed-quality", QUALITY_PROFILE_ID,
+        ]
+        if (execution.get("arguments") != expected_arguments
+                or execution.get("fresh_process_per_run") is not True
+                or execution.get("preserve_raw") is not True
+                or execution.get("raw_report_format") != "nw11-raw-run.v1"):
+            raise ExperimentError("active experiment execution must describe one fresh process per run")
     elif document.get("status") != "frozen" or "validation_policy" in document:
         raise ExperimentError("invalid historical v1 experiment definition")
     if document.get("baseline_profile_id") != COMMON_PROFILE_ID:
