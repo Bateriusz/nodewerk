@@ -19,6 +19,8 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+import hardware_evidence_devices as hardware_devices
+
 TASK = "NW-11"
 
 # Immutable implementation base for this task.  The older planning base is
@@ -285,18 +287,7 @@ EVIDENCE_STATUSES = (
     "unsupported",
 )
 
-DEVICE_TIERS = {
-    "desktop_ada_representative": {
-        "architecture": "Ada",
-        "representative_model": "NVIDIA GeForce RTX 4060 Ti",
-        "device_key": "pci:10de:2803",
-    },
-    "desktop_blackwell_representative": {
-        "architecture": "Blackwell",
-        "representative_model": "NVIDIA GeForce RTX 5070 Ti",
-        "device_key": "pci:10de:2c05",
-    },
-}
+DEVICE_TIERS = hardware_devices.nw11_device_tiers()
 
 REQUIRED_FOLLOWUP_FEATURES = (
     "vulkan_1_4",
