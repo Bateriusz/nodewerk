@@ -5,7 +5,7 @@
   "status": "pending_evaluation",
   "verification_status": "unverified",
   "substituted_silently": false,
-  "reproducible_command": "python tools/nw11_verify.py self-check && pwsh tools/nw11/run-validation.ps1 -BundleRoot <nw11-ray-query-bundle> -ExpectedCommit <tested-commit>",
+  "reproducible_command": "python tools/nw11_verify.py self-check && pwsh -NoProfile -File <trusted-launcher>/run-validation.ps1 -BundleRoot <nw11-ray-bundle> -TrustRecord <trusted-launcher>/nw11-bundle-ray-verification.json -ExpectedCommit <tested-commit>",
   "configuration": {
     "toolchain_id": "msvc-ltcg",
     "profile_name": "nw.optional.d3d12.ray_query.ps6_5.v1",
