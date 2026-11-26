@@ -46,11 +46,7 @@ All experiment executables use the static MSVC CRT. `tools/nw11_toolchain_identi
 hosted CI to bind the measured compiler/SDK identity, compiled DXIL/header
 payload hashes, and inbox-only PE import set into the validation bundle.
 
-The active v2 experiment definitions use matched relative GPU performance,
-image-quality criteria and explicit runtime guardrails. Distribution bytes
-are reported, not an adoption gate. Historical v1 definitions and evidence
-remain unchanged. Use shared host identity/locale/PCI, telemetry, cold-start,
-presentation metrics, measurement and error-evidence helpers rather than
+The active v3 experiments accept verified execution of the optional RTX feature. Image equivalence, matched relative performance, process startup, resource usage and distribution cost are reported separately; no default adoption is implied. No reboot, process-creation audit or cold/warm startup classification is required. Historical v1/v2 specifications and evidence remain unchanged. Use shared host identity/locale/PCI, telemetry, presentation metrics, measurement and error-evidence helpers rather than
 forking them; retain old task-named entry points only for compatibility.
 Reproducibility compares independent builds of the same revision, not old
 binary hashes. Physical evidence binds the exact measured bundle and revision.

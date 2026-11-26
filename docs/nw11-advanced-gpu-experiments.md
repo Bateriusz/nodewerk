@@ -28,7 +28,7 @@ The common profile is inherited unchanged from NW-01/NW-03..NW-07:
 | Requirements digest | `sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a` |
 | API | D3D12 Feature Level 12_0, shader model 6_0 |
 | Fallback | none (this *is* the common artifact profile) |
-| Distribution size | Report-only for active v2 GPU experiments; explicit canonical proof limits apply to that proof only |
+| Distribution size | Report-only for active v3 GPU experiments; explicit canonical proof limits apply to that proof only |
 | Evidence status | `pending` until RTX 4060 Ti and RTX 5070 Ti common-artifact correctness is physically verified |
 
 The common requirements digest is the **inherited NW-07 identity**
@@ -112,7 +112,7 @@ the inherited NW-07 identity described above.
 
 ## 2. Versioned experiment definitions
 
-The active definitions are `mesh-shader-vs-indexed.v2.json` and `ray-query-vs-analytic.v2.json` in `benchmarks/nw11/experiments/`. The v1 definitions remain historical specifications. Fix the selected inputs and protocol for each measurement, not the shared implementation for future tasks. The active definitions record:
+The active definitions are `mesh-shader-vs-indexed.v3.json` and `ray-query-vs-analytic.v3.json` in `benchmarks/nw11/experiments/`. The v1 and v2 definitions remain historical specifications. V3 accepts verified functional execution of the optional RTX path; it does not infer default adoption, image equivalence or performance superiority. Fix the selected inputs and protocol for each measurement, not the shared implementation for future tasks. The active definitions record:
 
 - base graph `fixtures/nw07/production_loop.nwgraph` with the recorded SHA-256
   `093b8429…b7091`;
@@ -122,13 +122,13 @@ The active definitions are `mesh-shader-vs-indexed.v2.json` and `ray-query-vs-an
   historical `nw07_perf_ref_v1` lineage is not an absolute v2 performance gate;
 - warm-up 5 s, 3 fresh processes, 60 s per run, ≥600 raw samples per run,
   nearest-rank p99, no application pipeline cache;
-- at least 10% lower p99 GPU time at matched quality, independently per
-  qualified device/environment;
-- end-to-end frame-time, CPU-submit, shader-count,
-  cold-initialization, and VRAM guardrails;
+- the historical 10% p99 GPU-time target, reported independently per qualified
+  device/environment without gating functional success;
+- end-to-end frame-time, CPU-submit, shader-count, VRAM and per-process startup
+  observations, reported separately from functional execution;
 - a fixed-quality image criterion (`max_abs_channel_error <= 1e-4`,
   `RMSE <= 1e-4`) at predeclared fixed ticks;
-- actual complete and incremental distribution sizes (report-only in v2),
+- actual complete and incremental distribution sizes (report-only in v3),
   and active shader-count guardrails;
 - the fallback artifact identity and execution arguments.
 
@@ -204,7 +204,7 @@ link mesh or DXR code, shaders, or payload headers.
 - Synchronization: `SetMeshOutputCounts` and
   `GroupMemoryBarrierWithGroupSync()` are declared and enforced by static
   bundle checks.
-- Shader-count increment ≤ 2; complete and incremental distribution bytes are reported. The historical v1 ceilings (262,144 and 32,768 bytes) do not gate v2 adoption.
+- Shader-count increment ≤ 2; complete and incremental distribution bytes are reported. The historical v1 ceilings (262,144 and 32,768 bytes) do not gate functional success.
 
 ### 2.2 DXR ray queries versus analytic reflection
 
@@ -224,7 +224,7 @@ link mesh or DXR code, shaders, or payload headers.
   image at the predeclared `1e-4` tolerance.
 - The acceleration structure and all bound buffers must outlive the frame
   command list; BLAS/TLAS build work is fenced before shading.
-- Shader-count increment ≤ 1; complete and incremental distribution bytes are reported. The historical v1 ceilings (262,144 and 65,536 bytes) do not gate v2 adoption.
+- Shader-count increment ≤ 1; complete and incremental distribution bytes are reported. The historical v1 ceilings (262,144 and 65,536 bytes) do not gate functional success.
 - Missing DXR capability is explicitly unsupported and the separately exported
   common analytic fallback remains available; initialization/execution failure
   is reported as failure, never silently substituted.
@@ -235,7 +235,7 @@ link mesh or DXR code, shaders, or payload headers.
 
 - evidence binds commit, bundle ID, bundle-manifest SHA-256, capability profile
   SHA-256, and the hash of every measured executable/package;
-- raw per-sample GPU time, CPU submit time, frame time, cold initialization,
+- raw per-sample GPU time, CPU submit time, frame time, process startup time,
   distribution bytes, shader count, VRAM, and fixed-quality image results are
   preserved;
 - decisions are isolated by `(device_tier, device_key, environment_key)`; a
@@ -352,7 +352,7 @@ The launcher collects operating conditions before and after each renderer,
 and four times inside each warm measurement window. The collected files retain
 core and memory clocks, GPU temperature, power state, and configured controls
 with process and executable identities. A change in required controls or
-unavailable telemetry leaves the optional result pending. Physical coverage
+unavailable or mismatched run telemetry makes comparative performance inconclusive, not a failure of a verified RTX execution. Physical coverage
 follows the shared fail-closed host identity and VBS policy: an active Windows hypervisor alone does not disqualify a physical host. Require independent GPU virtualization evidence; normalize PCI identifiers numerically and decode Windows utilities through `tools/hardware_evidence_host.py`. Use `-DeviceTier` to assert the expected board on an assigned runner.
 Preflight checks Windows build 22631 or later, the NVIDIA driver floor of
 610.88, inbox runtime versions, and the queried capabilities, including
@@ -365,30 +365,24 @@ Each invocation writes a fresh evidence directory containing the probe snapshot,
 raw reports, presentation traces, capture pixels, `evidence.json`,
 `decisions.json`, and a short `summary.txt`.
 
-Cold startup uses the shared `tools/validation_cold_start.py` policy and full-reboot preparation. Enable successful
-Windows Audit Process Creation on the validation host before restarting.
-Use Restart, then run the launcher before starting any renderer for the
-bundle. The launcher reads the Kernel-Boot and Security logs and verifies
-continuous audit coverage and first use of each exact executable since the
-reboot. It needs permission to read the Security log and query the system
-audit policy. Incomplete audit
-coverage, a prior launch, or an unverified boot leaves cold startup pending.
-The launcher runs each cold process before any warm process. Warm
-measurements use three fresh 60-second uncapped processes per role, with a
-five-second warm-up each. For active v2 the declared order is baseline,
-variant, fallback in round one, variant, baseline, fallback in round two,
-and baseline, variant, fallback in round three (omit the variant only
-when ineligible). The verifier reconstructs chronological order from bound
-launch timestamps and rejects overlaps or a different sequence. Each
-baseline/variant pair must begin within 5 C and within 20% of the reported
-maximum graphics and memory clocks in their respective domains; unavailable
-or mismatched starting conditions remain pending. Workload-induced clock
-and temperature changes are recorded, not required to be identical. [Microsoft Audit Process Creation](https://learn.microsoft.com/windows/security/threat-protection/auditing/audit-process-creation)
+V3 runs on the current desktop session: no Windows restart, process-creation audit,
+Security log access, driver-cache preparation, or separate cold/warm startup
+classification is required. Startup time is recorded in the ordinary per-process
+measurements. The historical cold-start helper remains available only for old
+protocols or a future explicitly scoped startup investigation.
+
+Measurements use three fresh 60-second uncapped processes per role, with a
+five-second sampling warm-up each. The declared order is baseline, variant,
+fallback in round one, variant, baseline, fallback in round two, and baseline,
+variant, fallback in round three (omit the variant only when ineligible).
+The verifier reconstructs chronological order from bound launch timestamps and
+rejects overlaps or a different sequence. Matched starting temperatures and
+clock conditions determine whether the performance comparison is conclusive.
+A mismatch does not undo successfully verified functional execution.
 
 The per-process windows bind production CPU command-recording and submission
 samples through DXGI Present with PresentMon GPU frame times and displayed intervals. Dropped
-presents affect delivered frame counts and intervals. Every matched run pair
-must meet the relative GPU criterion and the end-to-end guardrails. Both Ada and Blackwell use independent matched relative comparisons under the active v2 policy; historical absolute Ada reference thresholds do not gate v2 adoption.
+presents affect delivered frame counts and intervals. The relative GPU target and end-to-end guardrails are reported for every matched run pair. Both Ada and Blackwell use independent matched relative comparisons under the active v3 policy; historical absolute Ada reference thresholds do not gate functional success.
 [PresentMon 2.3.1 console metrics](https://github.com/GameTechDev/PresentMon/blob/v2.3.1/README-ConsoleApplication.md)
 
 The canonical correctness check launches the exact NW-07 release executable
@@ -401,9 +395,7 @@ support `--maximized` for ordinary Windows maximization and `--borderless` for
 a native client without chrome. The latter fills a Full HD monitor; ordinary
 maximization retains the title bar and work-area policy and is not equivalent.
 Neither option changes the authored source resolution. Capture controls remain
-stripped from the production release. After first-use startup launches and the
-reboot audit, the launcher completes and validates the canonical comparison
-before starting the long warm benchmark sequence. The capture probe uses a DWM composition
+stripped from the production release. The launcher completes and validates the canonical comparison before starting the sampled benchmark sequence, without requiring startup preparation. The capture probe uses a DWM composition
 flush and the visible foreground client pixels to observe the held frame within
 the startup ceiling. It recognizes the scene using sample pixels and records
 the target PID and observation timestamp. The verifier checks the complete
@@ -454,18 +446,14 @@ tracked `evidence-status.v1.json` keeps physical evidence
 implementation is verified by pytest and does not substitute for physical
 evidence.
 
-After ordinary CI is green, restart both audited hosts and dispatch one
-experiment for both devices from the same tested bundle. Repeat the restart
-and dispatch for the other experiment. Pass `--evidence` twice to the bundled verifier's
+After ordinary CI is green, run both experiments on each device from the same tested revision and corresponding bundles. Run them consecutively in the current desktop session without rebooting. Pass `--evidence` twice to the bundled verifier's
 `evidence` command and use `--require-complete` when generating the aggregate.
 The verifier reopens each record's raw evidence, derives the matching device
 and environment, and binds the two evidence-file hashes to the bundle. It
 requires both numeric loop checks and recomputes cross-device image equivalence
-before reporting completion. A verified rejection completes a measured
-evaluation on its own device.
+before reporting completion. For v3 a successful verified optional execution is an accepted functional result on that device. Report image differences and performance findings independently; do not turn them into default adoption claims.
 
-Publish the tested bundle identities, raw evidence locations, and generated
-decision record in PR #44 after both devices are verified. The tracked status
+Retain original raw evidence privately. Publish sanitized measured values, tested bundle and executable identities, and decision provenance after both devices are verified. A sanitized historical projection is not a substitute for the original raw inputs or a new-revision proof. See [Ada v2 observations](../benchmarks/nw11/history/ada-250e1f7.md). The tracked status
 files remain pending until those physical executions exist.
 
 ## 6. Shared architecture, compatibility and stripping
@@ -520,7 +508,6 @@ use `distribution_size_policy: report_only` and
 `accounting.adoption_budget_status: report_only`; complete and incremental
 distribution bytes are measured but do not reject an otherwise successful
 variant. Historical v1 definitions retain their original gated policy.
-Matched performance, quality, resource, shader-count, and capability checks
-remain applicable. A verified bundle is not physical acceptance evidence;
+Capability, execution, artifact binding and common/fallback correctness checks remain required. Optional image-equivalence, performance and resource findings are reported independently of functional success. A verified bundle is not physical acceptance evidence;
 real physical results must bind the exact tested artifacts, bundle and source
 revision. No historical evidence is re-certified by a later build.

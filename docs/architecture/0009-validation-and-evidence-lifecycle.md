@@ -35,7 +35,7 @@ supports ordinary maximization, without changing source resolution. Other
 player users retain their ordinary window policy by default. A Full HD monitor
 can provide the full 1920×1080 native display proof; physical presentation
 captures still require the actual visible measured dimensions. Verify that
-proof before expensive warm measurements, after first-use startup evidence.
+proof before expensive sampled measurements; startup preparation is not required for ordinary validation.
 
 Shared tools are named by responsibility:
 
@@ -58,16 +58,11 @@ a new task number. New consumers should import functional modules.
 
 ### Experiment policy
 
-The active GPU experiment definitions are revision 2. They reuse the same
-workload and image contract while specifying their own matched relative
-performance criteria. Distribution size is recorded but not an adoption gate.
-The historical v1 definitions remain unchanged. The lineage identifiers retain
-their existing spelling; the version and content digest distinguish semantics.
+The active GPU experiment definitions are revision 3. Verified functional execution of an optional GPU path is a positive experiment outcome, independently of whether a simple fixture demonstrates a performance advantage or pixel equivalence. Preserve all image comparisons, resource observations and matched performance results, including differences and inconclusive comparisons. A functional pass is not a claim of numeric equivalence or a decision to enable the feature by default. Distribution size is reported. Historical v1 and v2 definitions and decisions remain unchanged; version and content digest distinguish semantics.
 
 Hosted CI runs the headless WARP command-path check, independent builds and
 bundle integrity tests. It does not assert physical GPU presentation. The
-physical policy requires real GPU execution, real presentation and cold start.
-A physical outcome is recorded only after the actual test runs.
+physical policy requires real GPU execution and real presentation. Ordinary physical validation runs in the current desktop session, without restarting Windows, auditing process creation, qualifying driver cache, or distinguishing cold and warm startup. Record per-process startup timing as an observation; only a task explicitly investigating startup behavior may require a specialized startup protocol. A physical outcome is recorded only after the actual test runs.
 
 Native renderer failure evidence preserves the actual process exit code,
 symbolic code, diagnostic message and launch/artifact identities in
@@ -84,3 +79,7 @@ change to a required check must migrate its consumers together.
 Historical evidence formats, benchmark file paths and published identifiers
 are intentionally not renamed. This migration does not declare any old
 physical result verified for a new artifact.
+
+### Public evidence
+
+Keep raw evidence unchanged on the measurement host; publish an allowlisted, sanitized projection without user/host names, absolute paths, machine serials or raw audit logs. Identify the measured commit, bundle and available hashes, retain historical decisions and limitations, and never claim a redacted summary was independently reverified as the original raw evidence.

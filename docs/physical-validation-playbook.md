@@ -115,7 +115,9 @@ When evidence tooling changes, rebuild the bundle and perform a fresh physical
 run even if the native renderer EXE did not change. The validation tooling is
 part of the trusted measured closure.
 
-### Cold-start evidence has ordering requirements
+### Specialized startup investigations (not ordinary validation)
+
+Ordinary physical validation runs in the existing desktop session, without a reboot, process-creation audit, cache preparation, or separate cold/warm startup classification. Measure process startup timing as an observation. The following historical procedure applies only if an explicitly scoped startup investigation requires it.
 
 When a task requires qualified cold initialization, enable the required process
 creation audit before the run, reboot, and avoid launching the exact measured
@@ -191,14 +193,12 @@ only in a PR review comment or a task-specific script.
    driver/WDDM identity agree across the independent probes.
 6. Power plan, PCIe power management, clocks, power limit and temperature are
    observed rather than operator-invented.
-7. For cold-start qualification, audit prerequisites are enabled and the host
-   has been rebooted without launching the measured executable afterward.
+7. Ordinary validation requires no restart, audit or cache preparation. Use a specialized startup protocol only when specifically required by the investigation.
 8. The physical run uses a real display/Present path whenever the acceptance
    contract requires it.
 9. Evidence is written outside the immutable bundle and retains raw samples,
    exact artifact identities and the validator summary.
-10. A measured rejection remains a rejection; unavailable coverage remains
-    pending. Neither is rewritten as a pass.
+10. Preserve the measured historical decision. Under the active functional GPU policy, successful optional execution is positive; image differences and performance findings are independent, and unavailable or mismatched performance conditions are inconclusive. Never represent unexecuted coverage as a pass.
 
 These checks are a reusable baseline. Individual tasks may add stricter
 experiment-specific requirements, but should not weaken or fork this shared
@@ -207,3 +207,5 @@ physical-validation contract.
 ## Evolving the implementation
 
 See [ADR 0009](architecture/0009-validation-and-evidence-lifecycle.md). Historical evidence and versioned specifications retain their original identities; the current source and shared validation implementation may evolve. The active GPU experiment policy explicitly separates hosted headless WARP from physical presentation and reports distribution size without using it as an adoption gate.
+
+For public records, retain the original raw evidence privately and publish only sanitized, allowlisted projections of measurement data and artifact provenance. Do not publish host/user identifiers, absolute local paths, machine serials or raw Windows audit data. A sanitized summary cannot independently certify a different revision or replace the raw verification inputs.
