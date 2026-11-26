@@ -15,6 +15,7 @@ struct WindowConfig {
     bool visible = true;
     bool resizable = true;
     bool borderless = false;
+    bool maximized = false;
 };
 
 class Win32Window {
