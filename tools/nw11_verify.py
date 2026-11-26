@@ -95,7 +95,7 @@ def _validate_tracked(root: Path) -> dict[str, Any]:
     shader_contract = bundle.validate_variant_sources(root)
     decisions = {
         experiment_id: evidence.validate_decision_document(
-            _load_json(root / relative)
+            _load_json(root / relative), published=True
         )
         for experiment_id, relative in contract.DECISION_PATH_BY_ID.items()
     }
