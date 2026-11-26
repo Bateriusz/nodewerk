@@ -446,6 +446,15 @@ def _canonical_capture(root: Path, directory: Path, manifest: dict, common: dict
     return result
 
 
+def validate_canonical_capture(root: Path, directory: Path, manifest: dict,
+                               common: dict, protocol: dict) -> dict:
+    """Run the complete canonical image check before the expensive warm measurements.
+
+    Final aggregation repeats this check with all measured launch identities.
+    """
+    return _canonical_capture(root, directory, manifest, common, set(), _comparison_tool(), protocol)
+
+
 def _require_image(image: dict, label: str) -> None:
     if (image["max_abs_channel_error"] > contract.IMAGE_ABSOLUTE_TOLERANCE
             or image["rmse"] > contract.IMAGE_RMSE_TOLERANCE
