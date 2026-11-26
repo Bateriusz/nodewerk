@@ -9,6 +9,8 @@ from pathlib import Path
 import subprocess
 import uuid
 
+from hardware_evidence_host import run_windows_text
+
 PROCESS_CREATION_GUID = "{0cce922b-69ae-11d9-bed3-505054503030}"
 # Include the distributed roles and the original linking names to catch pre-runs.
 RENDERERS = ("common_baseline.exe", "optional_variant.exe", "fallback_common.exe",
@@ -19,6 +21,7 @@ RENDERERS = ("common_baseline.exe", "optional_variant.exe", "fallback_common.exe
 
 _QUERY = r"""
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 function Fields($event) {
     $fields = @{}
     foreach ($field in ([xml]$event.ToXml()).Event.EventData.Data) {
@@ -88,8 +91,8 @@ def observe() -> dict:
     system = Path(os.environ["SystemRoot"]) / "System32"
     powershell = system / "WindowsPowerShell/v1.0/powershell.exe"
     try:
-        result = subprocess.run([str(powershell), "-NoProfile", "-NonInteractive", "-Command", _QUERY],
-                                capture_output=True, text=True, check=True, timeout=35)
+        result = run_windows_text([str(powershell), "-NoProfile", "-NonInteractive", "-Command", _QUERY],
+                                  check=True, timeout=35)
         return {**json.loads(result.stdout), "process_creation_audit_flags": _audit_flags(system)}
     except (OSError, AttributeError, ValueError, subprocess.SubprocessError) as exc:
         return {"unavailable": str(exc)}
