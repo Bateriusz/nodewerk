@@ -787,6 +787,10 @@ def _audio_playback_source(audio: Mapping[str, Any]) -> str:
         static_cast<unsigned long long>(audio_output.starvation_observations()),
         static_cast<unsigned long long>(audio_output.clock_discontinuities()),
         static_cast<unsigned long long>(audio_output.synthesis_cpu_100ns()));
+    std::printf("AUDIO_OBSERVED_UNDERRUNS=%llu\\nAUDIO_MISSING_SAMPLES_LOWER_BOUND=%llu\\nAUDIO_PHYSICAL_UNDERRUNS=unavailable\\nAUDIO_SYNTHESIS_CPU_AVAILABLE=%u\\n",
+        static_cast<unsigned long long>(audio_output.observed_underruns()),
+        static_cast<unsigned long long>(audio_output.missing_samples_lower_bound()),
+        audio_output.synthesis_cpu_available() ? 1u : 0u);
     if (audio_output.failed()) return 81;
 """
 

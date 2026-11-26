@@ -3012,8 +3012,8 @@ bool ValidatePackage(const Package& package,
         AddDiagnostic(diagnostics, "package_audio_invalid", "invalid NWAS payload or flag",
                       std::string(kSectionAudio));
     }
-#elif !NW05_FROZEN_EMBEDDED_SPECIALIZATION
-    if (package.audio_song.has_value() || (package.flags & kAudioExtensionFlag)) {
+#else
+    if (package.flags & kAudioExtensionFlag) {
         AddDiagnostic(diagnostics, "package_audio_unsupported", "audio capability not linked");
     }
 #endif

@@ -95,7 +95,8 @@ def test_audio_manifest_and_generated_source_are_opt_in():
     audio_source = export.generate_player_source(manifest=audio, **kwargs)
     assert "WasapiOutput" not in silent_source
     assert "song_bytes[]" not in silent_source
-    assert "WasapiOutput" in audio_source and "song_bytes[]" in audio_source
+    assert "WasapiOutput" in audio_source and "player.package().audio_song" in audio_source
+    assert "song_hex" not in audio["audio"]
     assert "audio_output.now_ticks()" in audio_source
     with pytest.raises(export.ExportError):
         export._attach_audio_manifest({"timeline": {"duration_ticks": 1},
@@ -115,3 +116,49 @@ def test_studio_export_parser_accepts_audio():
     args = nw08_studio.build_parser().parse_args(
         ["export", "--output", "build/audio", "--audio-song", "song.json"])
     assert args.audio_song == "song.json"
+
+def test_package_audio_and_flash_compile(tmp_path):
+    import nw05_export as export
+    import nw03_compiler as compiler
+    import nw03_oracle as oracle
+    import nwp_package as nwp
+    graph = ROOT / "fixtures/audio/sync_flash.nwgraph"
+    document = compiler.load_graph(graph)
+    shaders, diagnostics = compiler.lower_to_fused_hlsl(document)
+    assert not diagnostics and shaders
+    source = next(s.root_expression for s in shaders if "48000" in s.root_expression)
+    for event in fixture()["events"]:
+        tick = event["tick"]
+        for delta, expected in ((0, 1.0), (800, 1.0), (3200, 0.0)):
+            value = oracle.evaluate_text(source, variables={"uv": (0.5, 0.5),
+                                                            "time": tick + delta, "seed": 0},
+                                         float32=True)
+            assert value[:3] == (expected,) * 3
+    result = export.export_graph(
+        graph, tmp_path / "export", allow_test_payloads=True,
+        settings=export.ExportSettings(audio_song_path=str(ROOT / "fixtures/audio/sync_song.json"),
+                                       byte_ceiling=64 * 1024 * 1024))
+    artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
+    decoded = nwp.decode_package(artifact.package_bytes)
+    assert decoded.version_minor == 2
+    assert decoded.audio_song == compile_song(fixture())
+    assert nwp.encode_package(decoded) == artifact.package_bytes
+    assert "AUDI" in export.section_sizes(artifact.package_bytes)
+    from dataclasses import replace
+    with pytest.raises(nwp.PackageValidationError):
+        nwp.encode_package(replace(decoded, audio_song=b"NWAS"))
+
+def test_pcm_header_and_duration(native_tools, tmp_path):
+    from audio_capture import validate_pcm, frame_ticks
+    song = tmp_path / "song.nwas"
+    song.write_bytes(compile_song(fixture()))
+    wav, plan = tmp_path / "audio.wav", tmp_path / "frames.csv"
+    subprocess.run([str(native_tools / "offline"), str(song), str(wav), str(plan)], check=True)
+    validate_pcm(wav, 192000)
+    assert len(frame_ticks(plan, 192000)) == 240
+    wav.write_bytes(wav.read_bytes()[:-2])
+    with pytest.raises(ValueError):
+        validate_pcm(wav, 192000)
+    plan.write_text("frame,tick,sample\n0,0,0\n")
+    with pytest.raises(ValueError):
+        frame_ticks(plan, 192000)

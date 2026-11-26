@@ -1,4 +1,5 @@
 #include "audio/procedural_audio.h"
+#include "audio/stream_progress.h"
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -20,6 +21,17 @@ int main() {
     }
     CHECK(!SampleToTick(1, 0, value));
     CHECK(!SampleToTick((std::numeric_limits<std::uint64_t>::max)(), 1, value));
+    StreamProgress progress{0, 480};
+    CHECK(progress.observe(480, 0, 480) == StreamAction::Continue);
+    CHECK(progress.observed_underruns == 0);
+    CHECK(progress.observe(600, 0, 480) == StreamAction::Recover);
+    CHECK(progress.observed_underruns == 1 && progress.missing_samples == 120);
+    progress.submitted_until = 1080;
+    CHECK(progress.observe(650, 430, 480) == StreamAction::Continue);
+    CHECK(progress.observe(649, 430, 480) == StreamAction::Discontinuity);
+    CHECK(progress.observe(1200, 1, 480) == StreamAction::Discontinuity);
+    CHECK(progress.observe(1200, 0, 480) == StreamAction::Recover);
+    CHECK(progress.observed_underruns == 2 && progress.missing_samples == 240);
     Song song{};
     song.duration_ticks = 2000;
     song.count = 1;

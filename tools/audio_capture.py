@@ -6,6 +6,9 @@ import csv
 import hashlib
 import json
 import subprocess
+import struct
+from audio_song import decode_song
+import nwp_package
 import tempfile
 from pathlib import Path
 
@@ -16,7 +19,7 @@ def sha256(path: Path) -> str:
             digest.update(block)
     return digest.hexdigest()
 
-def frame_ticks(plan: Path) -> list[int]:
+def frame_ticks(plan: Path, duration_ticks: int | None = None) -> list[int]:
     with plan.open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
     if not rows or len(rows) > 60 * 3600:
@@ -27,7 +30,20 @@ def frame_ticks(plan: Path) -> list[int]:
         if row != {"frame": str(index), "tick": str(tick), "sample": str(tick)}:
             raise ValueError("frame plan is not the canonical 60 fps, 48 kHz mapping")
         ticks.append(tick)
+    if duration_ticks is not None and ticks != list(range(0, duration_ticks, 800)):
+        raise ValueError("frame plan length differs from selected song")
     return ticks
+
+def validate_pcm(path: Path, duration_ticks: int) -> None:
+    # The canonical native writer emits exactly this PCM16 RIFF header.
+    size = duration_ticks * 2
+    expected = struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + size,
+                           b"WAVE", b"fmt ", 16, 1, 1, 48000, 96000,
+                           2, 16, b"data", size)
+    with path.open("rb") as stream:
+        header = stream.read(44)
+    if header != expected or path.stat().st_size != 44 + size:
+        raise ValueError("PCM WAV format, sample count or file length mismatch")
 
 def capture(offline: Path, host: Path, package: Path, song: Path,
             output: Path, *, width: int = 256, height: int = 256,
@@ -39,6 +55,10 @@ def capture(offline: Path, host: Path, package: Path, song: Path,
     output.parent.mkdir(parents=True, exist_ok=True)
     package, song, host, offline = (p.resolve(strict=True)
                                     for p in (package, song, host, offline))
+    payload = nwp_package.decode_package(package.read_bytes()).audio_song
+    if payload is None or payload != song.read_bytes():
+        raise ValueError("selected song does not match the package AUDI payload")
+    duration = decode_song(payload)["duration_ticks"]
     inputs = {key: sha256(value) for key, value in
               (("package", package), ("song", song), ("host", host), ("offline", offline))}
     with tempfile.TemporaryDirectory(prefix=".audio-capture-", dir=output.parent) as tmp:
@@ -48,7 +68,8 @@ def capture(offline: Path, host: Path, package: Path, song: Path,
         plan = root / "frames.csv"
         subprocess.run([str(offline), str(song), str(pcm), str(plan)],
                        check=True, timeout=timeout)
-        ticks = frame_ticks(plan)
+        validate_pcm(pcm, duration)
+        ticks = frame_ticks(plan, duration)
         if len(ticks) * width * height * 16 > 16 * 1024**3:
             raise ValueError("capture exceeds the bounded 16 GiB raw image budget")
         images = root / "images"

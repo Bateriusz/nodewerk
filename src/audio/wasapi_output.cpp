@@ -1,4 +1,5 @@
 #include "audio/wasapi_output.h"
+#include "audio/stream_progress.h"
 #include <windows.h>
 #include <audioclient.h>
 #include <mmdeviceapi.h>
@@ -39,6 +40,9 @@ bool WasapiOutput::start(const Song& song, std::uint64_t tick) {
     starvation_.store(0);
     discontinuities_.store(0);
     cpu_.store(0);
+    cpu_available_.store(true);
+    underruns_.store(0);
+    missing_.store(0);
     worker_ = CreateThread(nullptr, 0, &WasapiOutput::ThreadEntry, this, 0, nullptr);
     if (!worker_) { failed_.store(true); return false; }
     // Startup handshake only; never executed by the audio worker or callback.
@@ -103,7 +107,9 @@ void WasapiOutput::run() noexcept {
         FAILED(clock->GetPosition(&base_position, nullptr))) {
         fail(); return;
     }
+    std::uint64_t epoch_origin = origin_;
     std::uint64_t cursor = origin_;
+    StreamProgress progress{origin_, origin_};
     auto fill = [&](UINT32 frames) noexcept {
         if (!frames) return true;
         BYTE* data = nullptr;
@@ -113,40 +119,61 @@ void WasapiOutput::run() noexcept {
                                   reinterpret_cast<std::int16_t*>(data), frames);
         const auto after = CpuTime();
         if (before && after >= before) cpu_.fetch_add(after - before);
+        else cpu_available_.store(false);
         const auto hr = render->ReleaseBuffer(frames, ok ? 0u : AUDCLNT_BUFFERFLAGS_SILENT);
         if (!ok || FAILED(hr)) return false;
         cursor += frames;
+        progress.submitted_until = cursor;
         return true;
     };
     if (!fill(capacity) || FAILED(client->Start())) { fail(); return; }
     ready_.store(true);
-    std::uint64_t last = origin_;
+    auto clock_tick = [&](std::uint64_t& tick) noexcept {
+        UINT64 position = 0;
+        std::uint64_t elapsed = 0;
+        if (FAILED(clock->GetPosition(&position, nullptr)) || position < base_position ||
+            !SampleToTick(position - base_position, static_cast<std::uint32_t>(frequency), elapsed) ||
+            elapsed > (std::numeric_limits<std::uint64_t>::max)() - epoch_origin)
+            return false;
+        tick = epoch_origin + elapsed;
+        return true;
+    };
     while (!stop_.load()) {
         const DWORD wait = WaitForSingleObject(event.value, 10);
         if (wait != WAIT_OBJECT_0 && wait != WAIT_TIMEOUT) { fail(); break; }
-        UINT64 position = 0;
-        std::uint64_t elapsed = 0;
-        if (FAILED(clock->GetPosition(&position, nullptr))) { fail(); break; }
-        if (position < base_position ||
-            !SampleToTick(position - base_position, static_cast<std::uint32_t>(frequency), elapsed) ||
-            elapsed > (std::numeric_limits<std::uint64_t>::max)() - origin_) {
+        // Read padding first and the clock immediately afterwards; no frames
+        // are submitted between these observations. Sample even on timeout.
+        UINT32 padding = 0;
+        std::uint64_t tick = 0;
+        if (FAILED(client->GetCurrentPadding(&padding)) || !clock_tick(tick)) {
             discontinuities_.fetch_add(1); fail(); break;
         }
-        const auto tick = origin_ + elapsed;
-        if (tick < last) { discontinuities_.fetch_add(1); fail(); break; }
-        last = tick;
-        tick_.store(tick);
-        if (wait == WAIT_OBJECT_0) {
-            UINT32 padding = 0;
-            if (FAILED(client->GetCurrentPadding(&padding)) || padding > capacity) { fail(); break; }
-            if (!padding) {
-                starvation_.fetch_add(1);
-                // If playback advanced beyond the submitted samples, do not
-                // replay elapsed audio. Reconstruct from the actual clock.
-                if (tick > cursor) cursor = tick;
-            }
-            if (!fill(capacity - padding)) { fail(); break; }
+        if (!padding) starvation_.fetch_add(1);
+        const auto action = progress.observe(tick, padding, capacity);
+        if (action == StreamAction::Discontinuity) {
+            discontinuities_.fetch_add(1); fail(); break;
         }
+        tick_.store(tick);
+        if (action == StreamAction::Recover) {
+            // Stop the stream before choosing the new sample origin, so
+            // elapsed audio cannot be submitted under the old clock epoch.
+            if (FAILED(client->Stop()) || !clock_tick(tick) || tick < progress.last) {
+                discontinuities_.fetch_add(1); fail(); break;
+            }
+            if (tick > progress.submitted_until)
+                progress.missing_samples += tick - progress.submitted_until;
+            underruns_.store(progress.observed_underruns);
+            missing_.store(progress.missing_samples);
+            discontinuities_.fetch_add(1);
+            epoch_origin = tick;
+            cursor = tick;
+            progress.last = tick;
+            progress.submitted_until = tick;
+            tick_.store(tick);
+            if (FAILED(client->Reset()) ||
+                FAILED(clock->GetPosition(&base_position, nullptr)) ||
+                !fill(capacity) || FAILED(client->Start())) { fail(); break; }
+        } else if (!fill(capacity - padding)) { fail(); break; }
     }
     if (FAILED(client->Stop())) fail();
 }

@@ -304,7 +304,7 @@ struct Package {
     std::vector<ReleaseCheckpointRecord> release_checkpoints;
 #endif
     std::optional<std::vector<std::uint8_t>> dev_metadata;
-#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+#if NW_PACKAGE_AUDIO
     std::optional<std::vector<std::uint8_t>> audio_song;
 #endif
     std::uint32_t flags = 1u;

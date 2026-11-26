@@ -12,6 +12,12 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DependencyCheck.cmake")
 
 set(NW05_GENERATED_PLAYER_SOURCE "" CACHE FILEPATH
     "Generated NW-05 player main to compile into the specialized executable")
+option(NW_GENERATED_PLAYER_AUDIO "Link the selected generated player with audio" OFF)
+# Apply the package ABI selection consistently to all translation units in
+# a generated-player build. Never carry the optional reader in silent PE.
+if(NW05_GENERATED_PLAYER_SOURCE AND NOT NW_GENERATED_PLAYER_AUDIO)
+    add_compile_definitions(NW_PACKAGE_AUDIO=0)
+endif()
 option(NW05_COMPILE_WAVE_OPS_QUERY "Compile D3D12_OPTIONS1 wave-ops query support" ON)
 option(NW05_FROZEN_EMBEDDED_SPECIALIZATION
     "Specialize the generated player for a build-time-hashed embedded .nwp payload" OFF)
@@ -529,10 +535,6 @@ target_compile_features(nodewerkc PRIVATE cxx_std_20)
 # Optional audio targets. No source or link dependency is added to any silent
 # player. The fixture shares the existing PackagePlayer and clock boundary.
 option(NW_BUILD_AUDIO "Build the optional procedural audio targets" OFF)
-option(NW_GENERATED_PLAYER_AUDIO "Link the selected generated player with audio" OFF)
-if(TARGET nw05_generated_player AND NOT NW_GENERATED_PLAYER_AUDIO)
-    target_compile_definitions(nw_package_player PRIVATE NW_PACKAGE_AUDIO=0)
-endif()
 if(NW_GENERATED_PLAYER_AUDIO AND (NOT WIN32 OR NOT TARGET nw05_generated_player))
     message(FATAL_ERROR "Audio export requires a generated Windows player")
 endif()
@@ -553,8 +555,10 @@ if(NW_BUILD_AUDIO OR NW_GENERATED_PLAYER_AUDIO)
         if(NW_GENERATED_PLAYER_AUDIO)
             target_link_libraries(nw05_generated_player PRIVATE nw_wasapi_output)
         endif()
-        add_executable(nw_audio_player fixtures/audio/main.cpp)
-        target_link_libraries(nw_audio_player PRIVATE nw_wasapi_output nw_player_bootstrap nw_package_player_diagnostic gdi32)
-        nw_apply_player_profile(nw_audio_player)
+        if(NOT NW05_GENERATED_PLAYER_SOURCE OR NW_GENERATED_PLAYER_AUDIO)
+            add_executable(nw_audio_player fixtures/audio/main.cpp)
+            target_link_libraries(nw_audio_player PRIVATE nw_wasapi_output nw_player_bootstrap nw_package_player_diagnostic gdi32)
+            nw_apply_player_profile(nw_audio_player)
+        endif()
     endif()
 endif()

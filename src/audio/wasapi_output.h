@@ -19,6 +19,9 @@ public:
     std::uint32_t tick_rate() const noexcept override { return player::kTicksPerSecond; }
     bool failed() const noexcept { return failed_.load(); }
     std::uint64_t starvation_observations() const noexcept { return starvation_.load(); }
+    std::uint64_t observed_underruns() const noexcept { return underruns_.load(); }
+    std::uint64_t missing_samples_lower_bound() const noexcept { return missing_.load(); }
+    bool synthesis_cpu_available() const noexcept { return cpu_available_.load(); }
     std::uint64_t clock_discontinuities() const noexcept { return discontinuities_.load(); }
     std::uint64_t synthesis_cpu_100ns() const noexcept { return cpu_.load(); }
 private:
@@ -29,5 +32,7 @@ private:
     HANDLE worker_ = nullptr;
     std::atomic<bool> stop_{false}, failed_{false}, ready_{false};
     std::atomic<std::uint64_t> tick_{0}, starvation_{0}, discontinuities_{0}, cpu_{0};
+    std::atomic<std::uint64_t> underruns_{0}, missing_{0};
+    std::atomic<bool> cpu_available_{true};
 };
 }

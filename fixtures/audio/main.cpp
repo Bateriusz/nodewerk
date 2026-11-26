@@ -7,22 +7,18 @@
 #include <windows.h>
 
 int main(int argc, char** argv) {
-    if (argc != 3) {
-        std::fprintf(stderr, "Usage: nw_audio_player scene.nwp song.nwas\n");
+    if (argc != 2) {
+        std::fprintf(stderr, "Usage: nw_audio_player scene.nwp\n");
         return 10;
     }
-    std::array<std::uint8_t, 20 + 20 * nw::audio::kMaxEvents + 1> bytes{};
-    std::ifstream input(argv[2], std::ios::binary);
-    if (!input) return 70;
-    input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-    nw::audio::Song song{};
-    if (input.bad() || !nw::audio::DecodeSong(bytes.data(),
-                static_cast<std::size_t>(input.gcount()), song)) return 70;
     nw::player::PlayerConfig config;
     config.window_title = "Nodewerk audio playback";
     nw::player::PackagePlayer player(config);
     auto status = player.initializeFromFile(argv[1]);
     if (status != nw::player::ExitCode::Success) return static_cast<int>(status);
+    const auto& payload = player.package().audio_song;
+    nw::audio::Song song{};
+    if (!payload || !nw::audio::DecodeSong(payload->data(), payload->size(), song)) return 70;
     nw::audio::WasapiOutput output;
     if (!output.start(song)) {
         std::fprintf(stderr, "NW_AUDIO_INITIALIZATION_FAILED\n");
@@ -40,6 +36,10 @@ int main(int argc, char** argv) {
         static_cast<unsigned long long>(output.starvation_observations()),
         static_cast<unsigned long long>(output.clock_discontinuities()),
         static_cast<unsigned long long>(output.synthesis_cpu_100ns()));
+    std::printf("AUDIO_OBSERVED_UNDERRUNS=%llu\nAUDIO_MISSING_SAMPLES_LOWER_BOUND=%llu\nAUDIO_PHYSICAL_UNDERRUNS=unavailable\nAUDIO_SYNTHESIS_CPU_AVAILABLE=%u\n",
+        static_cast<unsigned long long>(output.observed_underruns()),
+        static_cast<unsigned long long>(output.missing_samples_lower_bound()),
+        output.synthesis_cpu_available() ? 1u : 0u);
     if (output.failed()) return 81;
     if (status != nw::player::ExitCode::Success) return static_cast<int>(status);
     return static_cast<int>(player.shutdown());
