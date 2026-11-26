@@ -289,7 +289,7 @@ DEVICE_TIERS = {
     "desktop_ada_representative": {
         "architecture": "Ada",
         "representative_model": "NVIDIA GeForce RTX 4060 Ti",
-        "device_key": "pci:10de:2805",
+        "device_key": "pci:10de:2803",
     },
     "desktop_blackwell_representative": {
         "architecture": "Blackwell",
