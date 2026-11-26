@@ -321,9 +321,15 @@ The bundle manifest also enforces zero-cost stripping:
 ### One-command physical validation
 
 Run the bundle from an interactive Windows 11 x64 session with PowerShell 7 and
-permission to collect PresentMon ETW events. Use an SDR desktop that can show
-the entire 1920×1080 client area at native scale. The release capture reads the
-visible window, and desktop overlays or occlusion affect the comparison.
+permission to collect PresentMon ETW events. A Full HD SDR primary monitor is
+sufficient: the validation launcher requests a native-pixel borderless client
+before rendering the reference scene. It does not require an oversized desktop,
+manual resizing, or ordinary window maximization. Keep the session unlocked and
+visible; disable overlays and automatic display sleep during measurement. On a
+larger primary monitor the fixed 1920×1080 validation client is centered rather
+than stretched. A smaller monitor cannot supply the full native display proof.
+GPU source-image comparisons are independent of the ordinary window size;
+only the separate composed-display proof requires the native visible client.
 
 From the authenticated GitHub Actions run for the tested commit, download the
 validation bundle and its separate `nw11-validation-trust-*` artifact. Run
@@ -390,12 +396,22 @@ covered by the independent same-revision reproducibility proof. It explicitly
 selects the probe-qualified LUID using the shared `NODEWERK_ADAPTER_LUID`
 mechanism, and verifies the actual DXGI adapter reported by the release.
 The default first-compatible adapter may differ on multi-GPU hosts. It uses the release fixed-tick
-`--tick N --frames 1` interface. The capture probe uses a DWM composition
+`--tick N --frames 1 --borderless` interface. Both generated player profiles
+support `--maximized` for ordinary Windows maximization and `--borderless` for
+a native client without chrome. The latter fills a Full HD monitor; ordinary
+maximization retains the title bar and work-area policy and is not equivalent.
+Neither option changes the authored source resolution. Capture controls remain
+stripped from the production release. After first-use startup launches and the
+reboot audit, the launcher completes and validates the canonical comparison
+before starting the long warm benchmark sequence. The capture probe uses a DWM composition
 flush and the visible foreground client pixels to observe the held frame within
 the startup ceiling. It recognizes the scene using sample pixels and records
 the target PID and observation timestamp. The verifier checks the complete
 normalized SDR frame against a separately linked NW-07 package reference and
-checks the release's successful fixed-tick marker.
+checks the release's successful fixed-tick marker. A failed observation records
+its stage, foreground PID, client geometry, monitor bounds, best anchor error
+and timing where available in the per-tick display JSON; it never substitutes
+reference pixels for an unobserved release frame.
 [Microsoft DwmFlush](https://learn.microsoft.com/windows/win32/api/dwmapi/nf-dwmapi-dwmflush)
 
 The verifier checks the numeric scene state and retained pixels at the
@@ -486,7 +502,8 @@ the canonical NW-07 256 KiB size target remains specific to its own proof. Neith
 All player targets compile the current shared `src/player/package_player.cpp`
 directly. The Win32 layer uses actual client geometry, and physical GPU
 experiment windows use the borderless policy; ordinary player users retain
-their ordinary window policy. Do not generate or maintain a task-local
+their ordinary window policy unless they explicitly select `--maximized` or
+`--borderless`. Do not generate or maintain a task-local
 copy of a historically pinned player.
 
 New consumers should use the functional shared modules documented in ADR
