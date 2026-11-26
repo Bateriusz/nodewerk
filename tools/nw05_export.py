@@ -277,7 +277,7 @@ def canonical_profile_identity(
 
 def emitted_requirements(package: nwp.NwpPackage) -> dict[str, Any]:
     capability = package.capability
-    return {
+    payload = {
         "profile_id": capability.profile_id,
         "requirements_digest": capability.requirements_digest,
         "optional_profile_id": capability.optional_profile_id,
@@ -314,6 +314,12 @@ def emitted_requirements(package: nwp.NwpPackage) -> dict[str, Any]:
         "toolchain_identity": capability.toolchain_identity,
         "toolchain_dxc_version": capability.toolchain_dxc_version,
     }
+    if package.audio_song is not None:
+        payload["audio_capability"] = {
+            "format": "NWAS", "version": 1, "clock": "wasapi_endpoint",
+            "song_sha256": hashlib.sha256(package.audio_song).hexdigest(),
+        }
+    return payload
 
 
 def artifact_key(profile_id: str, requirements_digest: str, requirements: Mapping[str, Any]) -> str:
@@ -801,6 +807,9 @@ def _audio_playback_source(audio: Mapping[str, Any]) -> str:
         static_cast<unsigned long long>(audio_output.observed_underruns()),
         static_cast<unsigned long long>(audio_output.missing_samples_lower_bound()),
         audio_output.synthesis_cpu_available() ? 1u : 0u);
+    std::printf("AUDIO_WORKER_CPU_100NS=%llu\\nAUDIO_WORKER_CPU_AVAILABLE=%u\\n",
+        static_cast<unsigned long long>(audio_output.worker_cpu_100ns()),
+        audio_output.worker_cpu_available() ? 1u : 0u);
     if (audio_output.failed()) return 81;
 #endif
 """
@@ -1068,6 +1077,7 @@ def generate_player_source(
         "    std::printf(\"NW05_LINK_MANIFEST_VERIFIED=1\\n\");\n"
         "    std::printf(\"NW05_RUNTIME_IMPLEMENTATION_MASK=%u\\n\", nw::player::PackagePlayer::specialized_implementation_mask());\n"
         "    nw::player::PlayerConfig config;\n"
+        + ("    config.allow_audio_package = true;\n" if manifest.get("audio") else "") +
         "    config.window_title = \"Nodewerk NW-05 Procedural Image\";\n"
         f"    config.width = {int(width)}u;\n"
         f"    config.height = {int(height)}u;\n"

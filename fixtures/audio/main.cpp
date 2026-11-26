@@ -12,6 +12,7 @@ int main(int argc, char** argv) {
         return 10;
     }
     nw::player::PlayerConfig config;
+    config.allow_audio_package = true;
     config.window_title = "Nodewerk audio playback";
     nw::player::PackagePlayer player(config);
     auto status = player.initializeFromFile(argv[1]);
@@ -40,6 +41,9 @@ int main(int argc, char** argv) {
         static_cast<unsigned long long>(output.observed_underruns()),
         static_cast<unsigned long long>(output.missing_samples_lower_bound()),
         output.synthesis_cpu_available() ? 1u : 0u);
+    std::printf("AUDIO_WORKER_CPU_100NS=%llu\nAUDIO_WORKER_CPU_AVAILABLE=%u\n",
+        static_cast<unsigned long long>(output.worker_cpu_100ns()),
+        output.worker_cpu_available() ? 1u : 0u);
     if (output.failed()) return 81;
     if (status != nw::player::ExitCode::Success) return static_cast<int>(status);
     return static_cast<int>(player.shutdown());

@@ -946,6 +946,7 @@ class StudioWindow:
             self.status.configure(text=f"Audio playback failed: {exc}")
 
     def preview(self) -> None:
+        self.stop_audio()
         token = self.dispatcher.request(self.application.session.timeline_tick)
         if token is None:
             self.status.configure(
@@ -1031,6 +1032,7 @@ class StudioWindow:
         self._schedule_preview_poll()
 
     def apply_budget(self) -> None:
+        self.stop_audio()
         try:
             self.application.configure_gpu_cache_budget(int(self.budget_entry.get()))
         except (ValueError, RuntimeError) as exc:
@@ -1236,7 +1238,8 @@ def run_gui(
     try:
         root.mainloop()
     finally:
-        window.stop_audio()
+        # The Tk widgets are already destroyed; close the native process
+        # directly (quit stops audio before retirement), not UI callbacks.
         window.dispatcher.cancel()
         window.application.close()
     return 0

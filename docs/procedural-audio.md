@@ -14,7 +14,7 @@ submitted frontier with an empty queue is an observed stream-coordinate gap:
 stop/reset/restart at the fresh absolute tick, preserving monotonic time, and report
 the gap count, missing-sample lower bound and discontinuity. Contradictory or
 backward clock observations fail explicitly. Exact audible glitch telemetry is
-unavailable; synthesis CPU time is reported in 100 ns units with availability.
+unavailable; synthesis and complete worker CPU time are reported in 100 ns units with availability.
 
 ## Use
 
@@ -46,6 +46,9 @@ roundtrip, fixture compile/oracle transitions, and controlled capture. The exist
 mandatory Windows real-export gate builds independent silent and audio-enabled
 PEs, validates link commands, sections/imports and native package decoding, and
 builds/runs the native contract without an audio endpoint or windowed Present.
+The existing Windows 2025 runtime transfer gate checks actual headless WARP
+image readback hashes at song onsets and after each flash; this is not physical
+alignment evidence.
 A nonshipping synthesis-only link probe measures marginal synthesis/reader and
 WASAPI output PE costs, preserving signed linker/alignment effects. The JSON report
 is published with the existing runtime-smoke build inputs. The exact physical

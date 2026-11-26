@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import shutil
+import re
+import struct
 from dataclasses import replace
 from pathlib import Path
 import dependency_check
@@ -76,6 +79,7 @@ def validate(template: Path, dxc: str, root: Path) -> dict:
     # Build native Windows targets from the actual audio-enabled configuration.
     subprocess.run(["cmake", "--build", str(audio_build), "--target",
                     "nw_audio_contract", "nw_audio_offline", "nw_audio_player", "nodewerkc",
+                    "nw_package_player_fixture",
                     "--parallel", "2"], check=True)
     subprocess.run([str(audio_build / "nw_audio_contract.exe")], check=True)
     native = subprocess.run([str(audio_build / "nodewerkc.exe"), "inspect",
@@ -96,6 +100,17 @@ def validate(template: Path, dxc: str, root: Path) -> dict:
     assert "src/audio/procedural_audio.cpp" in commands and "src/audio/wasapi_output.cpp" not in commands
     s, a, p = pe_summary(silent_exe), pe_summary(audio_exe), pe_summary(probe_path)
     song_bytes = len(audio.package.audio_song)
+    # Transfer only the current-head headless diagnostic inputs, via the
+    # existing build/runtime split and its SHA-bound transfer manifest.
+    runtime = root / "headless-runtime"
+    runtime.mkdir()
+    shutil.copy2(audio_build / "nw_package_player_fixture.exe", runtime / "player.exe")
+    shutil.copy2(audio_exe.parent / "common.nwp", runtime / "audio.nwp")
+    (runtime / "identity.json").write_text(json.dumps({
+        "package_sha256": _hash(audio.package_bytes),
+        "fixture_sha256": _hash((runtime / "player.exe").read_bytes()),
+        "width": 256, "height": 256,
+    }, sort_keys=True), encoding="utf-8")
     # Raw file-size deltas include alignment and optimizer interactions;
     # do not misrepresent these as additive per-symbol sizes.
     return {
@@ -117,3 +132,36 @@ def validate(template: Path, dxc: str, root: Path) -> dict:
         "physical_cpu_and_alignment": "pending_physical_measurement",
         "attribution_method": "matched marginal PE raw sizes including linker padding and optimizer effects",
     }
+
+def validate_runtime(root: Path) -> dict:
+    identity = json.loads((root / "identity.json").read_text(encoding="utf-8"))
+    package, player = root / "audio.nwp", root / "player.exe"
+    assert _hash(package.read_bytes()) == identity["package_sha256"]
+    assert _hash(player.read_bytes()) == identity["fixture_sha256"]
+    from audio_song import decode_song
+    song = decode_song(nwp.decode_package(package.read_bytes()).audio_song)
+    width, height = identity["width"], identity["height"]
+    def fnv(level):
+        value = 1469598103934665603
+        for byte in struct.pack("<4f", level, level, level, 1.0) * (width * height):
+            value = ((value ^ byte) * 1099511628211) & 0xffffffffffffffff
+        return f"{value:016x}"
+    white, black = fnv(1.0), fnv(0.0)
+    observations = []
+    base = [str(player), "--package", str(package), "--headless",
+            "--allow-software-adapter", "--width", str(width), "--height", str(height),
+            "--frames", "1", "--emit-image-hash"]
+    # Without explicit offline admission, reject the audio package before
+    # any adapter or window initialization.
+    rejected = subprocess.run(base, capture_output=True, text=True, timeout=120)
+    assert rejected.returncode == 70, rejected.stdout + rejected.stderr
+    for event in song["events"]:
+        for offset, expected in ((0, white), (3200, black)):
+            tick = event["tick"] + offset
+            run = subprocess.run(base + ["--audio-offline", "--tick-start", str(tick)],
+                                 capture_output=True, text=True, timeout=120, check=True)
+            match = re.search(r"NW_PLAYER_IMAGE_FNV64=([0-9a-f]{16})", run.stdout)
+            assert match and match.group(1) == expected, run.stdout + run.stderr
+            observations.append({"tick": tick, "fnv64": match.group(1)})
+    return {"status": "verified_headless_image_mapping", "observations": observations,
+            "physical_alignment": "not_measured"}

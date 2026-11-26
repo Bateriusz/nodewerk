@@ -20,11 +20,12 @@ struct EventHandle {
     HANDLE value = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     ~EventHandle() { if (value) CloseHandle(value); }
 };
-std::uint64_t CpuTime() noexcept {
+bool CpuTime(HANDLE thread, std::uint64_t& result) noexcept {
     FILETIME create{}, exit{}, kernel{}, user{};
-    if (!GetThreadTimes(GetCurrentThread(), &create, &exit, &kernel, &user)) return 0;
-    return ((std::uint64_t(kernel.dwHighDateTime) << 32) | kernel.dwLowDateTime) +
-           ((std::uint64_t(user.dwHighDateTime) << 32) | user.dwLowDateTime);
+    if (!GetThreadTimes(thread, &create, &exit, &kernel, &user)) return false;
+    result = ((std::uint64_t(kernel.dwHighDateTime) << 32) | kernel.dwLowDateTime) +
+             ((std::uint64_t(user.dwHighDateTime) << 32) | user.dwLowDateTime);
+    return true;
 }
 }
 WasapiOutput::~WasapiOutput() { stop(); }
@@ -41,6 +42,8 @@ bool WasapiOutput::start(const Song& song, std::uint64_t tick) {
     discontinuities_.store(0);
     cpu_.store(0);
     cpu_available_.store(true);
+    worker_cpu_available_.store(false);
+    worker_cpu_.store(0);
     underruns_.store(0);
     missing_.store(0);
     worker_ = CreateThread(nullptr, 0, &WasapiOutput::ThreadEntry, this, 0, nullptr);
@@ -58,6 +61,9 @@ void WasapiOutput::stop() noexcept {
     stop_.store(true);
     if (worker_) {
         WaitForSingleObject(worker_, INFINITE);
+        std::uint64_t total = 0;
+        worker_cpu_available_.store(CpuTime(worker_, total));
+        worker_cpu_.store(total);
         CloseHandle(worker_);
         worker_ = nullptr;
     }
@@ -114,11 +120,13 @@ void WasapiOutput::run() noexcept {
         if (!frames) return true;
         BYTE* data = nullptr;
         if (FAILED(render->GetBuffer(frames, &data))) return false;
-        const auto before = CpuTime();
+        std::uint64_t before = 0, after = 0;
+        const bool before_available = CpuTime(GetCurrentThread(), before);
         const bool ok = RenderPcm(song_, {}, cursor,
                                   reinterpret_cast<std::int16_t*>(data), frames);
-        const auto after = CpuTime();
-        if (before && after >= before) cpu_.fetch_add(after - before);
+        const bool after_available = CpuTime(GetCurrentThread(), after);
+        if (before_available && after_available && after >= before)
+            cpu_.fetch_add(after - before);
         else cpu_available_.store(false);
         const auto hr = render->ReleaseBuffer(frames, ok ? 0u : AUDCLNT_BUFFERFLAGS_SILENT);
         if (!ok || FAILED(hr)) return false;

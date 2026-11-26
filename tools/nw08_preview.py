@@ -1967,7 +1967,11 @@ class WindowsRuntimePreviewBackend:
 
     def audio_command(self, command: str) -> dict[str, Any]:
         with self._lock:
-            return self._session.audio_command(command)
+            try:
+                return self._session.audio_command(command)
+            except RuntimeError:
+                self._prepared_key = ""
+                raise
 
     def _append_measured_timings(
         self, timings: list[PassTiming], stats: Mapping[str, Any]

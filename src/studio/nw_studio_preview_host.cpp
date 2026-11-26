@@ -632,6 +632,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     nw::player::PlayerConfig config;
+    config.allow_audio_package = true; // explicit authoring/capture consumer
     config.width = options.width;
     config.height = options.height;
     config.headless = options.headless;

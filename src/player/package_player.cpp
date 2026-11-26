@@ -6813,6 +6813,14 @@ ExitCode PackagePlayer::initialize(const package::Package& pkg) {
     frames_in_flight_ =
         std::clamp(config_.frames_in_flight, 1u, kMaxFramesInFlight);
 
+#if NW_PACKAGE_AUDIO
+    if (package_.audio_song.has_value() && !config_.allow_audio_package) {
+        return Fail(ExitCode::PackageValidationFailed, "package_validation",
+                    "audio_transport_required", "AUDI", "explicit audio consumer",
+                    "not enabled", "package_contract",
+                    "audio packages require an audio transport or offline capture");
+    }
+#endif
     if ((package_.flags & 1u) == 0u) {
         return Fail(ExitCode::PackageValidationFailed, "package_validation",
                     "package_release_flag_required", "release_flag", "1",

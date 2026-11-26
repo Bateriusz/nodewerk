@@ -152,6 +152,8 @@ def test_real_pe_export_is_byte_identical_in_clean_directories(
     if runtime_input:
         assert os.name == "nt"
         _run_real_pe_runtime_bundle(Path(runtime_input))
+        from audio_export_validation import validate_runtime
+        validate_runtime(Path(runtime_input) / "audio-headless-runtime")
         return
 
     template_value = os.environ.get("NW05_REAL_PLAYER_TEMPLATE", "")
@@ -364,4 +366,5 @@ def test_nw12_real_audio_and_silent_export_closure(tmp_path):
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n",
                                encoding="utf-8")
+        shutil.copytree(tmp_path / "audio-link/headless-runtime", Path(output) / "audio-headless-runtime")
     assert report["independent_rebuilds"] == {"silent": True, "audio": True}
