@@ -4720,7 +4720,10 @@ def decode_package(
                 "stateful extension flag does not match HIST/CKPT section presence",
             )
         )
-    audio_payload = payloads.get(SECTION_AUDIO)
+    audio_view = payloads.get(SECTION_AUDIO)
+    # The package reader uses memoryviews for bounded parsing. The model owns
+    # immutable bytes, as required by the NWAS decoder and canonical encoder.
+    audio_payload = bytes(audio_view) if audio_view is not None else None
     audio_present = audio_payload is not None
     if audio_present != bool(flags & AUDIO_EXTENSION_FLAG) or audio_present != (minor == VERSION_MINOR_AUDIO):
         raise PackageValidationError(package_diagnostic(

@@ -149,7 +149,10 @@ def test_package_audio_and_flash_compile(tmp_path, test_dxc):
     artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
     decoded = nwp.decode_package(artifact.package_bytes)
     assert decoded.version_minor == 2
+    assert isinstance(decoded.audio_song, bytes)
     assert decoded.audio_song == compile_song(fixture())
+    from audio_song import decode_song
+    assert decode_song(decoded.audio_song) == fixture()
     assert nwp.encode_package(decoded) == artifact.package_bytes
     assert "AUDI" in export.section_sizes(artifact.package_bytes)
     from dataclasses import replace
