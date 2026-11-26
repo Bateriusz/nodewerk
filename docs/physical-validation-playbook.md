@@ -55,6 +55,18 @@ output rather than translated friendly names. For example, power-plan and PCIe
 power parsing must key off GUIDs/hex values, not the localized labels printed
 next to them.
 
+### NVIDIA telemetry layouts can change between driver generations
+
+Do not bind physical validation to one exact `nvidia-smi -q -x` XML nesting when
+NVIDIA documents a field migration. Driver 610+ moved GPU power-limit fields
+under the GPU Ceiling Power Limit subsection while retaining legacy XML
+locations only temporarily.
+
+Parsers must accept the documented old/new nesting for the same semantic signal,
+while preserving the distinction between the currently enforced/current ceiling
+and merely requested/default limits. Missing current/enforced telemetry remains
+unavailable; do not promote a default/requested value to measured current state.
+
 ### Hardware identifiers have multiple textual representations
 
 NVIDIA and Windows tools do not guarantee the same hexadecimal spelling.
