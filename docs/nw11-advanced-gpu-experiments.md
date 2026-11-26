@@ -2,10 +2,11 @@
 
 NW-11 evaluates optional GPU features only through bounded, costed
 experiments layered on the completed NW-07 graph-derived production/export
-path. It starts from immutable base
+path. Its historical implementation starting point was
 `dc8edbafc3f5928861f14b0fbb932f7d42e81c8b`; the older planning base is
 provenance only. NW-01A issue records are accepted as prerequisite completion,
 and NW-01B experiment/evidence semantics are reused rather than replaced.
+The current implementation follows [ADR 0009](architecture/0009-validation-and-evidence-lifecycle.md) and the [physical-validation playbook](physical-validation-playbook.md). Milestones are not code-ownership boundaries: shared implementations may evolve while historical evidence and versioned specifications retain their identity.
 
 The initial implementation deliberately contains **exactly two experiments**:
 
@@ -27,13 +28,13 @@ The common profile is inherited unchanged from NW-01/NW-03..NW-07:
 | Requirements digest | `sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a` |
 | API | D3D12 Feature Level 12_0, shader model 6_0 |
 | Fallback | none (this *is* the common artifact profile) |
-| Distribution size | Gated at 262,144 complete bytes and 0 incremental bytes |
+| Distribution size | Report-only for active v2 GPU experiments; explicit canonical proof limits apply to that proof only |
 | Evidence status | `pending` until RTX 4060 Ti and RTX 5070 Ti common-artifact correctness is physically verified |
 
 The common requirements digest is the **inherited NW-07 identity**
 `sha256:v1:d2c53aea…`. It is not re-hashed from the NW-11 presentation of the
 same requirements; `nw11_capability.compute_requirements_digest` returns that
-frozen identity for the common profile and a content hash for optional
+historical requirements identity for the unchanged common profile and a content hash for optional
 profiles. Both the published profiles and `profile_manifest_template` are
 validated against the same rule, so the template cannot generate a profile the
 validator rejects.
@@ -56,7 +57,7 @@ Every profile document (`benchmarks/nw11/profiles/`) declares:
 - accepted values and shader-model order;
 - toolchain/runtime requirements, including the Agility SDK decision;
 - complete dependency ledger with optional/counted flags;
-- artifact budget and fallback artifact identity;
+- distribution-cost fields (historical ceilings retained for v1) and fallback artifact identity;
 - device coverage status for the two representative desktop tiers;
 - pass/fail/pending/unsupported evidence status.
 
@@ -92,7 +93,7 @@ and none triggers a silent effect substitution.
 
 For optional profiles the requirements digest is `sha256:v1:` over canonical
 JSON of the profile ID, profile kind, exact query descriptors, shader targets,
-and frozen runtime/toolchain requirements. Device names, budgets, fallback
+and versioned runtime/toolchain requirements. Device names, budgets, fallback
 paths, and evidence status are intentionally excluded. The common profile uses
 the inherited NW-07 identity described above.
 
@@ -109,17 +110,16 @@ the inherited NW-07 identity described above.
 - No DLSS, RTX Kit, model weights, CUDA, vendor neural SDK, or runtime shader
   compiler is part of any NW-11 artifact.
 
-## 2. Frozen experiments
+## 2. Versioned experiment definitions
 
-Definitions live in `benchmarks/nw11/experiments/`. Each is marked
-`status: frozen` before measurement and records:
+The active definitions are `mesh-shader-vs-indexed.v2.json` and `ray-query-vs-analytic.v2.json` in `benchmarks/nw11/experiments/`. The v1 definitions remain historical specifications. Fix the selected inputs and protocol for each measurement, not the shared implementation for future tasks. The active definitions record:
 
-- base graph `fixtures/nw07/production_loop.nwgraph` with the frozen SHA-256
+- base graph `fixtures/nw07/production_loop.nwgraph` with the recorded SHA-256
   `093b8429…b7091`;
 - 256 seeded torus instances, 1920×1080, 960,000 ticks / 20 s / 60 Hz;
 - quality profile `nw07.quality.v1`, capture protocol
-  `nw07-correctness-capture.v1`, performance contract `nw07_perf_ref_v1`, and
-  protocol `nw07-perf-run.v1`;
+  `nw07-correctness-capture.v1`, and protocol `nw07-perf-run.v1`;
+  historical `nw07_perf_ref_v1` lineage is not an absolute v2 performance gate;
 - warm-up 5 s, 3 fresh processes, 60 s per run, ≥600 raw samples per run,
   nearest-rank p99, no application pipeline cache;
 - at least 10% lower p99 GPU time at matched quality, independently per
@@ -127,14 +127,14 @@ Definitions live in `benchmarks/nw11/experiments/`. Each is marked
 - end-to-end frame-time, CPU-submit, shader-count,
   cold-initialization, and VRAM guardrails;
 - a fixed-quality image criterion (`max_abs_channel_error <= 1e-4`,
-  `RMSE <= 1e-4`) at frozen fixed ticks;
-- actual complete and incremental distribution sizes against the declared
-  complete/incremental byte ceilings, and shader-count guardrails;
+  `RMSE <= 1e-4`) at predeclared fixed ticks;
+- actual complete and incremental distribution sizes (report-only in v2),
+  and active shader-count guardrails;
 - the fallback artifact identity and execution arguments.
 
 ### 2.0 End-to-end implementation
 
-`src/nw11` builds one renderer harness with four separately linked artifacts:
+`src/nw11` builds one experiment harness and six separately linked renderer artifacts. All targets compile the current shared `src/player/package_player.cpp` and shared runtime translation units; optional GPU paths are build-selected:
 
 | Artifact | Pipeline | Optional payload |
 |---|---|---|
@@ -146,7 +146,7 @@ Definitions live in `benchmarks/nw11/experiments/`. Each is marked
 | `nw11_optional_ray.exe` | indexed/instanced raster + `ps_6_5` inline ray query | DXR shader and BLAS/TLAS build code |
 
 `tools/nw11_graph_scene.py` lowers `fixtures/nw07/production_loop.nwgraph`
-into generated C++ constants. The harness runs the frozen NW-06
+into generated C++ constants. The harness runs the shared production
 initialization compute shaders (`generate`, `instances`, `material`, `camera`,
 `light`) to produce the torus vertex/index buffers, instance table, material,
 camera curve, and light, then renders all variants from those same buffers.
@@ -163,9 +163,9 @@ rather than silently measuring a different GPU.
 Every command list binds the shader-visible descriptor heap before any root
 descriptor table is used. The conventional scene path consumes the generated
 `DRAW_INDEXED_INSTANCED` argument record through `ExecuteIndirect`; the mesh
-path uses `DispatchMesh`. Both arms then execute the frozen NW-06 post chain
+path uses `DispatchMesh`. Both arms then execute the shared production post chain
 (half-resolution bloom, ACES tonemap to the RGBA32F present resource, display
-conversion) and present through a flip-discard swap chain. Post settings,
+conversion). Physical runs present through a flip-discard swap chain; hosted CI exercises the headless WARP command path without Present. Post settings,
 exposure, gamma, and the canonical production-contract digest are generated
 from `benchmarks/nw07/canonical-production.v1.json`, not duplicated literals.
 The measured executables use the static MSVC CRT so a clean validation machine
@@ -174,7 +174,7 @@ DXC/MSVC/SDK/CMake identities, SHA-256 identities for every compiled
 DXIL/header payload, and the PE import DLL set in the bundle.
 
 The CMake project compiles every shader offline with the pinned DXC
-(`as_6_5`, `ms_6_5`, `ps_6_5`, and the frozen `cs_6_0`/`vs_6_0`/`ps_6_0`
+(`as_6_5`, `ms_6_5`, `ps_6_5`, and the common `cs_6_0`/`vs_6_0`/`ps_6_0`
 payloads). Compile-time `NW11_VARIANT_*` definitions select exactly one
 optional pipeline per executable, so the common and fallback artifacts do not
 link mesh or DXR code, shaders, or payload headers.
@@ -188,7 +188,7 @@ link mesh or DXR code, shaders, or payload headers.
 - Variant: `as_6_5` amplification + `ms_6_5` mesh stages under
   `shaders/nw11/mesh/`, sharing the common fragment stage and all NW-07
   instance/camera/material/light buffers.
-- The mesh stage consumes the vertex buffer generated by the frozen NW-06
+- The mesh stage consumes the vertex buffer generated by the shared production
   initialization dispatch. Segment counts and radii arrive through
   graph-derived root constants; the shader does not reconstruct a hard-coded
   torus, so a graph parameter change cannot silently drift from the workload.
@@ -204,8 +204,7 @@ link mesh or DXR code, shaders, or payload headers.
 - Synchronization: `SetMeshOutputCounts` and
   `GroupMemoryBarrierWithGroupSync()` are declared and enforced by static
   bundle checks.
-- Shader-count increment ≤ 2; complete distribution ≤ 262,144 bytes;
-  incremental distribution ≤ 32,768 bytes.
+- Shader-count increment ≤ 2; complete and incremental distribution bytes are reported. The historical v1 ceilings (262,144 and 32,768 bytes) do not gate v2 adoption.
 
 ### 2.2 DXR ray queries versus analytic reflection
 
@@ -222,11 +221,10 @@ link mesh or DXR code, shaders, or payload headers.
   The analytic baseline solves the intersection with the tangent plane at the
   raster sample. The DXR arm selects warm reflected radiance for a committed
   triangle and the analytic sky for a miss. Both outcomes affect the presented
-  image at the frozen `1e-4` tolerance.
+  image at the predeclared `1e-4` tolerance.
 - The acceleration structure and all bound buffers must outlive the frame
   command list; BLAS/TLAS build work is fenced before shading.
-- Shader-count increment ≤ 1; complete distribution ≤ 262,144 bytes;
-  incremental distribution ≤ 65,536 bytes.
+- Shader-count increment ≤ 1; complete and incremental distribution bytes are reported. The historical v1 ceilings (262,144 and 65,536 bytes) do not gate v2 adoption.
 - Missing DXR capability is explicitly unsupported and the separately exported
   common analytic fallback remains available; initialization/execution failure
   is reported as failure, never silently substituted.
@@ -295,8 +293,7 @@ dependency ledger, accounting, and the per-role shader inventory.
 capability profile and experiment definition, and rejects missing, extra,
 mutated, or misclassified files.
 
-Independent native builds in the same hosted CI workflow must produce identical
-bundle identities and manifest hashes. `tools/nw11_build_bundle.py --require-head` refuses a `--commit`
+Independent native builds of the same revision in hosted CI must produce identical bundle identities and manifest hashes. The canonical production proof uses `tools/canonical_export_reproducibility.py` to compare independent same-revision exports, not historical executable hashes. `tools/nw11_build_bundle.py --require-head` refuses a `--commit`
 that does not equal the checked-out repository HEAD, so hashing an arbitrary
 operator-supplied file cannot be presented as same-revision evidence.
 The same workflow provisions the pinned NW-01 toolchain, records the measured
@@ -319,7 +316,7 @@ The bundle manifest also enforces zero-cost stripping:
 - common and fallback artifacts carry no mesh, ray-tracing, Agility, DLSS,
   RTX Kit, model-weight, or vendor SDK payload/dependency;
 - common/fallback shader targets are restricted to the common profile;
-- every optional byte is counted in the incremental distribution budget.
+- every optional byte is counted in the incremental distribution ledger.
 
 ### One-command physical validation
 
@@ -337,8 +334,7 @@ record. Hosted CI exercises these downloaded files from paths containing spaces.
 pwsh -NoProfile -File C:\trusted\run-validation.ps1 -BundleRoot C:\validation\bundle -TrustRecord C:\trusted\nw11-bundle-mesh-verification.json
 ```
 
-Physical coverage requires the selected PCI identity
-(`10de:2805` for Ada and `10de:2c05` for Blackwell) and automatically collected
+Physical coverage uses the shared `tools/hardware_evidence_devices.py` registry (currently `10de:2803` for Ada and `10de:2c05` for Blackwell) and automatically collected
 host, board, WDDM, power, clock, and thermal provenance. The environment key
 includes these observations, including the Windows power plan, PCIe power
 settings, the effective NVIDIA driver power mode per executable, GPU
@@ -351,7 +347,7 @@ and four times inside each warm measurement window. The collected files retain
 core and memory clocks, GPU temperature, power state, and configured controls
 with process and executable identities. A change in required controls or
 unavailable telemetry leaves the optional result pending. Physical coverage
-also remains pending when the launcher detects a hypervisor. Use `-DeviceTier` to assert the expected board on an assigned runner.
+follows the shared fail-closed host identity and VBS policy: an active Windows hypervisor alone does not disqualify a physical host. Require independent GPU virtualization evidence; normalize PCI identifiers numerically and decode Windows utilities through `tools/hardware_evidence_host.py`. Use `-DeviceTier` to assert the expected board on an assigned runner.
 Preflight checks Windows build 22631 or later, the NVIDIA driver floor of
 610.88, inbox runtime versions, and the queried capabilities, including
 production format support. [NVIDIA board IDs](https://download.nvidia.com/XFree86/Linux-x86_64/615.78.08/README/supportedchips.html)
@@ -363,7 +359,7 @@ Each invocation writes a fresh evidence directory containing the probe snapshot,
 raw reports, presentation traces, capture pixels, `evidence.json`,
 `decisions.json`, and a short `summary.txt`.
 
-Cold startup uses the NW-07 full-reboot preparation. Enable successful
+Cold startup uses the shared `tools/validation_cold_start.py` policy and full-reboot preparation. Enable successful
 Windows Audit Process Creation on the validation host before restarting.
 Use Restart, then run the launcher before starting any renderer for the
 bundle. The launcher reads the Kernel-Boot and Security logs and verifies
@@ -378,13 +374,11 @@ warm-up each. [Microsoft Audit Process Creation](https://learn.microsoft.com/win
 The per-process windows bind production CPU command-recording and submission
 samples through DXGI Present with PresentMon GPU frame times and displayed intervals. Dropped
 presents affect delivered frame counts and intervals. Every matched run pair
-must meet the relative GPU criterion and the end-to-end guardrails. The Ada
-baseline and variant must each pass the strict GPU and CPU reference thresholds
-in every run. The Blackwell comparison uses its own matched measurements.
+must meet the relative GPU criterion and the end-to-end guardrails. Both Ada and Blackwell use independent matched relative comparisons under the active v2 policy; historical absolute Ada reference thresholds do not gate v2 adoption.
 [PresentMon 2.3.1 console metrics](https://github.com/GameTechDev/PresentMon/blob/v2.3.1/README-ConsoleApplication.md)
 
 The canonical correctness check launches the exact NW-07 release executable
-covered by the byte-equivalence proof. It uses the release fixed-tick
+covered by the independent same-revision reproducibility proof. It uses the release fixed-tick
 `--tick N --frames 1` interface. The capture probe uses a DWM composition
 flush and the visible foreground client pixels to observe the held frame within
 the startup ceiling. It recognizes the scene using sample pixels and records
@@ -447,17 +441,13 @@ Publish the tested bundle identities, raw evidence locations, and generated
 decision record in PR #44 after both devices are verified. The tracked status
 files remain pending until those physical executions exist.
 
-## 6. Preserved contracts and stripping
+## 6. Shared architecture, compatibility and stripping
 
 - The NW-01 capability manifest is unchanged; mesh shaders, ray tracing,
   runtime shader compilation, and mandatory Agility SDK redistribution remain
   excluded from the common baseline.
-- NW-07 canonical production, quality, resolution, capture, reproducibility,
-  distribution, metric-baseline, and `nw07_perf_ref_v1` semantics remain
-  intact.
-- NW-07 pinned build inputs do not include any `src/nw11`, `shaders/nw11`, or
-  `tools/nw11` file, so the common artifact bytes and dependencies are
-  unchanged.
+- Preserve canonical workload, quality/capture semantics and artifact-specific requirements. Historical specifications, hashes and evidence remain immutable provenance, not gates requiring future source or executables to equal old revisions.
+- All players use the current shared implementation. Optional paths must not enter the common/fallback code, shader or dependency closure. Prove this through current same-revision builds and dependency/byte accounting.
 - NW-11 experiment records in `benchmarks/experiments/` reuse the NW-01B
   `experiment-record.schema.json` semantics via the additive
   `advanced_gpu_feature` category and `pending_evaluation` status.
@@ -478,25 +468,31 @@ No further feature prototype enters NW-11.
 NW-09 is required only for future temporal/stateful experiments; the two NW-11
 experiments are stateless and do not depend on it. NW-11 is independent of
 NW-10's 64 KiB result: it neither raises nor lowers that compact target, and
-the original NW-07 256 KiB proof and its exact-byte regression gate remain unchanged.
+the canonical NW-07 256 KiB size target remains specific to its own proof. Neither historical executable identity nor proof-specific size limits are universal gates for active GPU experiments.
 
+### Shared implementation and experiment accounting
 
-### Frozen source isolation and gated distribution accounting
+All player targets compile the current shared `src/player/package_player.cpp`
+directly. The Win32 layer uses actual client geometry, and physical GPU
+experiment windows use the borderless policy; ordinary player users retain
+their ordinary window policy. Do not generate or maintain a task-local
+copy of a historically pinned player.
 
-NW-11 generates its specialized translation unit from the original production
-`src/player/package_player.cpp` using a source-SHA- and context-checked overlay.
-NW-07 and NW-10 continue to compile their original frozen input; historical
-NW-10 reports and physical evidence are not rewritten. If the shared source
-changes later, the generator fails until the overlay is explicitly rebased.
+New consumers should use the functional shared modules documented in ADR
+0009: `build_attestation.py`, `canonical_export_reproducibility.py`,
+`hardware_evidence_host.py`, `hardware_evidence_devices.py`,
+`validation_gpu_telemetry.py`, `validation_cold_start.py`,
+`presentation_metrics.py`, `gpu_experiment_measurements.py`,
+`validation_errors.py` and `compact_export_evidence_publisher.py` as
+applicable. Historical task-named entry points remain for compatibility;
+fix reusable failures in shared code and cover them with regression tests.
 
-Bundle integrity and adoption are separate results. Complete and incremental
-experimental distribution bytes are gated by the predeclared experiment and
-profile ceilings; a variant that grows the distribution beyond the allowance is
-rejected even when its GPU microbenchmark improves.
-An over-budget CI bundle can still be published for physical validation with
-`accounting.adoption_budget_status: rejected`; bundle verification proves the
-artifact identities, not experiment acceptance, and the measured decision
-cannot be accepted.
-The original NW-07 common production export must still remain byte-identical,
-and unused optional code, shaders and dependencies must remain excluded.
-Performance, quality, resource, shader-count and capability checks are unchanged.
+Bundle integrity and adoption are separate results. Active v2 experiments
+use `distribution_size_policy: report_only` and
+`accounting.adoption_budget_status: report_only`; complete and incremental
+distribution bytes are measured but do not reject an otherwise successful
+variant. Historical v1 definitions retain their original gated policy.
+Matched performance, quality, resource, shader-count, and capability checks
+remain applicable. A verified bundle is not physical acceptance evidence;
+real physical results must bind the exact tested artifacts, bundle and source
+revision. No historical evidence is re-certified by a later build.
