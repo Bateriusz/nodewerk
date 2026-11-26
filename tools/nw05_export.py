@@ -775,6 +775,8 @@ def _audio_playback_source(audio: Mapping[str, Any]) -> str:
 #if NW_AUDIO_MEASURE_SYNTHESIS_ONLY
     // Nonshipping attribution probe: retain the real decoder/synthesis path
     // with the identical input, without linking the Windows output layer.
+    // The probe renders a fixed PCM block, not the normal frame loop.
+    (void)max_frames;
     std::int16_t pcm[256]{{}};
     if (!nw::audio::RenderPcm(song, {{}}, 0, pcm, 256)) return 70;
     std::uint64_t checksum = 0;
