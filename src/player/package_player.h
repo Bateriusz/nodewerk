@@ -38,6 +38,7 @@ struct PlayerConfig {
     std::uint32_t frames_in_flight = 2u;
     bool create_window = true;
     bool visible_window = true;
+    bool borderless_window = false;
     bool enable_validation = false;
     bool headless = false;
     // Diagnostic/CI only: allow the Microsoft Basic Render Driver (WARP)

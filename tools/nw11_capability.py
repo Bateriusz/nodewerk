@@ -491,7 +491,8 @@ def evaluate_observation(
 
 def device_key(vendor_id: int, device_id: int) -> str:
     """Stable per-device identity; one GPU can never inherit another's result."""
-    return f"pci:{vendor_id:04x}:{device_id:04x}"
+    from hardware_evidence_devices import device_key as shared_device_key
+    return shared_device_key(vendor_id, device_id)
 
 
 def environment_key(

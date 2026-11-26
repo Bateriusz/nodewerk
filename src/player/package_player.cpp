@@ -2503,6 +2503,7 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
         window_config.width = config_.width;
         window_config.height = config_.height;
         window_config.visible = config_.visible_window;
+        window_config.borderless = config_.borderless_window;
         if (!platform_->window.Create(window_config)) {
             return Fail(ExitCode::WindowCreationFailed, "platform",
                         "window_creation_failed", "window", "created",

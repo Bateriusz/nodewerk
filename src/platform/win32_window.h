@@ -14,6 +14,7 @@ struct WindowConfig {
     std::uint32_t height = 720u;
     bool visible = true;
     bool resizable = true;
+    bool borderless = false;
 };
 
 class Win32Window {

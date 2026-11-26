@@ -1607,9 +1607,10 @@ def test_nw11_renderer_preserves_player_exit_codes_and_repairs_client_geometry()
     assert "player.present_source_height() != scene::kOutputHeight" in harness
     assert "player.resize(scene::kOutputWidth, scene::kOutputHeight)" in harness
     assert "presentation_client_geometry_changed" in harness
-    assert '84: "PresentationClientGeometryMismatch"' in runner
-    assert '31: "SwapChainCreationFailed"' in runner
-    assert "RENDERER_EXIT_NAMES.get" in runner
+    from validation_errors import RENDERER_EXIT_NAMES
+    assert RENDERER_EXIT_NAMES[84] == "PresentationClientGeometryMismatch"
+    assert RENDERER_EXIT_NAMES[31] == "SwapChainCreationFailed"
+    assert "renderer_failure(launch" in runner
 
 
 def test_nw11_renderer_sources_exist_and_declare_required_d3d12_paths() -> None:
@@ -2299,3 +2300,16 @@ def test_nw11_canonical_release_binding_reads_frozen_manifest_digest() -> None:
     link = bytes.fromhex(contract.sha256_bytes(manifest))
     image = nw05_export.embed_package(b"MZtest release", b"canonical package", link)
     assert binding.embedded_payloads(image) == (b"MZtest release", b"canonical package", link)
+
+
+def test_shared_renderer_failure_keeps_native_diagnostic(tmp_path):
+    from validation_errors import renderer_failure, RENDERER_EXIT_NAMES
+    log = tmp_path / "renderer.log"
+    log.write_text("[NW11-PRODUCTION-ERR][exit_code=84][code=presentation_client_geometry_mismatch] expected 1920x1080, got 1904x1032\n", encoding="utf-8")
+    launch = dict(launch_id="a", role="baseline", mode="startup", commit="b", bundle_id="c", artifact_path="bin/a.exe", executable_sha256="d", exit_code=84, timed_out=False)
+    failure = renderer_failure(launch, log)
+    assert failure["code"] == RENDERER_EXIT_NAMES[84]
+    assert failure["diagnostic"]["native_code"] == "presentation_client_geometry_mismatch"
+    assert "1904x1032" in failure["diagnostic"]["message"]
+    assert failure["launch_id"] == launch["launch_id"]
+    assert renderer_failure(dict(launch, timed_out=True), log)["code"] == "ProcessTimeout"

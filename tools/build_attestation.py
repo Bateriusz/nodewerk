@@ -29,10 +29,14 @@ def source_revision(root: Path) -> dict[str, Any]:
             ["git", "rev-parse", "HEAD"], cwd=root, text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
+        tree = subprocess.check_output(
+            ["git", "rev-parse", "HEAD^{tree}"], cwd=root, text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
         dirty = subprocess.check_output(
             ["git", "status", "--porcelain", "--untracked-files=no"],
             cwd=root, text=True, stderr=subprocess.DEVNULL,
         )
-        return {"commit": head, "tracked_files_clean": not bool(dirty.strip())}
+        return {"commit": head, "tree": tree, "tracked_files_clean": not bool(dirty.strip())}
     except (OSError, subprocess.CalledProcessError):
-        return {"commit": None, "tracked_files_clean": None}
+        return {"commit": None, "tree": None, "tracked_files_clean": None}

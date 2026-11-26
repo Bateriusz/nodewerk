@@ -25,6 +25,7 @@
 #include "nw11_scene_harness.h"
 #include "nw11_scene_generated.h"
 #include "player/package_player.h"
+#include "player/validation_exit_codes.h"
 #include "player/embedded_package.h"
 
 namespace nw11 {
@@ -36,17 +37,7 @@ using Clock = std::chrono::steady_clock;
 constexpr int kExitOk = 0;
 constexpr int kExitUnsupported = 3;
 
-enum class HarnessExitCode : int {
-    InvalidMeasurementContract = 80,
-    ArtifactIdentityUnavailable = 81,
-    EvidenceIoFailure = 82,
-    PresentationSourceGeometryMismatch = 83,
-    PresentationClientGeometryMismatch = 84,
-    PresentationWindowClosed = 85,
-    MeasurementUnavailable = 86,
-    CaptureValidationFailed = 87,
-    UnhandledFailure = 89,
-};
+using nw::validation::HarnessExitCode;
 
 class RendererFailure final : public std::runtime_error {
 public:
@@ -105,7 +96,7 @@ std::string JsonEscape(const std::string& value) {
 std::string ReadFile(const std::string& path) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) {
-        throw std::runtime_error("cannot open file: " + path);
+        FailHarness(HarnessExitCode::EvidenceIoFailure, "input_read_failed", "cannot open file: " + path);
     }
     std::ostringstream buffer;
     buffer << stream.rdbuf();
@@ -119,14 +110,14 @@ std::uint64_t FiletimeTicks(FILETIME value) {
 std::uint64_t ProcessCreationFiletime() {
     FILETIME created{}, exited{}, kernel{}, user{};
     if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user))
-        throw std::runtime_error("cannot measure process creation time");
+        FailHarness(HarnessExitCode::MeasurementUnavailable, "process_time_unavailable", "cannot measure process creation time");
     return FiletimeTicks(created);
 }
 
 double QpcMilliseconds() {
     LARGE_INTEGER count{}, frequency{};
     if (!QueryPerformanceCounter(&count) || !QueryPerformanceFrequency(&frequency))
-        throw std::runtime_error("cannot read presentation measurement clock");
+        FailHarness(HarnessExitCode::MeasurementUnavailable, "clock_unavailable", "cannot read presentation measurement clock");
     return 1000.0 * double(count.QuadPart) / double(frequency.QuadPart);
 }
 
@@ -280,10 +271,10 @@ std::string ExecutableSha256() {
     wchar_t module[32768]{};
     const DWORD length = GetModuleFileNameW(nullptr, module, static_cast<DWORD>(std::size(module)));
     if (length == 0 || length >= std::size(module))
-        throw std::runtime_error("cannot identify running executable");
+        FailHarness(HarnessExitCode::ArtifactIdentityUnavailable, "executable_identity_unavailable", "cannot identify running executable");
     std::ifstream image(std::filesystem::path(module), std::ios::binary);
     const std::string image_bytes{std::istreambuf_iterator<char>(image), {}};
-    if (image_bytes.empty()) throw std::runtime_error("cannot hash running executable");
+    if (image_bytes.empty()) FailHarness(HarnessExitCode::ArtifactIdentityUnavailable, "executable_hash_unavailable", "cannot hash running executable");
     return nw::package::Sha256Hex(image_bytes);
 }
 
@@ -337,6 +328,7 @@ int RunProduction(const RendererOptions& options) {
     config.allow_software_adapter = options.allow_software_adapter;
     config.headless = options.headless;
     config.create_window = !options.headless;
+    config.borderless_window = !options.headless;
     config.memory_budget_bytes = metadata.memory_budget_bytes;
     config.query_optional_wave_ops = metadata.wave_ops;
     config.query_optional_fp16_shader_ops = metadata.fp16_shader_ops;
