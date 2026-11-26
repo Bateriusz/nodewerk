@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "duration_ticks": 192000,
+  "events": [
+    {"tick": 0, "duration": 2400, "frequency_millihz": 880000, "gain": 12000},
+    {"tick": 48000, "duration": 2400, "frequency_millihz": 880000, "gain": 12000},
+    {"tick": 96000, "duration": 2400, "frequency_millihz": 880000, "gain": 12000},
+    {"tick": 144000, "duration": 2400, "frequency_millihz": 880000, "gain": 12000}
+  ]
+}

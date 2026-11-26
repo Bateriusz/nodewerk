@@ -525,3 +525,23 @@ add_executable(nodewerkc ${NW_NATIVE_TOOL_EXCLUDE_FROM_ALL}
 )
 target_link_libraries(nodewerkc PRIVATE nw_compiler nw_graph nw_package)
 target_compile_features(nodewerkc PRIVATE cxx_std_20)
+
+# Optional audio targets. No source or link dependency is added to any silent
+# player. The fixture shares the existing PackagePlayer and clock boundary.
+option(NW_BUILD_AUDIO "Build the optional procedural audio targets" OFF)
+if(NW_BUILD_AUDIO)
+    add_library(nw_procedural_audio STATIC src/audio/procedural_audio.cpp)
+    target_include_directories(nw_procedural_audio PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    nw_apply_player_profile(nw_procedural_audio)
+    add_executable(nw_audio_contract tests/audio_contract.cpp)
+    target_link_libraries(nw_audio_contract PRIVATE nw_procedural_audio)
+    nw_apply_player_profile(nw_audio_contract)
+    if(WIN32)
+        add_library(nw_wasapi_output STATIC src/audio/wasapi_output.cpp)
+        target_link_libraries(nw_wasapi_output PUBLIC nw_procedural_audio PRIVATE ole32)
+        nw_apply_player_profile(nw_wasapi_output)
+        add_executable(nw_audio_player fixtures/audio/main.cpp)
+        target_link_libraries(nw_audio_player PRIVATE nw_wasapi_output nw_player_bootstrap nw_package_player_diagnostic gdi32)
+        nw_apply_player_profile(nw_audio_player)
+    endif()
+endif()
