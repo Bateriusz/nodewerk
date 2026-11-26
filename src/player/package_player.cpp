@@ -2504,6 +2504,7 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
         window_config.height = config_.height;
         window_config.visible = config_.visible_window;
         window_config.borderless = config_.borderless_window;
+        window_config.maximized = config_.maximized_window;
         if (!platform_->window.Create(window_config)) {
             return Fail(ExitCode::WindowCreationFailed, "platform",
                         "window_creation_failed", "window", "created",
