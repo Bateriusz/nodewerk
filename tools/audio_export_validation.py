@@ -128,42 +128,13 @@ def validate(template: Path, dxc: str, root: Path) -> dict:
     source_commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
     ).strip()
-    physical_run = None
-    if os.name == "nt" and os.environ.get("NW12_PHYSICAL_AUDIO_RUN") == "1":
-        # Opt-in desktop run: use the real WASAPI artifact and record its own
-        # telemetry. A display observation is still required for alignment.
-        from audio_physical_validation import (
-            build_evidence,
-            mark_player_result,
-            probe_environment,
-            provenance_snapshot,
-        )
-        observation = None
-        observation_path = os.environ.get("NW12_DISPLAY_OBSERVATION", "")
-        if observation_path:
-            observation = json.loads(
-                Path(observation_path).read_text(encoding="utf-8")
-            )
-        completed = subprocess.run(
-            [str(audio_exe)], capture_output=True, text=True, timeout=120
-        )
-        physical_run = build_evidence(
-            package_bytes=audio.package_bytes,
-            song_bytes=audio.package.audio_song,
-            source_head_sha=source_commit,
-            executable_bytes=audio_exe.read_bytes(),
-            telemetry_text=completed.stdout,
-            observation=observation,
-            environment=probe_environment(),
-            provenance=provenance_snapshot(),
-        )
-        mark_player_result(physical_run, completed.returncode)
     physical = evidence_reference(
         "physical WASAPI/display observation is not part of the Windows CI build gate",
         verified=load_verified_evidence(
-            package_bytes=audio.package_bytes, song_bytes=SONG.read_bytes()
+            package_bytes=audio.package_bytes, song_bytes=audio.package.audio_song,
+            executable_bytes=audio_exe.read_bytes(),
         ),
-    ) if physical_run is None else physical_run
+    )
     return {
         "format": "nodewerk-audio-link-attribution", "version": 1,
         "source_commit": source_commit,

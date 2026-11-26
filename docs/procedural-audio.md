@@ -67,19 +67,33 @@ session with a real WASAPI endpoint and binds the observation to:
 - the protocol (48 kHz timebase, 60 fps fixture, one-frame tolerance
   `48000 / refresh_hz` ticks) and the same-run `AUDIO_*` telemetry.
 
-The operator records one A/V capture containing each audible impulse and its
-displayed flash onset, then runs:
+Start a simultaneous external A/V capture, then run the player once using
+the harness (the run ID is printed before playback):
+```sh
+python tools/audio_physical_validation.py run \
+  --player build/audio/nw_common_d3d12_fl12_0_sm6_0_v1.exe \
+  --package build/audio/nw_common_d3d12_fl12_0_sm6_0_v1.nwp \
+  --song song.nwas --output run.json
+```
+
+Analyze that capture, then record its observation without launching the player again:
 
 ```sh
 python tools/audio_physical_validation.py record \
   --player build/audio/nw_common_d3d12_fl12_0_sm6_0_v1.exe \
   --package build/audio/nw_common_d3d12_fl12_0_sm6_0_v1.nwp \
-  --song song.nwas --observation capture.json --output evidence.json
+  --song song.nwas --run run.json --observation capture.json \
+  --capture-audio recording.mp4 --capture-video recording.mp4 --output evidence.json
 ```
 
-`capture.json` is a `nodewerk-audio-display-observation` v1 document with one
-`{audio_tick, display_tick}` impulse per song event and the capture file hashes.
-The harness computes the absolute delta, requires it within one displayed frame,
+`capture.json` is a `nodewerk-audio-display-observation` v1 document with
+the run ID, 48000 Hz sample rate, one `{event_tick, audio_tick, display_tick}`
+impulse per song event, and actual capture file hashes
+(`capture.audio_sha256`, `capture.video_sha256`). The audio and display ticks
+are measured on the same capture timebase, not copied from the scheduled song
+tick. For a multiplexed recording both capture paths can be the same file.
+The harness checks the run and raw file hashes, computes the absolute delta,
+requires it within one displayed frame,
 and records synthesis/worker CPU (`GetThreadTimes`, 100 ns), starvation
 observations, observed underruns, the missing-sample lower bound, underrun rate,
 and clock discontinuities from that exact run. Exact audible glitch counts have

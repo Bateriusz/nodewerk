@@ -341,7 +341,7 @@ def _observation(deltas=(0, 0, 800, -800)):
             "protocol": "single external A/V capture of the same desktop run",
         },
         "impulses": [
-            {"audio_tick": event["tick"], "display_tick": event["tick"] + delta}
+            {"event_tick": event["tick"], "audio_tick": event["tick"], "display_tick": event["tick"] + delta}
             for event, delta in zip(events, deltas)
         ],
     }
@@ -356,6 +356,11 @@ def test_alignment_is_bounded_by_one_displayed_frame():
     assert evaluate_alignment(_observation((0, 0, 0, 0)), song, 60)[
         "max_abs_delta_ticks"
     ] == 0
+    shifted = _observation((0, 0, 0, 0))
+    for impulse in shifted["impulses"]:
+        impulse["audio_tick"] += 2000
+        impulse["display_tick"] += 2100
+    assert evaluate_alignment(shifted, song, 60)["max_abs_delta_ticks"] == 100
     # 120 Hz shortens the displayed-frame tolerance to 400 ticks.
     assert evaluate_alignment(_observation(), song, 120)[
         "within_one_displayed_frame"
@@ -363,7 +368,7 @@ def test_alignment_is_bounded_by_one_displayed_frame():
     with pytest.raises(ValueError, match="one impulse per song event"):
         evaluate_alignment({**_observation(), "impulses": []}, song)
     bad = _observation()
-    bad["impulses"][0]["audio_tick"] = 1
+    bad["impulses"][0]["event_tick"] = 1
     with pytest.raises(ValueError, match="does not match song onset"):
         evaluate_alignment(bad, song)
 
@@ -559,3 +564,21 @@ def test_verified_physical_evidence_merges_only_for_matching_artifact(tmp_path, 
                          .read_text(encoding="utf-8"))
     path.write_text(json.dumps(pending), encoding="utf-8")
     assert physical.load_verified_evidence() is None
+
+
+def test_physical_capture_binds_one_run_and_raw_files(tmp_path):
+    from audio_physical_validation import validate_capture_binding, sha256_file
+    audio = tmp_path / "audio.wav"
+    video = tmp_path / "video.mp4"
+    audio.write_bytes(b"audio capture")
+    video.write_bytes(b"video capture")
+    run = {"format": "nodewerk-audio-physical-run", "version": 1, "run_id": "a" * 32}
+    observation = _observation()
+    observation["run_id"] = run["run_id"]
+    observation["capture"].update(audio_sha256=sha256_file(audio), video_sha256=sha256_file(video))
+    validate_capture_binding(run, observation, audio, video)
+    with pytest.raises(ValueError, match="recorded playback run"):
+        validate_capture_binding(dict(run, run_id="b" * 32), observation, audio, video)
+    video.write_bytes(b"different recording")
+    with pytest.raises(ValueError, match="video capture SHA-256 mismatch"):
+        validate_capture_binding(run, observation, audio, video)

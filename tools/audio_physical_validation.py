@@ -29,6 +29,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -171,6 +172,7 @@ def load_verified_evidence(
     *,
     package_bytes: bytes | None = None,
     song_bytes: bytes | None = None,
+    executable_bytes: bytes | None = None,
 ) -> dict[str, Any] | None:
     """Load a verified physical record, matching the selected artifact if given."""
     candidate = path or os.environ.get("NW12_PHYSICAL_EVIDENCE", "")
@@ -181,7 +183,8 @@ def load_verified_evidence(
         return None
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     verify_evidence(
-        evidence, package_bytes=package_bytes, song_bytes=song_bytes
+        evidence, package_bytes=package_bytes, song_bytes=song_bytes,
+        executable_bytes=executable_bytes,
     )
     if evidence.get("verification_status") != "verified_physical":
         return None
@@ -265,15 +268,19 @@ def evaluate_alignment(
     tolerance = TICKS_PER_SECOND / display_frame_rate
     deltas: list[int] = []
     for index, (event, impulse) in enumerate(zip(events, impulses)):
+        event_tick = _as_ticks(impulse.get("event_tick"), f"impulses[{index}].event_tick")
         audio_tick = _as_ticks(impulse.get("audio_tick"), f"impulses[{index}].audio_tick")
         display_tick = _as_ticks(
             impulse.get("display_tick"), f"impulses[{index}].display_tick"
         )
-        if audio_tick != int(event["tick"]):
+        if event_tick != int(event["tick"]):
             raise ValueError(
-                f"impulse {index} audio tick {audio_tick} does not match song onset "
+                f"impulse {index} event tick {event_tick} does not match song onset "
                 f"{event['tick']}"
             )
+        if index and (audio_tick <= previous_audio or display_tick <= previous_display):
+            raise ValueError("observed audio and display onsets must be strictly increasing")
+        previous_audio, previous_display = audio_tick, display_tick
         deltas.append(display_tick - audio_tick)
     maximum = max((abs(delta) for delta in deltas), default=0)
     return {
@@ -643,52 +650,89 @@ def mark_player_result(evidence: dict[str, Any], returncode: int) -> dict[str, A
     return evidence
 
 
-def record(
-    *,
-    player: Path,
-    package: Path,
-    song: Path,
-    output: Path,
-    observation_path: Path | None = None,
-    display_frame_rate: int = DEFAULT_DISPLAY_FRAME_RATE,
-    source_head_sha: str | None = None,
-    timeout: int = 120,
-) -> dict[str, Any]:
-    """Run the real audio player and record the resulting evidence."""
-    player = player.resolve(strict=True)
-    package = package.resolve(strict=True)
-    song = song.resolve(strict=True)
-    package_bytes = package.read_bytes()
-    song_bytes = song.read_bytes()
+def _artifact_identity(player: Path, package: Path, song: Path) -> dict[str, str]:
+    return {"executable_sha256": sha256_file(player),
+            "package_sha256": sha256_file(package), "song_sha256": sha256_file(song)}
+
+
+def run_playback(*, player: Path, package: Path, song: Path, output: Path,
+                 timeout: int = 120) -> dict[str, Any]:
+    """Launch once while the operator records a simultaneous external A/V capture."""
     if os.name != "nt":
-        raise RuntimeError(
-            "physical WASAPI/display evidence requires a Windows 11 desktop session"
-        )
-    observation = None
-    if observation_path is not None:
-        observation = json.loads(observation_path.read_text(encoding="utf-8"))
-    environment = probe_environment()
+        raise RuntimeError("physical WASAPI/display evidence requires Windows")
+    player, package, song = (p.resolve(strict=True) for p in (player, package, song))
+    if output.exists():
+        raise FileExistsError(output)
+    import nw05_export
+    payload, manifest = nw05_export.extract_embedded_package(player.read_bytes())
+    if payload != package.read_bytes() or nwp.decode_package(payload).audio_song != song.read_bytes():
+        raise ValueError("player embedded package/song does not match supplied artifacts")
+    audio = json.loads(manifest).get("audio") or {}
+    if audio.get("song_sha256") != sha256_file(song):
+        raise ValueError("player audio manifest does not match supplied song")
+    artifact = _artifact_identity(player, package, song)
     provenance = provenance_snapshot()
-    if source_head_sha is None and provenance.get("source_revision"):
-        source_head_sha = provenance["source_revision"]
-    completed = subprocess.run(
-        [str(player), str(package)],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    if not provenance.get("tracked_files_clean") or not provenance.get("source_revision"):
+        raise ValueError("physical playback requires a clean tracked source checkout")
+    environment = probe_environment()
+    run_id = uuid.uuid4().hex
+    print(f"Audio capture run ID: {run_id}", flush=True)
+    completed = subprocess.run([str(player)], capture_output=True, text=True, timeout=timeout)
+    if _artifact_identity(player, package, song) != artifact:
+        raise ValueError("playback artifacts changed during execution")
+    if provenance_snapshot() != provenance:
+        raise ValueError("source checkout changed during execution")
+    result = {"format": "nodewerk-audio-physical-run", "version": 1, "run_id": run_id,
+              "artifact": artifact, "provenance": provenance, "environment": environment,
+              "stdout": completed.stdout, "stderr": completed.stderr,
+              "returncode": completed.returncode}
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("x", encoding="utf-8") as stream:
+        json.dump(result, stream, indent=2, sort_keys=True)
+    return result
+
+
+def validate_capture_binding(run: Mapping[str, Any], observation: Mapping[str, Any],
+                             audio_capture: Path, video_capture: Path) -> None:
+    if run.get("format") != "nodewerk-audio-physical-run" or run.get("version") != 1:
+        raise ValueError("invalid physical run format")
+    run_id = run.get("run_id")
+    if not isinstance(run_id, str) or len(run_id) != 32 or observation.get("run_id") != run_id:
+        raise ValueError("observation does not identify the recorded playback run")
+    capture = observation.get("capture") or {}
+    if capture.get("audio_sha256") != sha256_file(audio_capture):
+        raise ValueError("audio capture SHA-256 mismatch")
+    if capture.get("video_sha256") != sha256_file(video_capture):
+        raise ValueError("video capture SHA-256 mismatch")
+
+
+def record(*, player: Path, package: Path, song: Path, output: Path,
+           run_path: Path, observation_path: Path, audio_capture: Path,
+           video_capture: Path, display_frame_rate: int = DEFAULT_DISPLAY_FRAME_RATE
+           ) -> dict[str, Any]:
+    """Bind a capture to the saved telemetry; never launch a second playback."""
+    run = json.loads(run_path.read_text(encoding="utf-8"))
+    observation = json.loads(observation_path.read_text(encoding="utf-8"))
+    validate_capture_binding(run, observation, audio_capture, video_capture)
+    if run.get("artifact") != _artifact_identity(player, package, song):
+        raise ValueError("physical run artifact identity mismatch")
+    provenance = run["provenance"]
+    if not provenance.get("tracked_files_clean"):
+        raise ValueError("physical run source checkout was not clean")
+    environment = run["environment"]
+    if not any(row.get("refresh_hz") == display_frame_rate
+               for row in (environment.get("display") or [])):
+        raise ValueError("declared refresh rate does not match the recorded display")
+    observation["capture"] = dict(observation["capture"], run_id=run["run_id"],
+                                  run_sha256=sha256_file(run_path))
     evidence = build_evidence(
-        package_bytes=package_bytes,
-        song_bytes=song_bytes,
-        source_head_sha=source_head_sha,
-        executable_bytes=player.read_bytes(),
-        telemetry_text=completed.stdout,
-        observation=observation,
-        environment=environment,
-        display_frame_rate=display_frame_rate,
-        provenance=provenance,
+        package_bytes=package.read_bytes(), song_bytes=song.read_bytes(),
+        source_head_sha=provenance.get("source_revision"),
+        executable_bytes=player.read_bytes(), telemetry_text=run["stdout"],
+        observation=observation, environment=environment,
+        display_frame_rate=display_frame_rate, provenance=provenance,
     )
-    mark_player_result(evidence, completed.returncode)
+    mark_player_result(evidence, run["returncode"])
     verify_evidence(evidence)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -703,10 +747,15 @@ def _parser() -> argparse.ArgumentParser:
     record_parser.add_argument("--package", type=Path, required=True)
     record_parser.add_argument("--song", type=Path, required=True)
     record_parser.add_argument("--output", type=Path, required=True)
-    record_parser.add_argument("--observation", type=Path)
+    record_parser.add_argument("--run", type=Path, required=True)
+    record_parser.add_argument("--observation", type=Path, required=True)
+    record_parser.add_argument("--capture-audio", type=Path, required=True)
+    record_parser.add_argument("--capture-video", type=Path, required=True)
     record_parser.add_argument("--display-frame-rate", type=int, default=DEFAULT_DISPLAY_FRAME_RATE)
-    record_parser.add_argument("--source-head", default=None)
-    record_parser.add_argument("--timeout", type=int, default=120)
+    run_parser = sub.add_parser("run", help="launch a single physical playback while capturing A/V")
+    for name in ("player", "package", "song", "output"):
+        run_parser.add_argument("--" + name, type=Path, required=True)
+    run_parser.add_argument("--timeout", type=int, default=120)
     verify_parser = sub.add_parser("verify", help="verify a recorded observation profile")
     verify_parser.add_argument("--evidence", type=Path, required=True)
     verify_parser.add_argument("--package", type=Path)
@@ -727,16 +776,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             print(text, end="")
         return 0
+    if args.command == "run":
+        result = run_playback(player=args.player, package=args.package, song=args.song,
+                              output=args.output, timeout=args.timeout)
+        return 0 if result["returncode"] == 0 else 1
     if args.command == "record":
         evidence = record(
             player=args.player,
             package=args.package,
             song=args.song,
             output=args.output,
-            observation_path=args.observation,
+            run_path=args.run, observation_path=args.observation,
+            audio_capture=args.capture_audio, video_capture=args.capture_video,
             display_frame_rate=args.display_frame_rate,
-            source_head_sha=args.source_head,
-            timeout=args.timeout,
         )
         print(json.dumps({"verification_status": evidence["verification_status"]}))
         return 0
