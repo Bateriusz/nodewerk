@@ -15,12 +15,12 @@
     "nw11.mesh-shader-vs-indexed.v1": {
       "status": "pending",
       "satisfies_completion": false,
-      "reason": "No matched physical baseline/variant run recorded."
+      "reason": "Native physical execution reported on both devices; full raw reconstruction and cross-device verification remain pending (Blackwell ETW unavailable)."
     },
     "nw11.ray-query-vs-analytic-reflection.v1": {
       "status": "pending",
       "satisfies_completion": false,
-      "reason": "No matched physical baseline/variant run recorded."
+      "reason": "Native physical execution reported on both devices; full raw reconstruction and cross-device verification remain pending (Blackwell ETW unavailable)."
     }
   },
   "required_physical_coverage": [

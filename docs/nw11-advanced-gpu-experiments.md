@@ -28,7 +28,7 @@ The common profile is inherited unchanged from NW-01/NW-03..NW-07:
 | Requirements digest | `sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a` |
 | API | D3D12 Feature Level 12_0, shader model 6_0 |
 | Fallback | none (this *is* the common artifact profile) |
-| Distribution size | Report-only for active v3 GPU experiments; explicit canonical proof limits apply to that proof only |
+| Distribution size | Report-only for active v4 GPU experiments; explicit canonical proof limits apply to that proof only |
 | Evidence status | `pending` until RTX 4060 Ti and RTX 5070 Ti common-artifact correctness is physically verified |
 
 The common requirements digest is the **inherited NW-07 identity**
@@ -112,7 +112,7 @@ the inherited NW-07 identity described above.
 
 ## 2. Versioned experiment definitions
 
-The active definitions are `mesh-shader-vs-indexed.v3.json` and `ray-query-vs-analytic.v3.json` in `benchmarks/nw11/experiments/`. The v1 and v2 definitions remain historical specifications. V3 accepts verified functional execution of the optional RTX path; it does not infer default adoption, image equivalence or performance superiority. Fix the selected inputs and protocol for each measurement, not the shared implementation for future tasks. The active definitions record:
+The active definitions are `mesh-shader-vs-indexed.v4.json` and `ray-query-vs-analytic.v4.json` in `benchmarks/nw11/experiments/`. The v1–v3 definitions remain historical specifications. V4 accepts verified functional execution of the optional RTX path; it does not infer default adoption, image equivalence or performance superiority. Fix the selected inputs and protocol for each measurement, not the shared implementation for future tasks. The active definitions record:
 
 - base graph `fixtures/nw07/production_loop.nwgraph` with the recorded SHA-256
   `093b8429…b7091`;
@@ -120,15 +120,15 @@ The active definitions are `mesh-shader-vs-indexed.v3.json` and `ray-query-vs-an
 - quality profile `nw07.quality.v1`, capture protocol
   `nw07-correctness-capture.v1`, and protocol `nw07-perf-run.v1`;
   historical `nw07_perf_ref_v1` lineage is not an absolute v2 performance gate;
-- warm-up 5 s, 3 fresh processes, 60 s per run, ≥600 raw samples per run,
-  nearest-rank p99, no application pipeline cache;
-- the historical 10% p99 GPU-time target, reported independently per qualified
-  device/environment without gating functional success;
+- one RTX process with warm-up 5 s and 60 s measured execution, ≥600 native CPU samples;
+  one-second baseline and fallback smoke runs, no application pipeline cache;
+- the historical 10% p99 GPU-time target for matched comparisons only; the short
+  v4 common arms are not comparable to the minute-long RTX run;
 - end-to-end frame-time, CPU-submit, shader-count, VRAM and per-process startup
   observations, reported separately from functional execution;
 - a fixed-quality image criterion (`max_abs_channel_error <= 1e-4`,
   `RMSE <= 1e-4`) at predeclared fixed ticks;
-- actual complete and incremental distribution sizes (report-only in v3),
+- actual complete and incremental distribution sizes (report-only in v4),
   and active shader-count guardrails;
 - the fallback artifact identity and execution arguments.
 
@@ -240,9 +240,10 @@ link mesh or DXR code, shaders, or payload headers.
   preserved;
 - decisions are isolated by `(device_tier, device_key, environment_key)`; a
   result on one GPU never establishes the other;
-- the collector requires exactly three fresh-process reports per role and at
-  least 600 raw samples in each report; merging one long report cannot satisfy
-  the protocol;
+- the collector requires exactly the launches and durations of the measured
+  protocol: v4 has a single run per role, only RTX is minute-long; v3 retains
+  its nine measured processes. Native successful Present and bound raw inputs
+  remain required; unavailable ETW is not fabricated;
 - each run is bound to the bundle role (`common_baseline`, `optional_variant`,
   `fallback_common`) and to the verified bundle's distribution-byte and shader
   inventory;
@@ -256,7 +257,7 @@ link mesh or DXR code, shaders, or payload headers.
 Evidence status values are `accepted`, `rejected`, `failed`, `pending`, and
 `unsupported`. Tracked decision documents in `benchmarks/nw11/decisions/`
 currently record both device tiers as `pending`, which is the honest state
-until matched physical runs exist.
+until the full raw physical records are reverified and published.
 
 ## 4. Validation bundles
 
@@ -321,7 +322,7 @@ The bundle manifest also enforces zero-cost stripping:
 ### One-command physical validation
 
 Run the bundle from an interactive Windows 11 x64 session with PowerShell 7 and
-permission to collect PresentMon ETW events. A Full HD SDR primary monitor is
+permission to collect PresentMon ETW events if available. A Full HD SDR primary monitor is
 sufficient: the validation launcher requests a native-pixel borderless client
 before rendering the reference scene. It does not require an oversized desktop,
 manual resizing, or ordinary window maximization. Keep the session unlocked and
@@ -365,25 +366,24 @@ Each invocation writes a fresh evidence directory containing the probe snapshot,
 raw reports, presentation traces, capture pixels, `evidence.json`,
 `decisions.json`, and a short `summary.txt`.
 
-V3 runs on the current desktop session: no Windows restart, process-creation audit,
+V4 runs on the current desktop session: no Windows restart, process-creation audit,
 Security log access, driver-cache preparation, or separate cold/warm startup
 classification is required. Startup time is recorded in the ordinary per-process
 measurements. The historical cold-start helper remains available only for old
 protocols or a future explicitly scoped startup investigation.
 
-Measurements use three fresh 60-second uncapped processes per role, with a
-five-second sampling warm-up each. The declared order is baseline, variant,
-fallback in round one, variant, baseline, fallback in round two, and baseline,
-variant, fallback in round three (omit the variant only when ineligible).
-The verifier reconstructs chronological order from bound launch timestamps and
-rejects overlaps or a different sequence. Matched starting temperatures and
-clock conditions determine whether the performance comparison is conclusive.
-A mismatch does not undo successfully verified functional execution.
-
-The per-process windows bind production CPU command-recording and submission
-samples through DXGI Present with PresentMon GPU frame times and displayed intervals. Dropped
-presents affect delivered frame counts and intervals. The relative GPU target and end-to-end guardrails are reported for every matched run pair. Both Ada and Blackwell use independent matched relative comparisons under the active v3 policy; historical absolute Ada reference thresholds do not gate functional success.
-[PresentMon 2.3.1 console metrics](https://github.com/GameTechDev/PresentMon/blob/v2.3.1/README-ConsoleApplication.md)
+V4 runs one fresh baseline smoke process (one second), one RTX variant
+process (five seconds of warm-up then sixty seconds of measurement), and one
+fallback smoke process (one second). The verifier rejects wrong ordering,
+overlap, changed durations and missing or extra runs. PresentMon 2.6.0 is
+pinned by SHA-256; collection runs only during the long RTX arm. Unavailable
+ETW, including a failed collection or missing CSV with the retained log, is
+reported as unavailable. Native CPU samples, successful Present calls,
+startup, resource high-water mark, shader identity and image captures are
+still bound to the exact process. The unequal arm durations preclude a
+matched performance claim. The historical v3 nine-process schedule and
+PresentMon 2.3.1 pin are retained for raw reconstruction.
+[PresentMon release](https://github.com/GameTechDev/PresentMon/releases/tag/v2.6.0)
 
 The canonical correctness check launches the exact NW-07 release executable
 covered by the independent same-revision reproducibility proof. It explicitly
@@ -438,11 +438,10 @@ Required acceptance coverage is:
 - desktop Ada representative: NVIDIA GeForce RTX 4060 Ti;
 - desktop Blackwell representative: NVIDIA GeForce RTX 5070 Ti.
 
-Each optional-profile claim must use matched baseline/variant runs on the same
-qualified device and environment. The canonical release captures on both
+Each optional-profile claim must use successful variant, baseline and fallback execution on the same qualified device and environment. The canonical release captures on both
 devices must agree within the NW-07 image tolerance. The
 tracked `evidence-status.v1.json` keeps physical evidence
-`pending_physical` until both tiers have verified matched bundles. Contract
+`pending_physical` until both tiers have verified measured bundles. Contract
 implementation is verified by pytest and does not substitute for physical
 evidence.
 
@@ -451,7 +450,26 @@ After ordinary CI is green, run both experiments on each device from the same te
 The verifier reopens each record's raw evidence, derives the matching device
 and environment, and binds the two evidence-file hashes to the bundle. It
 requires both numeric loop checks and recomputes cross-device image equivalence
-before reporting completion. For v3 a successful verified optional execution is an accepted functional result on that device. Report image differences and performance findings independently; do not turn them into default adoption claims.
+before reporting completion. For v3/v4 a successful verified optional execution is an accepted functional result on that device. Report image differences and performance findings independently; do not turn them into default adoption claims.
+
+For the already measured v3 bundles, use the updated source checkout, not
+the original bundled evaluator, to recover optional ETW failures without
+launching any renderer. Copy the two original raw directories for the same
+experiment to a single local drive; retain the original bundle and independent
+CI trust record. Run:
+
+```text
+python -B tools/nw11/recover-evidence.py --bundle-root <original-bundle> --trust-record <original-trust-json> --expected-commit <tested-commit> --evidence-dir <Ada-raw-directory> --evidence-dir <Blackwell-raw-directory> --out <public-decision.json>
+```
+
+The recovery command reconstructs raw measurements, verifies the original
+bundle against its CI trust record, verifies per-device and cross-device
+captures, retains new private derived evidence next to the originals, and
+writes an allowlisted public decision projection only upon complete
+acceptance. The projection binds the original bundle and raw aggregate
+decision hashes; it does not certify a later build. See the
+[operator-reported v3 observations](../benchmarks/nw11/history/physical-f86ef05.md)
+for the current physical run results and their limitations.
 
 Retain original raw evidence privately. Publish sanitized measured values, tested bundle and executable identities, and decision provenance after both devices are verified. A sanitized historical projection is not a substitute for the original raw inputs or a new-revision proof. See [Ada v2 observations](../benchmarks/nw11/history/ada-250e1f7.md). The tracked status
 files remain pending until those physical executions exist.

@@ -58,11 +58,25 @@ a new task number. New consumers should import functional modules.
 
 ### Experiment policy
 
-The active GPU experiment definitions are revision 3. Verified functional execution of an optional GPU path is a positive experiment outcome, independently of whether a simple fixture demonstrates a performance advantage or pixel equivalence. Preserve all image comparisons, resource observations and matched performance results, including differences and inconclusive comparisons. A functional pass is not a claim of numeric equivalence or a decision to enable the feature by default. Distribution size is reported. Historical v1 and v2 definitions and decisions remain unchanged; version and content digest distinguish semantics.
+The active GPU experiment definitions are revision 4. Verified functional execution of an optional GPU path is a positive experiment outcome, independently of whether a simple fixture demonstrates a performance advantage or pixel equivalence. Preserve all image comparisons, resource observations and matched performance results, including differences and inconclusive comparisons. A functional pass is not a claim of numeric equivalence or a decision to enable the feature by default. Distribution size is reported. Historical v1–v3 definitions and raw observations remain unchanged; version and content digest distinguish semantics.
 
 Hosted CI runs the headless WARP command-path check, independent builds and
 bundle integrity tests. It does not assert physical GPU presentation. The
 physical policy requires real GPU execution and real presentation. Ordinary physical validation runs in the current desktop session, without restarting Windows, auditing process creation, qualifying driver cache, or distinguishing cold and warm startup. Record per-process startup timing as an observation; only a task explicitly investigating startup behavior may require a specialized startup protocol. A physical outcome is recorded only after the actual test runs.
+
+Ordinary functional experiments require only one measured execution of the
+feature: five seconds of sampling warm-up followed by sixty seconds of
+execution for NW-11, plus short baseline and fallback smoke tests. Do not
+repeat each arm unless a task explicitly requires a statistical performance
+comparison. External ETW collection is optional for functional qualification;
+missing or invalid display/GPU timing is unavailable, never a fabricated
+zero or inferred display count. Native successful Present and linked shader
+identities establish renderer execution; independent canonical presentation
+and pixel/fallback checks remain required. An unmatched or incomplete series
+cannot establish performance superiority. Historical v3 runs may be
+reconstructed from the original trusted bundle and raw artifacts with the
+new optional-telemetry evaluator; do not change the original protocol or
+measured commit.
 
 Native renderer failure evidence preserves the actual process exit code,
 symbolic code, diagnostic message and launch/artifact identities in

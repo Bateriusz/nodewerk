@@ -132,9 +132,15 @@ fix the preflight rather than fabricating or relabeling the result.
 ### Present and timing evidence must measure the real path
 
 Hosted WARP/headless CI is useful for command-path validation but cannot replace
-a physical windowed Present requirement. PresentMon collection must be tied to
-the intended executable/process and must retain enough raw timing evidence to
-validate warm-up, duration, sample density and first-present semantics.
+a physical windowed Present requirement. Ordinary functional validation uses
+native successful Present, separately verified canonical display/capture
+evidence and short common/fallback smoke runs; one feature run suffices.
+When collecting comparative timing, PresentMon must be tied to the intended
+executable/process and retain enough raw timing evidence to validate warm-up,
+duration, sample density and first-present semantics. Missing or unusable ETW
+is an unavailable performance observation, not a native renderer failure.
+Do not infer displayed frames from submitted frames or require repeated
+minute-long runs unless the task explicitly calls for a matched benchmark.
 
 Separate fixed-resolution GPU resource readback from presentation geometry.
 An ordinary maximized window can still lose pixels to window chrome and the

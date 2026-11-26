@@ -15,7 +15,7 @@ The directory is not an independent renderer or a frozen implementation boundary
   launcher passes the probe-selected adapter LUID so a measurement can never
   silently move to another GPU.  The baseline consumes the generated indirect
   draw arguments, both arms run the shared bloom/tonemap/display chain.
-  Physical runs use real Present and PresentMon GPU/displayed-frame timings;
+  Physical runs use real Present; PresentMon GPU/displayed-frame timings are optional;
   hosted CI uses headless WARP command-path checks without Present. Production
   instrumentation measures CPU submission and the engine allocation high-water
   mark.
@@ -46,7 +46,7 @@ All experiment executables use the static MSVC CRT. `tools/nw11_toolchain_identi
 hosted CI to bind the measured compiler/SDK identity, compiled DXIL/header
 payload hashes, and inbox-only PE import set into the validation bundle.
 
-The active v3 experiments accept verified execution of the optional RTX feature. Image equivalence, matched relative performance, process startup, resource usage and distribution cost are reported separately; no default adoption is implied. No reboot, process-creation audit or cold/warm startup classification is required. Historical v1/v2 specifications and evidence remain unchanged. Use shared host identity/locale/PCI, telemetry, presentation metrics, measurement and error-evidence helpers rather than
+The active v4 experiments use one 60-second RTX run after a 5-second warm-up and one-second common baseline/fallback smoke runs. Native successful Present and independent canonical/fallback checks establish functional execution. PresentMon telemetry is optional; short and long arms are not a matched performance comparison. Image equivalence, startup, resource usage and distribution cost are observations; no default adoption is implied. No reboot, process-creation audit or cold/warm startup classification is required. Historical v1–v3 specifications and raw evidence remain unchanged. Use shared host identity/locale/PCI, telemetry, presentation metrics, measurement and error-evidence helpers rather than
 forking them; retain old task-named entry points only for compatibility.
 Reproducibility compares independent builds of the same revision, not old
 binary hashes. Physical evidence binds the exact measured bundle and revision.

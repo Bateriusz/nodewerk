@@ -70,12 +70,12 @@ NW-11 reuses the same NW-01B experiment-record schema with an additive
 
 ### Mesh shaders versus indexed rendering
 - **Record:** [`benchmarks/experiments/nw11-mesh-shader-experiment.json`](../benchmarks/experiments/nw11-mesh-shader-experiment.json)
-- **Definition:** [`benchmarks/nw11/experiments/mesh-shader-vs-indexed.v3.json`](../benchmarks/nw11/experiments/mesh-shader-vs-indexed.v3.json)
-- **Outcome:** `nw11_optional_mesh` implements the `as_6_5`/`ms_6_5` variant, consumes the NW-06-generated torus vertex buffer, and shares the common fragment stage. `nw11_common_baseline` and the separately built `nw11_fallback_common` remain distinct artifacts. Matched physical runs on RTX 4060 Ti and RTX 5070 Ti are pending; no GPU-less result is promoted.
+- **Definition:** [`benchmarks/nw11/experiments/mesh-shader-vs-indexed.v4.json`](../benchmarks/nw11/experiments/mesh-shader-vs-indexed.v4.json)
+- **Outcome:** `nw11_optional_mesh` implements the `as_6_5`/`ms_6_5` variant, consumes the NW-06-generated torus vertex buffer, and shares the common fragment stage. `nw11_common_baseline` and the separately built `nw11_fallback_common` remain distinct artifacts. The operator completed physical runs on RTX 4060 Ti and RTX 5070 Ti; formal cross-device raw verification is pending after Blackwell ETW collection failed.
 
 ### DXR ray queries versus analytic reflection
 - **Record:** [`benchmarks/experiments/nw11-ray-query-experiment.json`](../benchmarks/experiments/nw11-ray-query-experiment.json)
-- **Definition:** [`benchmarks/nw11/experiments/ray-query-vs-analytic.v3.json`](../benchmarks/nw11/experiments/ray-query-vs-analytic.v3.json)
+- **Definition:** [`benchmarks/nw11/experiments/ray-query-vs-analytic.v4.json`](../benchmarks/nw11/experiments/ray-query-vs-analytic.v4.json)
 - **Outcome:** `nw11_optional_ray` implements the `ps_6_5` inline-ray-query variant, builds BLAS/TLAS from the same generated geometry and instance transforms, and shares the NW-07 graph, capture, quality, and present path with the common `ps_6_0` analytic baseline. Physical evidence and separate-fallback execution remain pending.
 
 ## Inbox-Runtime Blocker Log
@@ -83,4 +83,7 @@ NW-11 reuses the same NW-01B experiment-record schema with an additive
 - **Current Status:** No inbox-runtime blocker was observed in the verified RTX 4060 Ti capture or in the preserved RTX 5070 Ti run (unverified for the desktop tier because its host CPU was mobile). The recorded dispatches succeeded on inbox Windows 11 `d3d12.dll` with Feature Level `12_0` + Shader Model `6.0`, bounded descriptor tables, ordinary barriers, and one direct queue without Agility SDK redistribution. If a future capture fails, the exact `win_build`, `d3d12_dll` version, HRESULT, and failed feature must be recorded here before any profile or redistributable change.
 - **Blocker Reporting Mechanism:** Verified via `nw_empty_player --simulate-failure InboxRuntimeBlocker --diagnostics`, which returns exit code `25` (`InboxRuntimeBlocker`) and emits the structured blocker diagnostic required before any profile change.
 
-The sanitized [Ada observations from revision 250e1f7](../benchmarks/nw11/history/ada-250e1f7.md) preserve the v2 measurement outcomes and the operator's visual observations. V3 interprets successful optional-path execution separately from performance and image equivalence; the historical observations do not certify a rebuilt bundle or replace the required raw evidence for two-device coverage.
+The sanitized [Ada observations from revision 250e1f7](../benchmarks/nw11/history/ada-250e1f7.md) preserve the v2 measurement outcomes and the operator's visual observations. V4 interprets successful optional-path execution separately from performance and image equivalence; the historical observations do not certify a rebuilt bundle or replace the required raw evidence for two-device coverage.
+
+
+The [v3 physical observations](../benchmarks/nw11/history/physical-f86ef05.md) preserve the successful native execution on both boards, including the Blackwell PresentMon failure. The v4 smoke policy removes redundant repetition and keeps missing display telemetry separate from functional execution.
