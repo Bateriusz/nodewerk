@@ -2976,9 +2976,47 @@ std::vector<std::uint8_t> MakeRootSignatureBlob(
     return writer.ok ? writer.bytes : std::vector<std::uint8_t>{};
 }
 
+#if NW_PACKAGE_AUDIO
+// Validate NWAS v1 before storing or submitting any package resources. Keep
+// this CPU capability independent of GPU predicates and synthesis linkage.
+static bool ValidAudioPayload(const std::uint8_t* bytes, std::size_t size) {
+    if (size < 20u || ReadU32(bytes) != 0x5341574eu ||
+        ReadU32(bytes + 4) != 1u) return false;
+    const auto duration = ReadU64(bytes + 8);
+    const auto count = ReadU32(bytes + 16);
+    if (!duration || duration > 48000ull * 3600u || !count || count > 64u ||
+        size != 20u + 20u * count) return false;
+    std::uint64_t previous = 0;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        const auto* event = bytes + 20u + 20u * i;
+        const auto tick = ReadU64(event);
+        const auto length = ReadU32(event + 8);
+        const auto frequency = ReadU32(event + 12);
+        const auto gain = ReadU32(event + 16);
+        if (tick < previous || tick >= duration || !length ||
+            length > duration - tick || !frequency || frequency > 20000000u ||
+            !gain || gain > 32767u) return false;
+        previous = tick;
+    }
+    return true;
+}
+#endif
+
 bool ValidatePackage(const Package& package,
                      std::vector<Diagnostic>& diagnostics,
                      bool allow_dev) {
+#if NW_PACKAGE_AUDIO
+    if ((package.audio_song.has_value() &&
+         !ValidAudioPayload(package.audio_song->data(), package.audio_song->size())) ||
+        (!package.audio_song.has_value() && (package.flags & kAudioExtensionFlag))) {
+        AddDiagnostic(diagnostics, "package_audio_invalid", "invalid NWAS payload or flag",
+                      std::string(kSectionAudio));
+    }
+#elif !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    if (package.audio_song.has_value() || (package.flags & kAudioExtensionFlag)) {
+        AddDiagnostic(diagnostics, "package_audio_unsupported", "audio capability not linked");
+    }
+#endif
     ValidateCapability(package.capability, package.resources,
                        package.initialization, package.frame, package.shaders,
                        package.root_signatures, diagnostics,
@@ -3379,6 +3417,10 @@ std::vector<std::uint8_t> EncodePackage(
             EncodeCheckpoints(package.release_checkpoints);
     }
 #endif
+#if NW_PACKAGE_AUDIO
+    if (package.audio_song.has_value())
+        sections[std::string(kSectionAudio)] = *package.audio_song;
+#endif
     if (package.dev_metadata.has_value()) {
         sections[std::string(kSectionDev)] = *package.dev_metadata;
     }
@@ -3408,6 +3450,9 @@ std::vector<std::uint8_t> EncodePackage(
         record_counts[std::string(kSectionCheckpoints)] =
             static_cast<std::uint32_t>(package.release_checkpoints.size());
     }
+#endif
+#if NW_PACKAGE_AUDIO
+    if (package.audio_song.has_value()) record_counts[std::string(kSectionAudio)] = 1u;
 #endif
     for (const auto& [name, payload] : sections) {
         if (name != std::string(kSectionDev) && payload.empty()) {
@@ -3451,9 +3496,15 @@ std::vector<std::uint8_t> EncodePackage(
     writer.bytes.insert(writer.bytes.end(), kMagic.begin(), kMagic.end());
     writer.U16(kVersionMajor);
 #if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
-    writer.U16(stateful ? kVersionMinorStateful : kVersionMinor);
+#if NW_PACKAGE_AUDIO
+    const bool audio = package.audio_song.has_value();
+#else
+    constexpr bool audio = false;
+#endif
+    writer.U16(audio ? kVersionMinorAudio : (stateful ? kVersionMinorStateful : kVersionMinor));
     writer.U32(kHeaderSize);
-    writer.U32(package.flags | (stateful ? kStatefulExtensionFlag : 0u));
+    writer.U32(package.flags | (stateful ? kStatefulExtensionFlag : 0u) |
+               (audio ? kAudioExtensionFlag : 0u));
 #else
     writer.U16(kVersionMinor);
     writer.U32(kHeaderSize);
@@ -3525,7 +3576,11 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
     const std::uint64_t reserved2 = ReadU64(data + 56);
 #if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
     if (major != kVersionMajor ||
-        (minor != kVersionMinor && minor != kVersionMinorStateful)) {
+        (minor != kVersionMinor && minor != kVersionMinorStateful
+#if NW_PACKAGE_AUDIO
+         && minor != kVersionMinorAudio
+#endif
+        )) {
 #else
     if (major != kVersionMajor || minor != kVersionMinor) {
 #endif
@@ -3533,6 +3588,9 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
                       "unknown .nwp version", {}, 8, true);
         return false;
     }
+#if !NW_PACKAGE_AUDIO
+    if ((flags & kAudioExtensionFlag) != 0u) return false;
+#endif
     if (header_size != kHeaderSize) {
         NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_header_size",
                       "header_size is not 64", {}, 12, true);
@@ -3618,6 +3676,9 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             name != std::string(kSectionShaders) &&
             name != std::string(kSectionRootSignatures) &&
             name != std::string(kSectionDev)
+#if NW_PACKAGE_AUDIO
+            && name != std::string(kSectionAudio)
+#endif
 #if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
             && name != std::string(kSectionHistory) &&
             name != std::string(kSectionCheckpoints)
@@ -4257,10 +4318,27 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
             return false;
         }
     }
+#if NW_PACKAGE_AUDIO
+    const auto audio_name = std::string(kSectionAudio);
+    const bool audio_present = names.count(audio_name) != 0u;
+    if (audio_present != ((flags & kAudioExtensionFlag) != 0u) ||
+        audio_present != (minor == kVersionMinorAudio)) return false;
+    if (audio_present) {
+        const auto* payload = payloads[audio_name];
+        const auto length = payload_sizes[audio_name];
+        if (!ValidAudioPayload(payload, length)) {
+            NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_audio_invalid", "invalid NWAS payload", audio_name);
+            return false;
+        }
+        package.audio_song = std::vector<std::uint8_t>(payload, payload + length);
+    }
+#else
+    constexpr bool audio_present = false;
+#endif
     const bool stateful_present =
         !package.history.empty() || !package.release_checkpoints.empty();
     if (stateful_present != ((flags & kStatefulExtensionFlag) != 0u) ||
-        stateful_present != (minor == kVersionMinorStateful)) {
+        (!audio_present && stateful_present != (minor == kVersionMinorStateful))) {
         NW_NWP_DECODE_DIAGNOSTIC(diagnostics,
                       "package_stateful_extension_mismatch",
                       "stateful extension flag/version do not match sections");
@@ -4299,6 +4377,9 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
         actual_counts[std::string(kSectionCheckpoints)] =
             static_cast<std::uint32_t>(package.release_checkpoints.size());
     }
+#endif
+#if NW_PACKAGE_AUDIO
+    if (package.audio_song.has_value()) actual_counts[std::string(kSectionAudio)] = 1u;
 #endif
     for (const auto& entry : entries) {
         if (entry.record_count != actual_counts[entry.name]) {
@@ -4395,7 +4476,15 @@ std::string InspectJson(const Package& package, bool valid,
                         const std::vector<std::string>& leakage) {
     std::ostringstream out;
     out << "{\"valid\":" << (valid ? "true" : "false")
-        << ",\"format\":\"nwp\",\"version\":{\"major\":1,\"minor\":0}"
+        << ",\"format\":\"nwp\",\"version\":{\"major\":1,\"minor\":"
+#if NW_PACKAGE_AUDIO
+        << (package.audio_song.has_value() ? 2 : (!package.history.empty() || !package.release_checkpoints.empty() ? 1 : 0))
+#elif !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+        << (!package.history.empty() || !package.release_checkpoints.empty() ? 1 : 0)
+#else
+        << 0
+#endif
+        << "}"
         << ",\"size_bytes\":" << package_size_bytes
         << ",\"checksum\":{\"algorithm\":\"sha256\",\"digest\":"
         << JsonEscape(checksum_hex)
@@ -4407,6 +4496,14 @@ std::string InspectJson(const Package& package, bool valid,
     }
     out << "]";
     if (valid) {
+#if NW_PACKAGE_AUDIO
+        if (package.audio_song.has_value()) {
+            out << ",\"audio_extension\":{\"format\":\"NWAS\",\"version\":1,\"clock\":\"wasapi_endpoint\",\"duration_ticks\":"
+                << ReadU64(package.audio_song->data() + 8)
+                << ",\"song_bytes\":" << package.audio_song->size()
+                << ",\"song_sha256\":" << JsonEscape(Sha256Hex(*package.audio_song)) << "}";
+        }
+#endif
         out << ",\"capability\":{"
             << "\"profile_id\":" << JsonEscape(package.capability.profile_id)
             << ",\"requirements_digest\":"

@@ -1712,7 +1712,7 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
                         ParamType::Expression);
         schema.params = {expression};
         schema.shader_operations = {"vec2", "vec3", "vec4", "sin", "cos",
-                                    "mix", "texture2d", "uv", "time", "const"};
+                                    "mix", "texture2d", "uv", "time", "const", "frac", "step"};
         registry.Register(std::move(schema));
     }
     {

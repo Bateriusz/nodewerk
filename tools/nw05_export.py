@@ -747,7 +747,7 @@ def _attach_audio_manifest(manifest: dict[str, Any], song: bytes) -> None:
         "sample_rate": 48000, "channels": 1, "bits_per_sample": 16,
         "clock": "wasapi_endpoint", "initialization_failure": "fail",
         "song_sha256": hashlib.sha256(song).hexdigest(),
-        "song_bytes": len(song), "song_hex": song.hex(),
+        "song_bytes": len(song), "package_section": "AUDI",
     }
     retained = manifest["retained"]
     for key, values in (
@@ -758,14 +758,14 @@ def _attach_audio_manifest(manifest: dict[str, Any], song: bytes) -> None:
 
 
 def _audio_playback_source(audio: Mapping[str, Any]) -> str:
-    payload = bytes.fromhex(audio["song_hex"])
-    if (hashlib.sha256(payload).hexdigest() != audio["song_sha256"]
-            or len(payload) != audio["song_bytes"]):
-        raise ExportError("audio manifest song binding mismatch")
-    values = ",".join(str(value) for value in payload)
-    return f"""    static constexpr std::uint8_t song_bytes[] = {{{values}}};
+    expected = audio["song_sha256"]
+    if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+        raise ExportError("invalid audio manifest digest")
+    return f"""    const auto& song_bytes = player.package().audio_song;
     nw::audio::Song song{{}};
-    if (!nw::audio::DecodeSong(song_bytes, sizeof(song_bytes), song)) return 70;
+    if (!song_bytes || song_bytes->size() != {int(audio["song_bytes"])}u ||
+        nw::package::Sha256Hex(*song_bytes) != "{expected}" ||
+        !nw::audio::DecodeSong(song_bytes->data(), song_bytes->size(), song)) return 70;
     nw::audio::WasapiOutput audio_output;
     if (!audio_output.start(song)) {{
         std::fprintf(stderr, "NW_AUDIO_INITIALIZATION_FAILED\\n");
@@ -2636,6 +2636,8 @@ def _compile_profile_package(
                 profile_fingerprint=capability.computed_profile_fingerprint(),
             )
             package = replace(package, capability=capability)
+            if audio_payload:
+                package = replace(package, audio_song=audio_payload)
             package_bytes = nwp.encode_package(package)
             valid, diagnostics = nwp.validate_package_bytes(package_bytes)
             if not valid:
@@ -3017,6 +3019,8 @@ def export_graph(
     settings = settings or ExportSettings()
     audio_payload = b""
     if settings.audio_song_path:
+        if settings.frozen_embedded_specialization:
+            raise ExportError("audio requires the full versioned package reader")
         try:
             audio_payload = audio_song.compile_song(json.loads(
                 Path(settings.audio_song_path).read_text(encoding="utf-8")
@@ -3586,6 +3590,10 @@ def export_graph(
                 )
             except nw03.CompilerError:
                 raise
+            if audio_payload:
+                package = replace(package, audio_song=audio_payload)
+                package_bytes = nwp.encode_package(package)
+                package_path.write_bytes(package_bytes)
             compile_reports[profile_id] = compile_report
             logical_schedule = schedule.build_logical_schedule(
                 package, frames_in_flight=settings.frames_in_flight

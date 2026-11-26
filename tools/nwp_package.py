@@ -42,6 +42,9 @@ VERSION_MINOR = 0
 # NW-09 adds an explicitly versioned, optional stateful-content extension.
 # Stateless exports continue to emit exactly version 1.0 bytes.
 VERSION_MINOR_STATEFUL = 1
+VERSION_MINOR_AUDIO = 2
+AUDIO_EXTENSION_FLAG = 4
+SECTION_AUDIO = "AUDI"
 STATEFUL_EXTENSION_FLAG = 2
 HEADER_SIZE = 64
 SECTION_ENTRY_SIZE = 32
@@ -80,7 +83,7 @@ REQUIRED_RELEASE_SECTIONS = (
 )
 STATEFUL_EXTENSION_SECTIONS = (SECTION_HISTORY, SECTION_CHECKPOINTS)
 KNOWN_SECTIONS = frozenset(
-    REQUIRED_RELEASE_SECTIONS + (SECTION_DEV,) + STATEFUL_EXTENSION_SECTIONS
+    REQUIRED_RELEASE_SECTIONS + (SECTION_DEV, SECTION_AUDIO) + STATEFUL_EXTENSION_SECTIONS
 )
 
 COMMON_PROFILE_ID = "nw.common.d3d12.fl12_0.sm6_0.v1"
@@ -735,9 +738,12 @@ class NwpPackage:
     release_checkpoints: tuple[ReleaseCheckpointRecord, ...] = ()
     dev_metadata: bytes | None = None
     flags: int = 1  # bit 0: release package
+    audio_song: bytes | None = None
 
     @property
     def version_minor(self) -> int:
+        if self.audio_song is not None:
+            return VERSION_MINOR_AUDIO
         return (
             VERSION_MINOR_STATEFUL
             if self.history or self.release_checkpoints
@@ -765,6 +771,14 @@ class NwpPackage:
         # A History-free package has exactly the pre-NW-09 inspection surface.
         # The stateful extension is additive and appears only when its sections
         # are actually present.
+        if self.audio_song is not None:
+            import audio_song
+            payload["audio_extension"] = {
+                "format": "NWAS", "version": 1, "clock": "wasapi_endpoint",
+                "duration_ticks": audio_song.decode_song(self.audio_song)["duration_ticks"],
+                "song_bytes": len(self.audio_song),
+                "song_sha256": hashlib.sha256(self.audio_song).hexdigest(),
+            }
         if self.stateful:
             payload["stateful_extension"] = {
                 "present": self.stateful,
@@ -3657,6 +3671,14 @@ def _validate_cross_references(
 def validate_package_model(package: NwpPackage) -> list[dict[str, Any]]:
     """Validate a package model and return package-validation diagnostics."""
     diagnostics: list[dict[str, Any]] = []
+    if package.audio_song is not None:
+        import audio_song
+        try:
+            audio_song.decode_song(package.audio_song)
+        except ValueError as exc:
+            diagnostics.append(package_diagnostic("package_audio_invalid", str(exc), section=SECTION_AUDIO))
+    elif package.flags & AUDIO_EXTENSION_FLAG:
+        diagnostics.append(package_diagnostic("package_audio_invalid", "audio flag without payload", section=SECTION_AUDIO))
     _validate_capability(
         package.capability,
         diagnostics,
@@ -4242,6 +4264,8 @@ def encode_package(package: NwpPackage) -> bytes:
     if package.dev_metadata is not None:
         sections[SECTION_DEV] = package.dev_metadata
 
+    if package.audio_song is not None:
+        sections[SECTION_AUDIO] = package.audio_song
     section_order = sorted(sections)
     directory_end = HEADER_SIZE + SECTION_ENTRY_SIZE * len(section_order)
     offsets: list[tuple[str, int, int]] = []
@@ -4260,6 +4284,8 @@ def encode_package(package: NwpPackage) -> bytes:
         record_counts[SECTION_HISTORY] = len(package.history)
     if package.release_checkpoints:
         record_counts[SECTION_CHECKPOINTS] = len(package.release_checkpoints)
+    if package.audio_song is not None:
+        record_counts[SECTION_AUDIO] = 1
     for name, payload in sections.items():
         if len(payload) > MAX_SECTION_BYTES:
             raise PackageValidationError(
@@ -4297,12 +4323,14 @@ def encode_package(package: NwpPackage) -> bytes:
     header_flags = int(package.flags)
     if stateful:
         header_flags |= STATEFUL_EXTENSION_FLAG
+    if package.audio_song is not None:
+        header_flags |= AUDIO_EXTENSION_FLAG
     header = bytearray(
         struct.pack(
             "<8sHHIIIQQIIQQ",
             MAGIC,
             VERSION_MAJOR,
-            VERSION_MINOR_STATEFUL if stateful else VERSION_MINOR,
+            package.version_minor,
             HEADER_SIZE,
             header_flags,
             0,
@@ -4406,13 +4434,13 @@ def decode_package(
                 offset=8,
             )
         )
-    if minor not in (VERSION_MINOR, VERSION_MINOR_STATEFUL):
+    if minor not in (VERSION_MINOR, VERSION_MINOR_STATEFUL, VERSION_MINOR_AUDIO):
         raise PackageValidationError(
             package_diagnostic(
                 "package_version_unknown",
                 f"unknown .nwp minor version {minor}; this reader implements "
                 f"{VERSION_MINOR} and the explicit stateful extension "
-                f"{VERSION_MINOR_STATEFUL}",
+                f"{VERSION_MINOR_STATEFUL} or audio extension {VERSION_MINOR_AUDIO}",
                 offset=10,
             )
         )
@@ -4692,7 +4720,12 @@ def decode_package(
                 "stateful extension flag does not match HIST/CKPT section presence",
             )
         )
-    if (minor == VERSION_MINOR_STATEFUL) != stateful_present:
+    audio_payload = payloads.get(SECTION_AUDIO)
+    audio_present = audio_payload is not None
+    if audio_present != bool(flags & AUDIO_EXTENSION_FLAG) or audio_present != (minor == VERSION_MINOR_AUDIO):
+        raise PackageValidationError(package_diagnostic(
+            "package_audio_extension_mismatch", "audio flag/version/section mismatch", section=SECTION_AUDIO))
+    if not audio_present and (minor == VERSION_MINOR_STATEFUL) != stateful_present:
         raise PackageValidationError(
             package_diagnostic(
                 "package_stateful_extension_mismatch",
@@ -4711,6 +4744,7 @@ def decode_package(
         release_checkpoints=release_checkpoints,
         dev_metadata=dev_metadata,
         flags=flags,
+        audio_song=audio_payload,
     )
     actual_counts = {
         SECTION_CAPABILITY: 1,
@@ -4727,6 +4761,8 @@ def decode_package(
         actual_counts[SECTION_HISTORY] = len(history)
     if release_checkpoints:
         actual_counts[SECTION_CHECKPOINTS] = len(release_checkpoints)
+    if audio_present:
+        actual_counts[SECTION_AUDIO] = 1
     for name, _index, declared_records, offset, _size, _entry_offset in entries:
         if declared_records != actual_counts[name]:
             raise PackageValidationError(

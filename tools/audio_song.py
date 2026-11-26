@@ -29,6 +29,22 @@ def compile_song(model):
         previous = tick
     return bytes(result)
 
+def decode_song(payload):
+    if not isinstance(payload, bytes) or len(payload) < 20:
+        raise ValueError("truncated NWAS payload")
+    magic, version, duration, count = struct.unpack_from("<4sIQI", payload)
+    if magic != b"NWAS" or not 1 <= count <= 64 or len(payload) != 20 + 20 * count:
+        raise ValueError("invalid NWAS header or length")
+    events = []
+    for offset in range(20, len(payload), 20):
+        tick, length, frequency, gain = struct.unpack_from("<QIII", payload, offset)
+        events.append({"tick": tick, "duration": length,
+                       "frequency_millihz": frequency, "gain": gain})
+    model = {"version": version, "duration_ticks": duration, "events": events}
+    if compile_song(model) != payload:
+        raise ValueError("noncanonical NWAS payload")
+    return model
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("song", type=Path)
