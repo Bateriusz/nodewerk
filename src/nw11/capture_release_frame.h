@@ -37,6 +37,7 @@ inline bool CaptureReleaseFrame(DWORD pid, const char* output, const char* refer
             const long offset = (anchor.y * width + anchor.x) * 4 * sizeof(float);
             loaded = std::fseek(expected, offset, SEEK_SET) == 0 &&
                      std::fread(anchor.rgba.data(), sizeof(float), 4, expected) == 4;
+            for (float component : anchor.rgba) loaded = loaded && std::isfinite(component);
         }
     }
     std::fclose(expected);
