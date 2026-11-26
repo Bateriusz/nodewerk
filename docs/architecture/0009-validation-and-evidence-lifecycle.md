@@ -28,9 +28,14 @@ paths are selected by build configuration; an independently generated copy
 of a historically pinned implementation is not a second player.
 
 The common Win32 layer initializes client geometry from GetClientRect, not a
-cached request. Physical GPU experiment windows are borderless; other player
-users retain the ordinary window policy. Physical captures still require
-actual presentation and the measured dimensions.
+cached request. Fixed-resolution GPU source readback is independent of the
+ordinary window geometry. Physical GPU experiment and native composed-release
+proofs use explicit borderless placement; the common generated player also
+supports ordinary maximization, without changing source resolution. Other
+player users retain their ordinary window policy by default. A Full HD monitor
+can provide the full 1920×1080 native display proof; physical presentation
+captures still require the actual visible measured dimensions. Verify that
+proof before expensive warm measurements, after first-use startup evidence.
 
 Shared tools are named by responsibility:
 
