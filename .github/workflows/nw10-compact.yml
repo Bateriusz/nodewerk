@@ -1,4 +1,4 @@
-name: NW-10 Compact Export and Restricted Intro
+name: Compact Export and Restricted Intro
 
 on:
   workflow_dispatch:

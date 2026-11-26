@@ -72,3 +72,5 @@ graph semantics and `.nwgraph` schema.
 - NW-11 Evidence Status and Decisions: [`benchmarks/nw11/evidence-status.v1.json`](../benchmarks/nw11/evidence-status.v1.json), [`benchmarks/nw11/decisions/`](../benchmarks/nw11/decisions/) (validated by [`schemas/nw11-evidence-status.schema.json`](../schemas/nw11-evidence-status.schema.json) and [`schemas/nw11-decision.schema.json`](../schemas/nw11-decision.schema.json))
 - NW-11 Follow-Up Matrix: [`benchmarks/nw11/follow-up-matrix.v1.json`](../benchmarks/nw11/follow-up-matrix.v1.json) (validated by [`schemas/nw11-follow-up-matrix.schema.json`](../schemas/nw11-follow-up-matrix.schema.json))
 - NW-11 Bundle and Evidence Schemas: [`schemas/nw11-bundle-manifest.schema.json`](../schemas/nw11-bundle-manifest.schema.json), [`schemas/nw11-evidence.schema.json`](../schemas/nw11-evidence.schema.json)
+
+- [ADR 0009 — Validation and evidence lifecycle](architecture/0009-validation-and-evidence-lifecycle.md)

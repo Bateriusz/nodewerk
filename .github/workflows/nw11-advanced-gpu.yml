@@ -1,4 +1,4 @@
-name: NW-11 Advanced GPU Feature Experiments
+name: Advanced GPU Experiments and Validation
 
 on:
   workflow_dispatch:
@@ -70,7 +70,7 @@ jobs:
           tools/nw11_toolchain_identity.py tools/nw11_shader_payloads.py
           tools/nw11_pe_dependencies.py tools/nw11_pack_python_runtime.py
           tools/hardware_evidence_host.py tools/hardware_evidence_devices.py
-          tools/nw11_host.py tools/nw11_cold_start.py tools/nw11_measurements.py tools/nw11_production_binding.py
+          tools/validation_gpu_telemetry.py tools/validation_cold_start.py tools/gpu_experiment_measurements.py tools/validation_errors.py tools/nw11_production_binding.py
           tools/nw11/validate-device.py
           tools/nw11/collect-evidence.py tools/nw11/compare-captures.py
       - name: Validate schemas and tracked evidence state

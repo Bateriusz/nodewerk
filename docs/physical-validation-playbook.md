@@ -193,3 +193,7 @@ only in a PR review comment or a task-specific script.
 These checks are a reusable baseline. Individual tasks may add stricter
 experiment-specific requirements, but should not weaken or fork this shared
 physical-validation contract.
+
+## Evolving the implementation
+
+See [ADR 0009](architecture/0009-validation-and-evidence-lifecycle.md). Historical evidence and versioned specifications retain their original identities; the current source and shared validation implementation may evolve. The active GPU experiment policy explicitly separates hosted headless WARP from physical presentation and reports distribution size without using it as an adoption gate.
