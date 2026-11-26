@@ -457,7 +457,7 @@ jobs:
           "Baseline: $($accounting.baseline_distribution_bytes) B; variant: $($accounting.variant_distribution_bytes) B; fallback: $($accounting.fallback_distribution_bytes) B; incremental: $($accounting.incremental_distribution_bytes) B." >> $env:GITHUB_STEP_SUMMARY
           "Complete within budget: $($accounting.within_complete_ceiling); incremental within budget: $($accounting.within_incremental_budget)." >> $env:GITHUB_STEP_SUMMARY
           "Ceilings: complete $($accounting.artifact_budget.complete_distribution_bytes_ceiling) B; incremental $($accounting.artifact_budget.incremental_distribution_bytes_ceiling) B." >> $env:GITHUB_STEP_SUMMARY
-          if ($accounting.adoption_budget_status -ne "accepted") {
+          if ($accounting.adoption_budget_status -eq "rejected") {
             Write-Host "::warning::NW-11 ${{ matrix.slug }} bundle is identity-verified but adoption is rejected by the declared distribution budget."
           }
       - name: Stage the CI trust record and its exact launcher
@@ -653,6 +653,7 @@ jobs:
           python -I -B -S @arguments
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && hashFiles('build/nw11-decisions.json') != '' }}
         with:
           name: nw11-verified-decisions-${{ matrix.slug }}-${{ github.sha }}
           path: build/nw11-decisions.json
