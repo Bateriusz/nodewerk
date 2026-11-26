@@ -991,10 +991,11 @@ def test_nw11_host_rejects_default_only_gpu_power_limit() -> None:
         "<gpu_power_readings><gpu_ceiling_power_limit><default_power_limit>165 W</default_power_limit>"
         "</gpu_ceiling_power_limit></gpu_power_readings>",
     )
-    qualified = host.qualify(
+    qualified, reasons = host.qualify_with_diagnostics(
         raw, {"vendor_id": 0x10DE, "device_id": 0x2805, "subsystem_id": 0x10DE}
     )
     assert qualified is None
+    assert reasons == ["ValueError: GPU ceiling power limit is unavailable"]
 
 
 def test_nw11_host_accepts_nvidia_pci_ids_without_0x_prefix() -> None:
@@ -1011,6 +1012,17 @@ def test_nw11_host_output_decoding_is_independent_of_cp1250(monkeypatch) -> None
     payload = b"Power Scheme GUID: 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c " + bytes([0x98])
     decoded = hardware_host.decode_windows_output(payload)
     assert decoded.endswith("ś")
+
+
+def test_nw11_verify_only_requires_physical_provenance_before_success() -> None:
+    runner = (REPO_ROOT / "tools/nw11/validate-device.py").read_text(encoding="utf-8")
+    provenance_check = 'if not tier:'
+    verify_success = 'if args.verify_only:'
+    assert provenance_check in runner
+    assert verify_success in runner
+    assert runner.index(provenance_check) < runner.index(verify_success)
+    assert "physical-provenance-diagnostics.json" in runner
+    assert "qualify_with_diagnostics" in runner
 
 
 def test_nw11_launcher_is_one_command_and_verifies_before_measuring() -> None:
