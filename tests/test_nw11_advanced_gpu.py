@@ -609,6 +609,7 @@ def test_nw11_bundle_is_deterministic_and_self_contained(tmp_path: Path) -> None
         "manifests/experiment.json",
         "tools/nw11/nw11_verify.py",
         "tools/nw11/hardware_evidence_host.py",
+        "tools/nw11/hardware_evidence_devices.py",
         "tools/nw11/collect-evidence.py",
     ):
         assert required in paths
