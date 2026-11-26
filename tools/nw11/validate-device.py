@@ -292,13 +292,11 @@ def validate_device(root: Path, manifest: dict, output: Path, args: argparse.Nam
         "collected_by_process_id": os.getpid(), "start_filetime": audit_start, "end_filetime": filetime(),
         "observation": audit,
     })
-    for role, relative in roles.items():
-        directory = output / "raw" / role
+    for role, index in measurements.warm_run_schedule(settings, roles):
         decision = optional if role == "variant" else common
-        for index in range(1, settings["protocol"]["runs"] + 1):
-            launch_renderer(root, manifest, settings, decision,
-                            directory / f"run-{index}", role, relative, mode="warm",
-                            capture=index == settings["protocol"]["runs"])
+        launch_renderer(root, manifest, settings, decision,
+                        output / "raw" / role / f"run-{index}", role, roles[role], mode="warm",
+                        capture=index == settings["protocol"]["runs"])
     launch_renderer(root, manifest, settings, common, output / "canonical-reference",
                     "canonical_reference", "bin/canonical_reference.exe",
                     mode="canonical_reference", capture=True)
