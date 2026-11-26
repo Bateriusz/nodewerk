@@ -39,7 +39,8 @@ bool WasapiOutput::start(const Song& song, std::uint64_t tick) {
     starvation_.store(0);
     discontinuities_.store(0);
     cpu_.store(0);
-    worker_ = std::thread(&WasapiOutput::run, this);
+    worker_ = CreateThread(nullptr, 0, &WasapiOutput::ThreadEntry, this, 0, nullptr);
+    if (!worker_) { failed_.store(true); return false; }
     // Startup handshake only; never executed by the audio worker or callback.
     while (!ready_.load() && !failed_.load()) Sleep(1);
     if (failed_.load()) { stop(); return false; }
@@ -51,7 +52,15 @@ bool WasapiOutput::seek(std::uint64_t tick) {
 }
 void WasapiOutput::stop() noexcept {
     stop_.store(true);
-    if (worker_.joinable()) worker_.join();
+    if (worker_) {
+        WaitForSingleObject(worker_, INFINITE);
+        CloseHandle(worker_);
+        worker_ = nullptr;
+    }
+}
+DWORD WINAPI WasapiOutput::ThreadEntry(void* context) noexcept {
+    static_cast<WasapiOutput*>(context)->run();
+    return 0;
 }
 void WasapiOutput::run() noexcept {
     auto fail = [this]() noexcept { failed_.store(true); };
@@ -130,7 +139,12 @@ void WasapiOutput::run() noexcept {
         if (wait == WAIT_OBJECT_0) {
             UINT32 padding = 0;
             if (FAILED(client->GetCurrentPadding(&padding)) || padding > capacity) { fail(); break; }
-            if (!padding) starvation_.fetch_add(1);
+            if (!padding) {
+                starvation_.fetch_add(1);
+                // If playback advanced beyond the submitted samples, do not
+                // replay elapsed audio. Reconstruct from the actual clock.
+                if (tick > cursor) cursor = tick;
+            }
             if (!fill(capacity - padding)) { fail(); break; }
         }
     }

@@ -547,6 +547,8 @@ def command_export(args: argparse.Namespace) -> int:
             "frames_in_flight": args.frames_in_flight,
             "fusion_enabled": not args.no_fusion,
         }
+        if getattr(args, "audio_song", None):
+            settings["audio_song_path"] = args.audio_song
         if args.capture_controls:
             settings["frozen_embedded_specialization"] = False
         report = application.export_report(
@@ -687,6 +689,7 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--allow-unpinned-dxc", action="store_true")
     export.add_argument("--allow-test-payloads", action="store_true")
     export.add_argument("--player-template")
+    export.add_argument("--audio-song", help="optional procedural song JSON for export")
     export.add_argument("--byte-ceiling", type=int, default=nw05_export.DEFAULT_BYTE_CEILING)
     export.add_argument("--memory-budget", type=int, default=nw05_export.DEFAULT_MEMORY_BUDGET)
     export.add_argument("--target-profile", default=nwp_package.COMMON_PROFILE_ID)

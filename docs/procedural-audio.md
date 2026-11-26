@@ -29,9 +29,10 @@ cmake --build build/audio --target nw_audio_contract nw_audio_offline
 ```
 
 Run the contract executable, then `nw_audio_offline song.nwas audio.wav frames.csv`
-(with the platform executable suffix/path). The CSV is the exact 60 fps
-frame/tick/sample schedule, not a rendered video; use it to drive fixed-tick
-image capture. The Linux hosted pytest suite compiles and exercises the native
+(with the platform executable suffix/path). The CSV is the exact 60 fps frame/tick/sample schedule. For offline video use
+`python tools/audio_capture.py --offline <nw_audio_offline.exe> --host <nodewerk-studio-preview.exe> --package <scene.nwp> --song song.nwas --output <new-directory>`.
+It drives the existing headless Studio session, exports the raw RGBA32F image
+sequence and WAV with a SHA-256 manifest and refuses incomplete publication. The Linux hosted pytest suite compiles and exercises the native
 synthesis and offline writer, checks malformed inputs, and compares repeated
 WAV and CSV byte output.
 
@@ -43,8 +44,9 @@ The playback fixture is not an embedded production export. The shared production
 
 ## Outstanding acceptance
 
-Studio integration, synchronized video capture, native NWP section integration,
+Interactive Studio playback/seek UI and native NWP section integration,
 final byte attribution and same-revision silent closure proof,
-and real impulse/flash display measurements remain open. The JSON fixture
-contains audio impulses at integer seconds; a matching visual flash production
-and physical measurement are still required. No physical evidence is claimed.
+and real impulse/flash display measurements remain open. The paired fixtures/audio/sync_flash.nwgraph and sync_song.json use white
+flashes and audio impulses at integer seconds. Studio's export CLI accepts
+--audio-song. The image sequence and physical measurement must still be
+validated on Windows. No physical evidence is claimed.

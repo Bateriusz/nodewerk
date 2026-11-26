@@ -100,3 +100,18 @@ def test_audio_manifest_and_generated_source_are_opt_in():
     with pytest.raises(export.ExportError):
         export._attach_audio_manifest({"timeline": {"duration_ticks": 1},
                                       "retained": {}}, song)
+
+def test_offline_capture_plan_rejects_mismatched_samples(tmp_path):
+    from audio_capture import frame_ticks
+    plan = tmp_path / "frames.csv"
+    plan.write_text("frame,tick,sample\n0,0,0\n1,800,800\n")
+    assert frame_ticks(plan) == [0, 800]
+    plan.write_text("frame,tick,sample\n0,0,0\n1,800,799\n")
+    with pytest.raises(ValueError):
+        frame_ticks(plan)
+
+def test_studio_export_parser_accepts_audio():
+    import nw08_studio
+    args = nw08_studio.build_parser().parse_args(
+        ["export", "--output", "build/audio", "--audio-song", "song.json"])
+    assert args.audio_song == "song.json"

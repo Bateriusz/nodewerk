@@ -1,7 +1,7 @@
 #pragma once
 #include "audio/procedural_audio.h"
 #include <atomic>
-#include <thread>
+#include <windows.h>
 
 namespace nw::audio {
 // Control operations are serialized by the caller. The worker owns all COM
@@ -22,10 +22,11 @@ public:
     std::uint64_t clock_discontinuities() const noexcept { return discontinuities_.load(); }
     std::uint64_t synthesis_cpu_100ns() const noexcept { return cpu_.load(); }
 private:
+    static DWORD WINAPI ThreadEntry(void* context) noexcept;
     void run() noexcept;
     Song song_{};
     std::uint64_t origin_ = 0;
-    std::thread worker_;
+    HANDLE worker_ = nullptr;
     std::atomic<bool> stop_{false}, failed_{false}, ready_{false};
     std::atomic<std::uint64_t> tick_{0}, starvation_{0}, discontinuities_{0}, cpu_{0};
 };
