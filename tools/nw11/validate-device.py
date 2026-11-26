@@ -234,22 +234,37 @@ def validate_device(root: Path, manifest: dict, output: Path, args: argparse.Nam
         raise ValidationError(f"Required common capability is unsupported: {common['diagnostics']}", 3)
     host = nw11_host.observe(root / "bin")
     write_json(output / "host-observation.json", host)
+    provenance, provenance_reasons = nw11_host.qualify_with_diagnostics(
+        host, observation["adapter"]
+    )
+    write_json(output / "physical-provenance-diagnostics.json", {
+        "status": "qualified" if provenance is not None else "rejected",
+        "reasons": provenance_reasons,
+    })
     common, optional = measurements.evaluate_profiles(root, manifest, observation, host)
     tier = common["physical_device_tier"]
     write_json(output / "common-eligibility.json", common)
     write_json(output / "eligibility.json", optional)
-    if args.verify_only:
-        write_summary(output, manifest, "verification_only", 0, device_tier=tier)
-        return 0
     if common["status"] != "eligible":
         raise ValidationError(f"Required common runtime/capability is {common['status']}: {common['diagnostics']}",
                               {"pending": 11, "unsupported": 3}.get(common["status"], 4))
     if not tier:
-        raise ValidationError("Physical host, GPU, power, clock, or thermal provenance is unavailable", 11)
+        detail = "; ".join(provenance_reasons) or "device key has no physical tier mapping"
+        raise ValidationError(
+            "Physical host, GPU, power, clock, or thermal provenance is unavailable: " + detail,
+            11,
+        )
     if args.expected_device_tier and tier != args.expected_device_tier:
         raise ValidationError(f"Physical board identity {common['device_key']} does not match the target")
     if optional["status"] not in {"eligible", "pending", "unsupported"}:
         raise ValidationError(f"Optional capability evaluation failed: {optional['diagnostics']}")
+    if args.verify_only:
+        write_summary(
+            output, manifest, "verification_only", 0, device_tier=tier,
+            device_key=common["device_key"], environment_key=common["environment_key"],
+            physical_provenance="qualified",
+        )
+        return 0
     measurements.validate_release_adapter(observation)
     settings = measurements.load_json(root / manifest["experiment_definition"]["path"])
     roles = measurements.role_paths(manifest, optional)
