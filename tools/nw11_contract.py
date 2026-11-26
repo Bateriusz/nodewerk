@@ -369,6 +369,7 @@ def experiment_path(experiment_id: str) -> Path:
 def role_protocol(document: dict, role: str) -> dict:
     """V4 uses a single measured RTX run and one-second common smoke tests."""
     protocol = dict(document["protocol"])
+    protocol["allow_optional_etw"] = document["version"] >= 3
     if document["version"] >= 4 and role in {"baseline", "fallback"}:
         protocol.update(warmup_seconds=0, run_seconds=1, min_raw_samples_per_run=1)
     return protocol

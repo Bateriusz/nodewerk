@@ -308,6 +308,14 @@ def _warm_run(folder: Path, launch: dict, report: dict, protocol: dict, *, optio
         return {**samples, "presentation_telemetry_status": "not_collected",
                 "launch": launch, "timing": timing}
     try:
+        log_path = folder / "presentmon.log"
+        if optional_etw and log_path.is_file():
+            log = log_path.read_text(encoding="utf-8", errors="replace")
+            losses = re.findall(r"\b([0-9]+) ETW events were lost\b", log)
+            if any(int(value) > 0 for value in losses) or any(marker in log for marker in (
+                "PresentMon could not start", "PresentMon collection timed out", "PresentMon collection failed",
+            )):
+                raise evidence.EvidenceError("PresentMon reported incomplete collection")
         display = presentation_samples(folder / "presentmon.csv", launch, timing, minimum)
         if abs(display["presents"] - len(cpu)) > 2:
             raise evidence.EvidenceError("ETW present count disagrees with the production frame count")

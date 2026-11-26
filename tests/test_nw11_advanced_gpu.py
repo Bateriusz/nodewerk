@@ -58,13 +58,14 @@ def _build_bundle(
     experiment_id: str = contract.EXPERIMENT_MESH_ID,
     *,
     output: str = "bundle",
+    protocol_version: int = 3,
 ) -> tuple[Path, dict]:
     files = _source_artifacts(tmp_path)
     target = tmp_path / output
     # Existing nine-process fixtures exercise the historical v3 protocol.
     from unittest.mock import patch
     with patch.dict(contract.EXPERIMENT_PATH_BY_ID, {
-        experiment_id: contract.EXPERIMENT_PATH_BY_ID[experiment_id].replace(".v4.json", ".v3.json")
+        experiment_id: contract.EXPERIMENT_PATH_BY_ID[experiment_id].replace(".v4.json", f".v{protocol_version}.json")
     }):
         manifest = build_bundle.build(
             output_directory=target,
@@ -2050,8 +2051,10 @@ def test_nw11_unsupported_optional_requires_common_and_fallback(tmp_path: Path) 
         )
 
 
-def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeypatch) -> None:
-    root, manifest = _build_bundle(tmp_path)
+@pytest.mark.parametrize("protocol_version", [3, 4])
+def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeypatch, protocol_version) -> None:
+    root, manifest = _build_bundle(tmp_path, protocol_version=protocol_version)
+    settings = _experiment(version=protocol_version)
     output = tmp_path / "physical-fixture"
     output.mkdir()
     from types import SimpleNamespace
@@ -2145,8 +2148,8 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
             "device_tier": decision["physical_device_tier"], "device_key": decision["device_key"],
             "environment_key": decision["environment_key"], "capability_decision": decision,
             "format": "nw11-raw-run.v1", "adapter": {k: v for k, v in observation["adapter"].items() if k != "subsystem_id"},
-            "timing": {"warmup_start_qpc_ms": 100, "measurement_start_qpc_ms": 5100,
-                       "measurement_end_qpc_ms": 65100},
+            "timing": {"warmup_start_qpc_ms": 100, "measurement_start_qpc_ms": 100 if mode == "smoke" else 5100,
+                       "measurement_end_qpc_ms": 1100 if mode == "smoke" else 65100},
             "measurement": {"presented_frames": 602, "process_start_to_first_present_ms": 900, "gpu_time_samples": [],
                             "cpu_submit_samples": [5.0] * 601, "shader_count": len(ids),
                             "shader_ids": ids, "peak_engine_committed_gpu_bytes": 300000000,
@@ -2163,9 +2166,10 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
             (folder / "presentmon.csv").write_text("\n".join(rows) + "\n")
 
     roles = measurements.role_paths(manifest, optional)
-    settings = _experiment()
     for role, index in measurements.warm_run_schedule(settings, roles):
-        process(output / "raw" / role / f"run-{index}", role, roles[role], "warm", has_capture=index == 3)
+        mode = "smoke" if protocol_version == 4 and role != "variant" else "warm"
+        process(output / "raw" / role / f"run-{index}", role, roles[role], mode,
+                has_capture=index == settings["protocol"]["runs"])
 
     process(output / "canonical-reference", "canonical_reference", "bin/canonical_reference.exe",
             "canonical_reference", has_capture=True)
@@ -2220,8 +2224,11 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
     put(execution_path, original_execution)
 
     record = measurements.collect(root, manifest, output, "evidence.json")
-    assert [len(run["measurement"]["process_runs"]) for run in record["runs"]] == [3, 3, 3]
-    assert record["runs"][0]["measurement"]["process_runs"][0]["dropped_presents"] == 1
+    assert [len(run["measurement"]["process_runs"]) for run in record["runs"]] == [settings["protocol"]["runs"]] * 3
+    if protocol_version == 3:
+        assert record["runs"][0]["measurement"]["process_runs"][0]["dropped_presents"] == 1
+    else:
+        assert record["runs"][0]["measurement"]["process_runs"][0]["presentation_telemetry_status"] == "not_collected"
     put(output / "evidence.json", record)
     monkeypatch.setattr(bundle, "verify_bundle", lambda *a, **k: {"manifest": manifest, "accounting": manifest["accounting"]})
     arguments = ["evidence", "--bundle-root", str(root), "--evidence", str(output / "evidence.json"),
@@ -2236,6 +2243,53 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
     assert decision["devices"][0]["canonical_release_correctness"]["numeric_loop_boundary"]["status"] == "verified"
     assert not decision["satisfies_completion"]
     assert verify.main([*arguments, "--require-accepted"]) == verify.EXIT_OK
+
+    # Reconstruct a complete native run after ETW lost its CSV.
+    csv_path = output / "raw/variant/run-1/presentmon.csv"
+    csv_bytes = csv_path.read_bytes()
+    csv_path.unlink()
+    log_path = csv_path.with_suffix(".log")
+    log_path.write_text("warning: 12429050 ETW events were lost.\n")
+    recovered = measurements.collect(root, manifest, output, "evidence.json")
+    assert recovered["runs"][1]["measurement"]["process_runs"][0]["presentation_telemetry_status"] == "unavailable"
+    put(output / "evidence.json", recovered)
+    assert verify.main([*arguments, "--require-accepted"]) == verify.EXIT_OK
+    recovered_decision = measurements.load_json(output / "decisions.json")["devices"][0]
+    assert recovered_decision["functional_status"] == "verified"
+    assert recovered_decision["performance_status"] == "inconclusive"
+    assert recovered_decision["primary"]["relative_reduction_percent"] is None
+    csv_path.write_bytes(csv_bytes)
+    log_path.unlink()
+
+    # Exercise public projection with a second synthetic device decision.
+    import runpy
+    projection = runpy.run_path(str(REPO_ROOT / "tools/nw11/recover-evidence.py"))["public_projection"]
+    first = measurements.load_json(output / "decisions.json")
+    second = copy.deepcopy(first)
+    blackwell = second["devices"][0]
+    blackwell["device_tier"] = "desktop_blackwell_representative"
+    blackwell["device_key"] = contract.DEVICE_TIERS[blackwell["device_tier"]]["device_key"]
+    blackwell["environment_key"] = "sha256:v1:" + "f" * 64
+    second["decision_id"] = evidence.decision_id(second)
+    cross = {"status": "verified", "tolerance": nw07_contract.IMAGE_ABSOLUTE_TOLERANCE,
+             "rows": {str(tick): {"maximum_error": 0.0, "maximum_relative_error": 0.0}
+                      for tick in nw07_contract.REQUIRED_FIXED_TICKS}}
+    aggregate = evidence.aggregate_verified_decisions([first, second], cross_device_equivalence=cross)
+    public = projection(aggregate, manifest, protocol_version)
+    assert public["satisfies_completion"]
+    assert public["commit"] == COMMIT
+    assert public["devices"][0]["raw_aggregate_decision_id"] == aggregate["decision_id"]
+    assert public["devices"][0]["metrics"]["variant"]["process_runs"][0]["displayed_presents"] is None
+    encoded = json.dumps(public)
+    assert str(output) not in encoded
+    assert all(key not in encoded for key in ('"process_id"', '"command"', '"gpu_uuid"', '"raw_cpu_submit_samples"'))
+    # A present but explicitly lossy CSV must not become qualified ETW.
+    log_path.write_text("warning: 123 ETW events were lost.\n")
+    lossy = measurements.collect(root, manifest, output, "evidence.json")
+    assert lossy["runs"][1]["measurement"]["process_runs"][0]["presentation_telemetry_status"] == "unavailable"
+    log_path.unlink()
+    if protocol_version == 4:
+        return
 
     settings_path = output / "raw/variant/run-2/operating-conditions.json"
     original = measurements.load_json(settings_path)
@@ -2255,23 +2309,6 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
     assert verify.main([*arguments, "--require-accepted"]) == verify.EXIT_OK
     assert measurements.load_json(output / "decisions.json")["devices"][0]["performance_status"] == "inconclusive"
     put(settings_path, original)
-
-    # Reconstruct an old, complete native run after ETW lost its CSV.
-    csv_path = output / "raw/variant/run-1/presentmon.csv"
-    csv_bytes = csv_path.read_bytes()
-    csv_path.unlink()
-    log_path = csv_path.with_suffix(".log")
-    log_path.write_text("warning: 12429050 ETW events were lost.\n")
-    recovered = measurements.collect(root, manifest, output, "evidence.json")
-    assert recovered["runs"][1]["measurement"]["process_runs"][0]["presentation_telemetry_status"] == "unavailable"
-    put(output / "evidence.json", recovered)
-    assert verify.main([*arguments, "--require-accepted"]) == verify.EXIT_OK
-    recovered_decision = measurements.load_json(output / "decisions.json")["devices"][0]
-    assert recovered_decision["functional_status"] == "verified"
-    assert recovered_decision["performance_status"] == "inconclusive"
-    assert recovered_decision["primary"]["relative_reduction_percent"] is None
-    csv_path.write_bytes(csv_bytes)
-    log_path.unlink()
 
     # Editing only the derived aggregate must not change a decision.
     record["runs"][0]["measurement"]["process_runs"][0]["gpu_time_samples"][0] = 3

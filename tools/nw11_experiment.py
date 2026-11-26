@@ -594,7 +594,7 @@ def _require_metric(mapping: Mapping[str, Any], key: str, label: str) -> Any:
 def _summarize_run(run: Mapping[str, Any], label: str, protocol: Mapping[str, Any]) -> dict[str, Any]:
     telemetry = run.get("presentation_telemetry_status")
     if telemetry in {"unavailable", "not_collected"}:
-        if protocol["perf_contract"] not in {"matched-gpu-comparison.v2", "functional-gpu-execution.v4"}:
+        if protocol.get("allow_optional_etw") is not True:
             raise ExperimentError("historical performance experiment requires ETW")
         cpu = _require_metric(run, "cpu_submit_samples", label)
         if not isinstance(cpu, list) or len(cpu) < int(protocol["min_raw_samples_per_run"]):
