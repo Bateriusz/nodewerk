@@ -1081,6 +1081,25 @@ class AuthoringRuntimeSession:
             if entry is not None and retired:
                 self._retired_bytes += entry[1]
 
+    def audio_command(self, command: str) -> dict[str, Any]:
+        with self._lock:
+            if not self._persistent or self._lost or not self._device_running:
+                raise RuntimeSessionError("audio requires a prepared native package-host session")
+            try:
+                self._write(command)
+                response = self._read_response(timeout=30.0)
+                if response.get("event") != command.split()[0]:
+                    raise RuntimeSessionError("unexpected audio transport response")
+                if not response.get("ok", False):
+                    raise RuntimeSessionError("audio transport failed: " + json.dumps(response))
+                if command.startswith("audio-start "):
+                    self._last_render_tick = int(response["tick"])
+                return response
+            except (OSError, RuntimeSessionError):
+                # A failed protocol must not leave a live, unowned audio stream.
+                self._stop_process()
+                raise
+
     # -- rendering --------------------------------------------------------
     def render(
         self,
@@ -1945,6 +1964,10 @@ class WindowsRuntimePreviewBackend:
                 device_epoch=self._session.device_epoch,
                 device_identity=identity.to_key_fields(),
             )
+
+    def audio_command(self, command: str) -> dict[str, Any]:
+        with self._lock:
+            return self._session.audio_command(command)
 
     def _append_measured_timings(
         self, timings: list[PassTiming], stats: Mapping[str, Any]

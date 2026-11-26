@@ -162,3 +162,26 @@ def test_pcm_header_and_duration(native_tools, tmp_path):
     plan.write_text("frame,tick,sample\n0,0,0\n")
     with pytest.raises(ValueError):
         frame_ticks(plan, 192000)
+
+def test_editor_transport_uses_native_session_and_reconstructs_before_start():
+    from nw08_preview import AuthoringRuntimeSession
+    from types import SimpleNamespace
+    import threading
+    commands = []
+    session = SimpleNamespace(
+        _lock=threading.RLock(), _persistent=True, _lost=False,
+        _device_running=True, _last_render_tick=1000,
+        _write=commands.append,
+        _read_response=lambda **kwargs: {"event": commands[-1].split()[0],
+                                         "ok": True, "tick": 100},
+        _stop_process=lambda: commands.append("closed"),
+    )
+    AuthoringRuntimeSession.audio_command(session, "audio-stop")
+    AuthoringRuntimeSession.audio_command(session, "audio-start 100")
+    assert commands == ["audio-stop", "audio-start 100"]
+    assert session._last_render_tick == 100
+    session._read_response = lambda **kwargs: {"event": "audio-start", "ok": False}
+    from nw08_preview import RuntimeSessionError
+    with pytest.raises(RuntimeSessionError):
+        AuthoringRuntimeSession.audio_command(session, "audio-start 200")
+    assert commands[-1] == "closed"

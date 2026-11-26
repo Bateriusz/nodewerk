@@ -117,7 +117,9 @@ if(MSVC)
   target_compile_options(nw08_package_player PRIVATE /W0)
 endif()
 
-add_executable(nodewerk-studio-preview nw_studio_preview_host.cpp)
+add_executable(nodewerk-studio-preview nw_studio_preview_host.cpp
+  "${NW_STUDIO_ROOT}/src/audio/procedural_audio.cpp"
+  "${NW_STUDIO_ROOT}/src/audio/wasapi_output.cpp")
 target_include_directories(nodewerk-studio-preview PRIVATE
   "${_nw08_generated_runtime_dir}"
   "${NW_STUDIO_ROOT}/src"
@@ -129,7 +131,7 @@ target_compile_definitions(nodewerk-studio-preview PRIVATE
 target_link_libraries(nodewerk-studio-preview PRIVATE
   nw08_player_bootstrap
   nw08_package_player
-  gdi32)
+  gdi32 ole32)
 nw_apply_player_profile(nodewerk-studio-preview)
 set_target_properties(nodewerk-studio-preview PROPERTIES
   OUTPUT_NAME "nodewerk-studio-preview")
