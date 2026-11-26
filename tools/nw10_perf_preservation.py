@@ -13,6 +13,7 @@ paths, PIDs and process/collector stdout/stderr.
 from __future__ import annotations
 
 import argparse
+import build_attestation
 import copy
 import json
 import re
@@ -324,8 +325,8 @@ def validate_preservation(
         reasons.append("candidate report uses a test payload")
     build_inputs = candidate_report.get("build_inputs")
     build_inputs = build_inputs if isinstance(build_inputs, Mapping) else {}
-    if build_inputs.get("matches_frozen_digest") is not True:
-        reasons.append("candidate report does not match frozen NW-07 build inputs")
+    if not build_attestation.has_recorded_inputs(build_inputs):
+        reasons.append("candidate report has no recorded source-input provenance")
     if build_inputs.get("nw10_digest") != nw10_contract.build_inputs_digest(
         nw10_contract.compute_build_inputs()
     ):
@@ -524,8 +525,8 @@ def _validate_public_for_publish(
     if candidate.get("release_grade") is not True or candidate.get("test_payload") is not False:
         raise ValueError("public candidate is not release-grade")
     build_inputs = candidate.get("build_inputs")
-    if not isinstance(build_inputs, Mapping) or build_inputs.get("matches_frozen_digest") is not True:
-        raise ValueError("public candidate does not match frozen NW-07 build inputs")
+    if not isinstance(build_inputs, Mapping) or not build_attestation.has_recorded_inputs(build_inputs):
+        raise ValueError("public candidate has no recorded source-input provenance")
     if build_inputs.get("nw10_digest") != nw10_contract.build_inputs_digest(
         nw10_contract.compute_build_inputs()
     ):

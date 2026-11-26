@@ -22,8 +22,8 @@ def mapping():
         (["tools/nw10_pe_ledger.py", "tests/test_nw10_pe_ledger.py"], {"nw10"}, False),
         (["tools/nw08_editor.py"], {"nw08", "nw08a"}, False),
         (["tools/nw08a_presentation_cases.py"], {"nw08a"}, False),
-        (["tools/nw07_export.py"], {"nw07", "nw08", "nw08a", "nw10"}, False),
-        (["tools/nw01/bootstrap-windows.ps1"], {"nw01", "nw07", "nw08", "nw08a", "nw10"}, False),
+        (["tools/nw07_export.py"], {"nw07", "nw08", "nw08a", "nw10", "nw11"}, False),
+        (["tools/nw01/bootstrap-windows.ps1"], {"nw01", "nw07", "nw08", "nw08a", "nw10", "nw11"}, False),
         (["src/player/package_player.cpp", "shaders/common.hlsl"], set(changed_scope.SCOPES), False),
         (["docs/architecture.md", "README.md"], set(), True),
         (["src-new-unknown/new.cpp"], set(changed_scope.SCOPES), False),
@@ -77,7 +77,7 @@ def test_test_ownership_is_complete_and_unambiguous():
 
 def test_new_test_namespace_would_fail_ownership():
     data = json.loads((ROOT / "ci" / "test-ownership.v1.json").read_text(encoding="utf-8"))
-    rel = "tests/test_nw11_new_feature.py"
+    rel = "tests/test_nw12_new_feature.py"
     matches = [
         family
         for family in data["families"]
@@ -173,6 +173,7 @@ def test_workflows_route_heavy_pr_jobs_and_cache_portable_payloads():
         ".github/workflows/nw08-studio.yml": ("nw08", "windows-integration"),
         ".github/workflows/nw08a-presentation-geometry.yml": ("nw08a", "windows-canonical-build-checks"),
         ".github/workflows/nw10-compact.yml": ("nw10", "windows-compact-export"),
+        ".github/workflows/nw11-advanced-gpu.yml": ("nw11", "contract-and-capability-checks"),
     }
     for relative, (scope, job) in expectations.items():
         workflow = (ROOT / relative).read_text(encoding="utf-8")

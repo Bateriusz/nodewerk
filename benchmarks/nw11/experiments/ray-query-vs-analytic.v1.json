@@ -1,0 +1,175 @@
+{
+  "artifact_budget": {
+    "complete_distribution_bytes_ceiling": 262144,
+    "distribution_size_policy": "gated",
+    "incremental_distribution_bytes_ceiling": 65536,
+    "optional_dependency_bytes_policy": "Every optional byte is counted; no RTX Kit, DLSS, model weights, or vendor SDK component is permitted in the common/fallback closure.",
+    "peak_engine_committed_gpu_bytes_ceiling": 536870912,
+    "process_start_to_first_present_ms_ceiling": 2000.0,
+    "shader_count_increment_ceiling": 1
+  },
+  "base_graph": {
+    "path": "fixtures/nw07/production_loop.nwgraph",
+    "sha256": "093b8429d4e592e643dc2eb307ea751a0c78d6544961beb580ea56a9361b7091"
+  },
+  "baseline_profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
+  "criteria": {
+    "guardrails": {
+      "cold_initialization_ms_ceiling": 2000.0,
+      "complete_distribution_bytes_ceiling": 262144,
+      "cpu_submit_ms_max": 16.67,
+      "end_to_end_frame_time_must_not_regress": true,
+      "incremental_distribution_bytes_ceiling": 65536,
+      "microbenchmark_gain_alone_is_sufficient": false,
+      "peak_engine_committed_gpu_bytes_ceiling": 536870912,
+      "shader_count_increment_ceiling": 1
+    },
+    "image": {
+      "criterion": "max_abs_channel_error_and_rmse",
+      "fixed_quality": true,
+      "fixture": {
+        "hit_miss_pattern": "alternating 32-pixel screen-space bands on the torus",
+        "outward_offset": 0.02,
+        "hit_segment_length": 0.021,
+        "miss_segment_length": 0.015,
+        "reference": "analytic tangent-plane intersection at the raster surface"
+      },
+      "fixed_ticks": [
+        0,
+        240000,
+        480000,
+        720000,
+        959999
+      ],
+      "loop_boundary_ticks": [
+        0,
+        960000
+      ],
+      "max_abs_channel_error": 0.0001,
+      "reference_kind": "analytic_reference",
+      "rmse": 0.0001
+    },
+    "primary": {
+      "comparison": "variant_vs_matched_baseline",
+      "evaluation": "independent_per_device_environment",
+      "metric": "p99_gpu_time_ms",
+      "relative_reduction_percent_min": 10.0,
+      "statistic": "nearest-rank p99 per 60-second process; require every matched run pair to improve"
+    }
+  },
+  "evidence_status": "pending",
+  "execution": {
+    "arguments": [
+      "--benchmark-json",
+      "{output}",
+      "--warmup-seconds",
+      "5",
+      "--runs",
+      "3",
+      "--run-seconds",
+      "60",
+      "--fixed-quality",
+      "nw07.quality.v1"
+    ],
+    "fresh_process_per_run": true,
+    "preserve_raw": true,
+    "raw_report_format": "nw11-raw-run.v1"
+  },
+  "experiment_id": "nw11.ray-query-vs-analytic-reflection.v1",
+  "fallback_artifact_id": "nw11.fallback.ray.analytic.d3d12.fl12_0.sm6_0.v1",
+  "format": "nw11-experiment",
+  "graph_derivation": {
+    "base_graph_unchanged": true,
+    "description": "Both arms execute the identical embedded NW-07 package through PackagePlayer. The ray specialization deforms the generated vertex buffer at the current tick, builds BLAS and TLAS on the production direct queue and replaces the fragment shader; the other frame instructions remain common.",
+    "hand_authored_renderer": false,
+    "mode": "fragment_shader_specialization_overlay",
+    "new_operators": [],
+    "second_production_backend": false
+  },
+  "implementation_base": "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b",
+  "kind": "ray_query_reflection",
+  "pipeline": {
+    "baseline": "analytic_reflection_fragment",
+    "baseline_shaders": [
+      {
+        "entry_point": "SceneVS",
+        "path": "shaders/nw06/nw06_scene_vs.hlsl",
+        "target": "vs_6_0"
+      },
+      {
+        "entry_point": "ScenePS",
+        "path": "shaders/nw11/reflection/nw11_analytic_reflection_ps.hlsl",
+        "target": "ps_6_0"
+      }
+    ],
+    "fallback_artifact_id": "nw11.fallback.ray.analytic.d3d12.fl12_0.sm6_0.v1",
+    "fallback_profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
+    "shared_vertex_shader": "shaders/nw06/nw06_scene_vs.hlsl",
+    "variant": "dxr_inline_ray_query",
+    "variant_shaders": [
+      {
+        "entry_point": "ScenePS",
+        "path": "shaders/nw11/reflection/nw11_scene_rayquery_ps.hlsl",
+        "target": "ps_6_5"
+      },
+      {
+        "entry_point": "DeformCS",
+        "path": "shaders/nw11/reflection/nw11_deform_cs.hlsl",
+        "target": "cs_6_0"
+      }
+    ]
+  },
+  "policy": "The ray-query variant must match the analytic baseline image at the frozen fixed ticks and beat it by at least 10 percent p99 GPU time on a matched qualified device. Unsupported DXR capability is an explicit unsupported outcome; the common analytic fallback runs instead of substituting effects.",
+  "protocol": {
+    "application_pipeline_cache": false,
+    "capture_protocol": "nw07-correctness-capture.v1",
+    "fresh_process_per_run": true,
+    "independent_per_device": true,
+    "matched_environment_required": true,
+    "min_raw_samples_per_run": 600,
+    "percentile": 99.0,
+    "percentile_method": "nearest-rank",
+    "perf_contract": "nw07_perf_ref_v1",
+    "perf_protocol": "nw07-perf-run.v1",
+    "run_seconds": 60,
+    "runs": 3,
+    "startup_protocol": "nw07-startup.v1",
+    "warmup_seconds": 5
+  },
+  "reference": {
+    "capture_format": "rgba32f",
+    "capture_protocol": "nw07-correctness-capture.v1",
+    "fixed_ticks": [
+      0,
+      240000,
+      480000,
+      720000,
+      959999
+    ],
+    "loop_boundary_ticks": [
+      0,
+      960000
+    ],
+    "quality_profile_id": "nw07.quality.v1",
+    "resolution": {
+      "height": 1080,
+      "width": 1920
+    }
+  },
+  "status": "frozen",
+  "task": "NW-11",
+  "variant_profile_id": "nw.optional.d3d12.ray_query.ps6_5.v1",
+  "version": 1,
+  "workload": {
+    "frame_rate_hz": 60,
+    "graph": "fixtures/nw07/production_loop.nwgraph",
+    "graph_sha256": "093b8429d4e592e643dc2eb307ea751a0c78d6544961beb580ea56a9361b7091",
+    "height": 1080,
+    "loop_seconds": 20,
+    "loop_ticks": 960000,
+    "quality_profile_id": "nw07.quality.v1",
+    "ticks_per_second": 48000,
+    "torus_instances": 256,
+    "width": 1920
+  }
+}

@@ -1,4 +1,4 @@
-name: NW-08A Presentation Geometry and Windows Release Evidence
+name: Presentation Geometry and Release Evidence
 
 on:
   workflow_dispatch:

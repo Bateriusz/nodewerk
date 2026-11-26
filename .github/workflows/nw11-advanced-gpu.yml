@@ -1,0 +1,660 @@
+name: Advanced GPU Experiments and Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      experiment_id:
+        description: "NW-11 experiment to validate after a full restart of both audited validation hosts"
+        type: choice
+        options:
+          - nw11.mesh-shader-vs-indexed.v1
+          - nw11.ray-query-vs-analytic-reflection.v1
+        required: true
+        default: "nw11.mesh-shader-vs-indexed.v1"
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci-impact:
+    name: NW-11 impact routing
+    runs-on: ubuntu-latest
+    outputs:
+      nw11: ${{ steps.classify.outputs.nw11 }}
+      full_regression: ${{ steps.classify.outputs.full_regression }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Classify changed scope
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python tools/ci/changed_scope.py
+          --event-name "${{ github.event_name }}"
+          --base "$BASE_SHA"
+          --head "$HEAD_SHA"
+          --github-output "$GITHUB_OUTPUT"
+          --summary-file "$GITHUB_STEP_SUMMARY"
+
+  contract-and-capability-checks:
+    name: Contract, capability-manifest, absence, stripping & reproducibility checks
+    needs: ci-impact
+    if: needs.ci-impact.outputs.nw11 == 'true' || needs.ci-impact.outputs.full_regression == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Compile NW-11 Python implementation
+        run: >-
+          python -m compileall -q
+          tools/nw11_contract.py tools/nw11_capability.py tools/nw11_experiment.py
+          tools/nw11_bundle.py tools/nw11_evidence.py tools/nw11_followup.py
+          tools/nw11_build_bundle.py tools/nw11_verify.py tools/nw11_graph_scene.py
+          tools/nw11_toolchain_identity.py tools/nw11_shader_payloads.py
+          tools/nw11_pe_dependencies.py tools/nw11_pack_python_runtime.py
+          tools/hardware_evidence_host.py tools/hardware_evidence_devices.py
+          tools/validation_gpu_telemetry.py tools/validation_cold_start.py tools/gpu_experiment_measurements.py tools/validation_errors.py tools/nw11_production_binding.py
+          tools/nw11/validate-device.py
+          tools/nw11/collect-evidence.py tools/nw11/compare-captures.py
+      - name: Validate schemas and tracked evidence state
+        run: |
+          python tools/schema_validator.py
+          python tools/nw11_verify.py self-check
+      - name: Run NW-11 contract tests
+        run: pytest -q -k nw11
+      - name: Run shared physical-host regression tests
+        run: pytest -q tests/test_hardware_evidence_host.py
+      - name: Absent-feature, malformed-manifest, stale-evidence & zero-cost stripping checks
+        run: pytest -q -k "nw11 and (capability_absence or malformed or stale or zero_cost or initialization_failure)"
+      - name: Reproducibility and per-device decision isolation checks
+        run: pytest -q -k "nw11 and (deterministic or isolation or device or shader_manifest or graph_scene or fallback)"
+
+  windows-experiment-build:
+    name: Build NW-11 experiment executables
+    needs: ci-impact
+    if: needs.ci-impact.outputs.nw11 == 'true' || needs.ci-impact.outputs.full_regression == 'true'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compute pinned portable-tool cache key
+        id: nw01-portable-cache-key
+        shell: pwsh
+        run: >-
+          python tools/ci/portable_cache_key.py
+          --runner-os "${{ runner.os }}"
+          --runner-arch "${{ runner.arch }}"
+          --github-output "$env:GITHUB_OUTPUT"
+      - name: Restore pinned portable-tool payload cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\nw01-download-cache
+          key: ${{ steps.nw01-portable-cache-key.outputs.key }}
+      - name: Export portable-tool payload cache root
+        shell: pwsh
+        run: |
+          $cache = Join-Path $env:RUNNER_TEMP "nw01-download-cache"
+          "NW01_DOWNLOAD_CACHE=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Provision the pinned NW-01 Windows toolchain
+        shell: pwsh
+        run: >-
+          pwsh tools/nw01/bootstrap-windows.ps1
+          -Ci -SkipLlvm -ProvenancePath build/nw01-bootstrap.json
+      - name: Export the pinned MSVC/SDK build environment
+        shell: pwsh
+        run: pwsh tools/nw01/enter-build-env.ps1 -ExportGitHubEnv -SkipLlvm
+      - name: Confirm pinned offline DXC is available
+        shell: pwsh
+        run: |
+          $dxc = Get-Command dxc.exe -ErrorAction Stop
+          & $dxc.Source --version
+      - name: Configure optional-profile experiment tools
+        shell: pwsh
+        run: |
+          $cl = (Get-Command cl.exe -ErrorAction Stop).Source
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          $ninja = (Get-Command ninja.exe -ErrorAction Stop).Source
+          cmake -S src/nw11 -B build/nw11-experiments -G Ninja "-DCMAKE_BUILD_TYPE=Release" "-DCMAKE_CXX_COMPILER=$cl" "-DCMAKE_MAKE_PROGRAM=$ninja" "-DNW11_DXC_EXECUTABLE=$dxc"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build capability probe and experiment executables
+        run: >-
+          cmake --build build/nw11-experiments --parallel 2
+          --target nw11_capability_probe nw11_common_baseline nw11_common_analytic
+          nw11_fallback_common nw11_fallback_analytic nw11_optional_mesh
+          nw11_optional_ray
+      - name: Independently rebuild native artifacts with the pinned toolchain
+        shell: pwsh
+        run: |
+          $cl = (Get-Command cl.exe -ErrorAction Stop).Source
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          $ninja = (Get-Command ninja.exe -ErrorAction Stop).Source
+          cmake -S src/nw11 -B build/nw11-rebuild -G Ninja "-DCMAKE_BUILD_TYPE=Release" "-DCMAKE_CXX_COMPILER=$cl" "-DCMAKE_MAKE_PROGRAM=$ninja" "-DNW11_DXC_EXECUTABLE=$dxc"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build/nw11-rebuild --parallel 2 --target nw11_capability_probe nw11_common_baseline nw11_common_analytic nw11_fallback_common nw11_fallback_analytic nw11_optional_mesh nw11_optional_ray
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Launch every artifact in self-check mode
+        shell: pwsh
+        run: |
+          $root = "build/nw11-experiments"
+          foreach ($name in @("nw11_capability_probe", "nw11_common_baseline", "nw11_common_analytic", "nw11_fallback_common", "nw11_fallback_analytic", "nw11_optional_mesh", "nw11_optional_ray")) {
+            $exe = Get-ChildItem -Recurse $root -Filter "$name.exe" | Select-Object -First 1
+            if (-not $exe) { throw "missing $name.exe" }
+            & $exe.FullName --self-check
+            if ($LASTEXITCODE -ne 0) { throw "$name self-check failed" }
+          }
+      - name: Stage same-revision executables
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path build/nw11-artifacts | Out-Null
+          foreach ($name in @("nw11_capability_probe", "nw11_common_baseline", "nw11_common_analytic", "nw11_fallback_common", "nw11_fallback_analytic", "nw11_optional_mesh", "nw11_optional_ray")) {
+            $exe = Get-ChildItem -Recurse "build/nw11-experiments" -Filter "$name.exe" | Select-Object -First 1
+            if (-not $exe) { throw "missing $name.exe" }
+            Copy-Item $exe.FullName "build/nw11-artifacts/$name.exe"
+          }
+          Copy-Item "build/nw11-experiments/generated/nw11_scene_generated.json" "build/nw11-artifacts/nw11_scene_generated.json"
+          New-Item -ItemType Directory -Force -Path "build/nw11-artifacts/compiled-specializations" | Out-Null
+          foreach ($name in @("nw11_torus_amplification_as_dxil", "nw11_torus_meshlet_ms_dxil", "nw11_scene_rayquery_ps_dxil", "nw11_deform_cs_dxil", "nw11_analytic_reflection_ps_dxil")) {
+            Copy-Item "build/nw11-experiments/shaders/$name.dxil" "build/nw11-artifacts/compiled-specializations/$name.dxil" -ErrorAction Stop
+          }
+      - name: Record measured toolchain, DXIL payloads, and PE dependencies
+        shell: pwsh
+        run: |
+          $dxc = Get-Command dxc.exe -ErrorAction Stop
+          $cache = Get-Content "build/nw11-experiments/CMakeCache.txt"
+          $compilerLine = $cache | Where-Object { $_ -like "CMAKE_CXX_COMPILER:*" } | Select-Object -First 1
+          $compiler = $compilerLine.Split("=", 2)[1]
+          if (-not $compiler) { throw "CMake compiler identity missing" }
+          $activeCl = (Get-Command cl.exe -ErrorAction Stop).Source
+          if ((Resolve-Path $compiler).Path -ne (Resolve-Path $activeCl).Path) { throw "CMake did not use pinned active MSVC" }
+          if (-not $env:WindowsSDKVersion) { throw "Pinned SDK environment is missing" }
+          $sdkVersion = $env:WindowsSDKVersion.TrimEnd('\')
+          $pins = Get-Content "benchmarks/toolchain-manifest.v1.json" -Raw | ConvertFrom-Json
+          if ($sdkVersion -ne $pins.pinned_dependencies.windows_sdk_version) { throw "Active SDK does not match pinned SDK" }
+          python tools/nw11_toolchain_identity.py `
+            --dxc $dxc.Source `
+            --cl $compiler `
+            --cmake cmake `
+            --ninja ninja `
+            --windows-sdk-version $sdkVersion `
+            --out "build/nw11-artifacts/nw11-toolchain-identity.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/nw11_shader_payloads.py `
+            --directory "build/nw11-experiments/shaders" `
+            --out "build/nw11-artifacts/nw11-shader-payloads.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/nw11_pe_dependencies.py `
+            --exe "build/nw11-artifacts/nw11_capability_probe.exe" `
+            --exe "build/nw11-artifacts/nw11_common_baseline.exe" `
+            --exe "build/nw11-artifacts/nw11_common_analytic.exe" `
+            --exe "build/nw11-artifacts/nw11_fallback_common.exe" `
+            --exe "build/nw11-artifacts/nw11_fallback_analytic.exe" `
+            --exe "build/nw11-artifacts/nw11_optional_mesh.exe" `
+            --exe "build/nw11-artifacts/nw11_optional_ray.exe" `
+            --out "build/nw11-artifacts/nw11-pe-dependencies.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compare and stage independent native rebuild
+        shell: pwsh
+        run: |
+          $primary = "build/nw11-artifacts"
+          $second = Join-Path $primary "independent"
+          New-Item -ItemType Directory -Path $second, "$second/compiled-specializations" | Out-Null
+          foreach ($exe in Get-ChildItem $primary -Filter "*.exe") {
+            $rebuild = Join-Path "build/nw11-rebuild" $exe.Name
+            if ((Get-FileHash $exe.FullName).Hash -ne (Get-FileHash $rebuild).Hash) {
+              throw "Native rebuild changed $($exe.Name)"
+            }
+            Copy-Item $rebuild $second
+          }
+          foreach ($file in Get-ChildItem "build/nw11-experiments/shaders" -Filter "*.dxil") {
+            if ((Get-FileHash $file.FullName).Hash -ne (Get-FileHash "build/nw11-rebuild/shaders/$($file.Name)").Hash) {
+              throw "Independent shader rebuild changed $($file.Name)"
+            }
+          }
+          foreach ($file in Get-ChildItem "$primary/compiled-specializations") {
+            Copy-Item "build/nw11-rebuild/shaders/$($file.Name)" "$second/compiled-specializations"
+          }
+          Copy-Item "build/nw11-rebuild/generated/nw11_scene_generated.json" $second
+          foreach ($record in @("nw11-toolchain-identity.json", "nw11-shader-payloads.json", "nw11-pe-dependencies.json")) {
+            Copy-Item "$primary/$record" $second
+          }
+      - name: Upload same-revision build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw11-executables-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/nw11-artifacts/**
+          if-no-files-found: error
+
+  common-production-regression:
+    name: Canonical release export (independent same-revision builds)
+    needs: ci-impact
+    if: needs.ci-impact.outputs.nw11 == 'true' || needs.ci-impact.outputs.full_regression == 'true'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compute pinned portable-tool cache key
+        id: nw01-portable-cache-key
+        shell: pwsh
+        run: >-
+          python tools/ci/portable_cache_key.py
+          --runner-os "${{ runner.os }}"
+          --runner-arch "${{ runner.arch }}"
+          --github-output "$env:GITHUB_OUTPUT"
+      - name: Restore pinned portable-tool payload cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\nw01-download-cache
+          key: ${{ steps.nw01-portable-cache-key.outputs.key }}
+      - name: Export portable-tool payload cache root
+        shell: pwsh
+        run: |
+          $cache = Join-Path $env:RUNNER_TEMP "nw01-download-cache"
+          "NW01_DOWNLOAD_CACHE=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Bootstrap and activate exact common export toolchain
+        shell: pwsh
+        run: |
+          pwsh tools/nw01/bootstrap-windows.ps1 -Ci -SkipLlvm
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh tools/nw01/enter-build-env.ps1 -ExportGitHubEnv -SkipLlvm
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Export both real production artifacts and compare SHA-256 and dependencies
+        shell: pwsh
+        run: |
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          $candidate = (git rev-parse HEAD).Trim()
+          python tools/canonical_export_reproducibility.py --candidate $candidate --dxc $dxc --out build/nw11-common-proof
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain common artifact comparison and actual exports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw11-common-production-proof-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/nw11-common-proof/**
+          if-no-files-found: warn
+
+  windows-runtime-smoke:
+    name: NW-11 D3D12 command-path smoke (hosted WARP)
+    needs: [ci-impact, windows-experiment-build, common-production-regression]
+    if: needs.windows-experiment-build.result == 'success' && needs.common-production-regression.result == 'success'
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: nw11-executables-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/nw11-artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          name: nw11-common-production-proof-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/nw11-common-proof
+      - name: Embed the same verified canonical package into every specialized executable
+        shell: pwsh
+        run: |
+          python tools/nw11_embed_production.py --proof build/nw11-common-proof --executables build/nw11-artifacts --commit "${{ github.event.pull_request.head.sha || github.sha }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/nw11_embed_production.py --proof build/nw11-common-proof --executables build/nw11-artifacts/independent --commit "${{ github.event.pull_request.head.sha || github.sha }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Exercise headless common and fallback D3D12 commands on WARP
+        shell: pwsh
+        run: |
+          foreach ($name in @("nw11_common_baseline", "nw11_common_analytic", "nw11_fallback_common", "nw11_fallback_analytic")) {
+            $reportPath = "build/$name-warp-smoke.json"
+            & "build/nw11-artifacts/$name.exe" --allow-software --headless --benchmark-json $reportPath --warmup-seconds 0 --runs 1 --run-seconds 1
+            if ($LASTEXITCODE -ne 0) { throw "$name WARP command-path smoke failed" }
+            $report = Get-Content $reportPath -Raw | ConvertFrom-Json
+            if ($report.measurement.gpu_time_samples.Count -lt 1) {
+              throw "$name WARP smoke produced no GPU timestamp samples"
+            }
+          }
+
+      - name: Exercise headless advanced paths on WARP and check absent features
+        shell: pwsh
+        run: |
+          foreach ($name in @("nw11_optional_mesh", "nw11_optional_ray")) {
+            $report = "build/$name-warp-smoke.json"
+            & "build/nw11-artifacts/$name.exe" --allow-software --headless --benchmark-json $report --warmup-seconds 0 --runs 1 --run-seconds 1
+            $code = $LASTEXITCODE
+            if ($code -eq 3) {
+              if (Test-Path $report) { throw "$name produced samples on an unsupported path" }
+              Write-Host "$name capability unavailable on hosted WARP"
+            } elseif ($code -ne 0 -or -not (Test-Path $report)) {
+              throw "$name WARP command-path validation failed with exit $code"
+            }
+          }
+      - name: Upload the production-package-bound executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw11-production-executables-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/nw11-artifacts/**
+          if-no-files-found: error
+
+  build-validation-bundles:
+    name: Build immutable validation bundle (${{ matrix.experiment }})
+    needs: [ci-impact, contract-and-capability-checks, windows-experiment-build, windows-runtime-smoke, common-production-regression]
+    if: needs.contract-and-capability-checks.result == 'success' && needs.windows-runtime-smoke.result == 'success' && needs.common-production-regression.result == 'success'
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - experiment: nw11.mesh-shader-vs-indexed.v1
+            variant: nw11_optional_mesh.exe
+            baseline: nw11_common_baseline.exe
+            fallback: nw11_fallback_common.exe
+            slug: mesh
+          - experiment: nw11.ray-query-vs-analytic-reflection.v1
+            variant: nw11_optional_ray.exe
+            baseline: nw11_common_analytic.exe
+            fallback: nw11_fallback_analytic.exe
+            slug: ray-query
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download same-revision executables
+        uses: actions/download-artifact@v4
+        with:
+          name: nw11-production-executables-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/nw11-artifacts
+      - name: Record the tested revision
+        id: revision
+        shell: pwsh
+        run: |
+          $commit = (git rev-parse HEAD).Trim()
+          if ($commit -ne "${{ github.event.pull_request.head.sha || github.sha }}") { throw "checkout HEAD does not match github.sha" }
+          "commit=$commit" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+      - name: Pack the self-contained validation Python runtime
+        shell: pwsh
+        run: |
+          $pythonRoot = python -c "import sys; print(sys.base_prefix)"
+          python tools/nw11_pack_python_runtime.py --python-root "$pythonRoot" --output build/nw11-python-runtime.zip --json-out build/nw11-python-runtime.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Stage pinned validation-only presentation collector
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://github.com/GameTechDev/PresentMon/releases/download/v2.6.0/PresentMon-2.6.0-x64.exe" -OutFile build/presentmon.exe
+          if ((Get-FileHash build/presentmon.exe).Hash -ne "b2a706bc6ad475749e3b7e3409263aa1e6906d45bdcf993f6dbc0f660188f1af") {
+            throw "PresentMon SHA-256 changed"
+          }
+          Invoke-WebRequest "https://raw.githubusercontent.com/GameTechDev/PresentMon/v2.6.0/LICENSE.txt" -OutFile build/presentmon-license.txt
+      - name: Build and compare validation bundles from both independent native builds
+        shell: pwsh
+        run: |
+          foreach ($arm in @("primary", "independent")) {
+            $native = if ($arm -eq "primary") { "build/nw11-artifacts" } else { "build/nw11-artifacts/independent" }
+            $output = if ($arm -eq "primary") { "build/nw11-bundle-${{ matrix.slug }}" } else { "build/nw11-bundle-${{ matrix.slug }}-independent" }
+            python tools/nw11_build_bundle.py `
+              --output $output `
+              --experiment-id "${{ matrix.experiment }}" `
+              --commit "${{ steps.revision.outputs.commit }}" `
+              --repository "${{ github.repository }}" `
+              --require-head `
+              --baseline-executable "$native/${{ matrix.baseline }}" `
+              --variant-executable "$native/${{ matrix.variant }}" `
+              --fallback-executable "$native/${{ matrix.fallback }}" `
+              --capability-probe "$native/nw11_capability_probe.exe" `
+              --graph-scene "$native/nw11_scene_generated.json" `
+              --toolchain-identity "$native/nw11-toolchain-identity.json" `
+              --shader-payloads "$native/nw11-shader-payloads.json" `
+              --dependency-report "$native/nw11-pe-dependencies.json" `
+              --python-runtime-zip "build/nw11-python-runtime.zip" `
+              --presentmon "build/presentmon.exe" `
+              --presentmon-license "build/presentmon-license.txt"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            python tools/nw11_verify.py bundle `
+              --bundle-root $output `
+              --expected-commit "${{ steps.revision.outputs.commit }}" `
+              --json-out "$output-verification.json"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          $first = Get-Content "build/nw11-bundle-${{ matrix.slug }}-verification.json" -Raw | ConvertFrom-Json
+          $second = Get-Content "build/nw11-bundle-${{ matrix.slug }}-independent-verification.json" -Raw | ConvertFrom-Json
+          if ($first.bundle_id -ne $second.bundle_id -or $first.manifest_sha256 -ne $second.manifest_sha256) {
+            throw "Independent native build changed the validation bundle"
+          }
+      - name: Report integrity and actual distribution sizes
+        shell: pwsh
+        run: |
+          $report = Get-Content "build/nw11-bundle-${{ matrix.slug }}-verification.json" -Raw | ConvertFrom-Json
+          $accounting = $report.accounting
+          if ($report.status -ne "verified") { throw "bundle integrity not verified" }
+          "### NW-11 ${{ matrix.slug }} distribution accounting" >> $env:GITHUB_STEP_SUMMARY
+          "Integrity: verified; adoption: $($accounting.adoption_budget_status)" >> $env:GITHUB_STEP_SUMMARY
+          "Baseline: $($accounting.baseline_distribution_bytes) B; variant: $($accounting.variant_distribution_bytes) B; fallback: $($accounting.fallback_distribution_bytes) B; incremental: $($accounting.incremental_distribution_bytes) B." >> $env:GITHUB_STEP_SUMMARY
+          "Complete within budget: $($accounting.within_complete_ceiling); incremental within budget: $($accounting.within_incremental_budget)." >> $env:GITHUB_STEP_SUMMARY
+          "Ceilings: complete $($accounting.artifact_budget.complete_distribution_bytes_ceiling) B; incremental $($accounting.artifact_budget.incremental_distribution_bytes_ceiling) B." >> $env:GITHUB_STEP_SUMMARY
+          if ($accounting.adoption_budget_status -eq "rejected") {
+            Write-Host "::warning::NW-11 ${{ matrix.slug }} bundle is identity-verified but adoption is rejected by the declared distribution budget."
+          }
+      - name: Stage the CI trust record and its exact launcher
+        shell: pwsh
+        run: |
+          $trust = "build/nw11-trust-${{ matrix.slug }}"
+          New-Item -ItemType Directory -Path $trust | Out-Null
+          Copy-Item -LiteralPath "tools/nw11/run-validation.ps1" -Destination $trust
+          Copy-Item -LiteralPath "build/nw11-bundle-${{ matrix.slug }}-verification.json" -Destination $trust
+      - name: Publish a separate CI trust record
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw11-validation-trust-${{ matrix.slug }}-${{ steps.revision.outputs.commit }}
+          path: build/nw11-trust-${{ matrix.slug }}/
+          if-no-files-found: error
+      - name: Upload immutable bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw11-validation-bundle-${{ matrix.slug }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/nw11-bundle-${{ matrix.slug }}/**
+          if-no-files-found: error
+
+  verify-downloaded-validation:
+    name: Exercise downloaded CI validation artifacts (${{ matrix.slug }})
+    needs: build-validation-bundles
+    runs-on: windows-2022
+    strategy:
+      matrix:
+        slug: [mesh, ray-query]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nw11-validation-trust-${{ matrix.slug }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/nw11 runner with spaces/trusted CI
+      - uses: actions/download-artifact@v4
+        with:
+          name: nw11-validation-bundle-${{ matrix.slug }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/nw11 runner with spaces/validation bundle
+      - name: Run the downloaded launcher and reject an unlisted import
+        shell: pwsh
+        run: |
+          function Invoke-PwshExitCode([string[]]$Arguments) {
+            $psi = [Diagnostics.ProcessStartInfo]::new()
+            $psi.FileName = (Get-Command pwsh -ErrorAction Stop).Source
+            $psi.UseShellExecute = $false
+            foreach ($argument in $Arguments) { [void]$psi.ArgumentList.Add($argument) }
+            $process = [Diagnostics.Process]::Start($psi)
+            if ($null -eq $process) { throw "failed to launch child pwsh" }
+            $process.WaitForExit()
+            return $process.ExitCode
+          }
+          $root = Join-Path $env:RUNNER_TEMP "nw11 runner with spaces"
+          $bundle = Join-Path $root "validation bundle"
+          $launcher = Join-Path $root "trusted CI/run-validation.ps1"
+          $trust = Join-Path $root "trusted CI/nw11-bundle-${{ matrix.slug }}-verification.json"
+          $output = Join-Path $root "dry run evidence"
+          $arguments = @("-NoProfile", "-File", $launcher, "-BundleRoot", $bundle, "-TrustRecord", $trust,
+                         "-ExpectedCommit", "${{ github.event.pull_request.head.sha || github.sha }}",
+                         "-OutputDirectory", $output, "-DryRun")
+          $code = Invoke-PwshExitCode $arguments
+          if ($code -ne 0) { throw "downloaded validation dry-run failed with exit code $code" }
+          $summaries = @(Get-ChildItem -LiteralPath $output -Recurse -Filter "summary.json")
+          if ($summaries.Count -ne 1) { throw "dry run must emit exactly one summary" }
+          $summary = Get-Content -LiteralPath $summaries[0].FullName -Raw | ConvertFrom-Json
+          if ($summary.status -ne "dry_run") { throw "downloaded validation bundle did not complete dry-run verification" }
+          $unexpected = Join-Path $bundle "tools/nw11/nw11_evidence.pyc"
+          try {
+            Set-Content -LiteralPath $unexpected -Value "unexpected bytecode"
+            $code = Invoke-PwshExitCode $arguments
+            if ($code -ne 6) { throw "launcher did not reject the unlisted Python import; exit code $code" }
+          } finally {
+            Remove-Item -LiteralPath $unexpected -Force
+          }
+
+  physical-validation:
+    name: Physical validation (${{ matrix.device_tier }} / ${{ matrix.slug }})
+    if: github.event_name == 'workflow_dispatch'
+    needs: [build-validation-bundles, verify-downloaded-validation]
+    strategy:
+      fail-fast: false
+      matrix:
+        device_tier: [desktop_ada_representative, desktop_blackwell_representative]
+        slug: ${{ fromJSON(inputs.experiment_id == 'nw11.ray-query-vs-analytic-reflection.v1' && '["ray-query"]' || '["mesh"]') }}
+    runs-on:
+      - self-hosted
+      - windows
+      - nw11-${{ matrix.device_tier }}
+    steps:
+      - name: Download the trusted CI verification record
+        uses: actions/download-artifact@v4
+        with:
+          name: nw11-validation-trust-${{ matrix.slug }}-${{ github.sha }}
+          path: ${{ runner.temp }}/nw11-trust-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slug }}
+
+      - name: Download the CI-built immutable bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: nw11-validation-bundle-${{ matrix.slug }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/nw11-bundle-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slug }}
+      - name: Execute the immutable bundle and verify windowed presentation
+        shell: pwsh
+        run: |
+          $bundle = Join-Path $env:RUNNER_TEMP "nw11-bundle-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slug }}"
+          $launcher = Join-Path $env:RUNNER_TEMP "nw11-trust-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slug }}/run-validation.ps1"
+          $trust = Join-Path $env:RUNNER_TEMP "nw11-trust-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.slug }}/nw11-bundle-${{ matrix.slug }}-verification.json"
+          if (-not (Test-Path -LiteralPath $launcher)) { throw "bundle launcher is missing" }
+          $evidenceDirectory = Join-Path $env:RUNNER_TEMP "nw11-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.device_tier }}-${{ matrix.slug }}"
+          $arguments = @(
+            "-NoProfile", "-File", $launcher,
+            "-BundleRoot", $bundle,
+            "-TrustRecord", $trust,
+            "-ExpectedCommit", "${{ github.event.pull_request.head.sha || github.sha }}",
+            "-DeviceTier", "${{ matrix.device_tier }}",
+            "-OutputDirectory", $evidenceDirectory
+          )
+          $psi = [Diagnostics.ProcessStartInfo]::new()
+          $psi.FileName = (Get-Command pwsh -ErrorAction Stop).Source
+          $psi.UseShellExecute = $false
+          foreach ($argument in $arguments) { [void]$psi.ArgumentList.Add($argument) }
+          $process = [Diagnostics.Process]::Start($psi)
+          if ($null -eq $process) { throw "failed to launch validation child pwsh" }
+          $process.WaitForExit()
+          $code = $process.ExitCode
+          if ($code -eq 0) { exit 0 }
+          if ($code -eq 3) {
+            $files = @(Get-ChildItem -LiteralPath $evidenceDirectory -Recurse -File -Filter "summary.json")
+            if ($files.Count -eq 1) {
+              $summary = Get-Content -LiteralPath $files[0].FullName -Raw | ConvertFrom-Json
+              if ($summary.status -eq "unsupported" -and $summary.common_fallback_verified -eq $true) {
+                Write-Host "Common and fallback correctness verified. Optional capability unsupported and coverage incomplete."
+                exit 0
+              }
+            }
+            Write-Host "Required common capability unsupported. Common and fallback correctness unverified."
+            exit 3
+          }
+          if ($code -eq 11) { Write-Host "Required device coverage remains pending."; exit 11 }
+          if ($code -eq 10) { Write-Host "Measured decision is rejected; evidence is preserved."; exit 0 }
+          throw "NW-11 physical validation failed with exit code $code"
+      - name: Upload raw evidence and decisions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw11-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.device_tier }}-${{ matrix.slug }}
+          path: |
+            ${{ runner.temp }}/nw11-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.device_tier }}-${{ matrix.slug }}/**
+          if-no-files-found: warn
+
+  aggregate-physical-validation:
+    name: Verify both physical records (${{ matrix.slug }})
+    needs: [build-validation-bundles, physical-validation]
+    if: always() && github.event_name == 'workflow_dispatch' && needs.build-validation-bundles.result == 'success'
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        slug: ${{ fromJSON(inputs.experiment_id == 'nw11.ray-query-vs-analytic-reflection.v1' && '["ray-query"]' || '["mesh"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: nw11-validation-trust-${{ matrix.slug }}-${{ github.sha }}
+          path: build/nw11-trust
+      - uses: actions/download-artifact@v4
+        with:
+          name: nw11-validation-bundle-${{ matrix.slug }}-${{ github.sha }}
+          path: build/nw11-bundle
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nw11-evidence-${{ github.run_id }}-${{ github.run_attempt }}-*-${{ matrix.slug }}
+          path: build/nw11-device-evidence
+      - name: Regenerate the same-bundle aggregate from both units of evidence
+        shell: pwsh
+        run: |
+          $records = @(Get-ChildItem build/nw11-device-evidence -Recurse -File -Filter "evidence.json")
+          if ($records.Count -ne 2) { throw "Expected exactly two physical evidence files" }
+          $bundle = "build/nw11-bundle"
+          $trust = Get-Content -LiteralPath "build/nw11-trust/nw11-bundle-${{ matrix.slug }}-verification.json" -Raw | ConvertFrom-Json
+          if ($trust.status -ne "verified" -or $trust.commit -ne "${{ github.sha }}" -or
+              (Get-FileHash -LiteralPath "$bundle/bundle-manifest.json" -Algorithm SHA256).Hash -ne $trust.manifest_sha256) {
+            throw "Bundle does not match the trusted CI verification record"
+          }
+          $arguments = @("tools/nw11_verify.py", "evidence",
+            "--bundle-root", $bundle, "--expected-commit", "${{ github.sha }}",
+            "--require-complete", "--json-out", "build/nw11-decisions.json")
+          foreach ($record in $records) { $arguments += @("--evidence", $record.FullName) }
+          python -I -B -S @arguments
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && hashFiles('build/nw11-decisions.json') != '' }}
+        with:
+          name: nw11-verified-decisions-${{ matrix.slug }}-${{ github.sha }}
+          path: build/nw11-decisions.json
+          if-no-files-found: error

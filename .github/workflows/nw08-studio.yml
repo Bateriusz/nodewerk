@@ -1,4 +1,4 @@
-name: NW-08 Studio Authoring Editor
+name: Studio Authoring and Preview
 
 on:
   workflow_dispatch:

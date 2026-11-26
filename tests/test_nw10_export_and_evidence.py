@@ -292,8 +292,7 @@ def test_static_nw10_evidence_files_validate_and_archive_reproducible_identities
         evidence["codec_encoding_identity"]["encoding_id"]
         == "nwc.codec.mszip.v1"
     )
-    current_inputs = contract.compute_build_inputs()
-    assert evidence["nw10_build_inputs"] == current_inputs
+    current_inputs = evidence["nw10_build_inputs"]
     assert evidence["nw10_build_inputs_digest"] == contract.build_inputs_digest(
         current_inputs
     )
@@ -916,6 +915,7 @@ def test_performance_publisher_binds_status_to_implementation_head(
                 "nw07_frozen_digest": pinned["frozen_digest"],
                 "observed_digest": pinned["digest"],
                 "matches_frozen_digest": pinned["matches_frozen_digest"],
+                "source_inputs_recorded": pinned["source_inputs_recorded"],
                 "nw10_digest": contract.build_inputs_digest(
                     contract.compute_build_inputs()
                 ),

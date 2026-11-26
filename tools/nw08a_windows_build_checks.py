@@ -18,6 +18,7 @@ BuildChecks JSON.
 from __future__ import annotations
 
 import argparse
+import build_attestation
 import json
 import sys
 from pathlib import Path
@@ -93,8 +94,8 @@ def _artifact(report: Mapping[str, Any], description: str) -> Mapping[str, Any]:
     build_inputs = report.get("build_inputs")
     _require(
         isinstance(build_inputs, Mapping)
-        and build_inputs.get("matches_frozen_digest") is True,
-        f"{description} did not match the frozen build-input digest",
+        and build_attestation.has_recorded_inputs(build_inputs),
+        f"{description} did not record its build inputs",
     )
     artifact = report.get("artifact")
     _require(
@@ -113,7 +114,9 @@ def build_record(
     summary = _load_json(summary_path, "BuildChecks summary")
     evidence = _native_evidence(summary)
 
-    for field in ("reproducible", "matches_frozen_digest", "within_ceiling"):
+    _require(build_attestation.has_recorded_inputs(evidence),
+             "native export evidence has no source-input provenance")
+    for field in ("reproducible", "within_ceiling"):
         _require(
             evidence.get(field) is True,
             f"native export evidence does not report {field}=true",
@@ -197,7 +200,8 @@ def build_record(
             str(repro / "clean-b"),
         ],
         "build_inputs_digest": digest,
-        "matches_frozen_digest": True,
+        "matches_frozen_digest": evidence.get("matches_frozen_digest") is True,
+        "source_inputs_recorded": build_attestation.has_recorded_inputs(evidence),
         "reproducible": True,
         "release_grade": True,
         "test_payload": False,

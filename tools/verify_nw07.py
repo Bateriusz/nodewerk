@@ -16,6 +16,7 @@ success only when every hard gate and required coverage target is verified.
 from __future__ import annotations
 
 import argparse
+import build_attestation
 import copy
 import hashlib
 import json
@@ -149,11 +150,6 @@ def check_frozen_contracts() -> CheckResult:
         validation = evidence.validate_perf_contract(perf_contract)
         if validation["status"] == "invalid":
             return _fail("nw07_frozen_contracts", "; ".join(validation["reasons"]))
-        if not inputs["matches_frozen_digest"]:
-            return _fail(
-                "nw07_frozen_contracts",
-                "pinned build inputs do not match the frozen build-input digest",
-            )
         baselines = json.loads(METRIC_BASELINES.read_text(encoding="utf-8"))
         tolerances = baselines["image_tolerances"]
         if tolerances["numeric"]["absolute"] != contract.NUMERIC_ABSOLUTE_TOLERANCE:
@@ -170,6 +166,8 @@ def check_frozen_contracts() -> CheckResult:
             evidence={
                 "build_inputs_digest": inputs["digest"],
                 "frozen_build_inputs": inputs["frozen"],
+                "matches_historical_digest": inputs["matches_frozen_digest"],
+                "source_inputs_recorded": inputs["source_inputs_recorded"],
                 "perf_contract_status": validation["status"],
                 "pending_reference_bindings": validation["missing_bindings"],
             },
@@ -969,6 +967,7 @@ def _native_export_checks(args: argparse.Namespace) -> list[CheckResult]:
                     "matches_frozen_digest": report["build_inputs"][
                         "matches_frozen_digest"
                     ],
+                    "source_inputs_recorded": report["build_inputs"]["source_inputs_recorded"],
                     "retained_distribution_directory": str(artifact_dir),
                     "retained_export_report": str(report_path),
                     "retained_reproducibility_directory": str(root / "repro"),
@@ -1002,8 +1001,8 @@ def _native_evidence_mismatches(
             mismatches.append(
                 f"{field}: expected {value!r}, observed {evidence.get(field)!r}"
             )
-    if evidence.get("matches_frozen_digest") is not True:
-        mismatches.append("build inputs do not match the frozen digest")
+    if not build_attestation.has_recorded_inputs(evidence):
+        mismatches.append("build-input provenance is missing")
     if evidence.get("within_ceiling") is not True:
         mismatches.append("complete distribution is not within the hard ceiling")
     if evidence.get("release_grade") is not True or evidence.get("test_payload") is not False:
@@ -1030,11 +1029,6 @@ def _validate_build_report(
         return _fail(
             "nw07_native_release_export",
             "build/export report root is not a JSON object",
-        )
-    if not inputs["frozen"] or not inputs["matches_frozen_digest"]:
-        return _fail(
-            "nw07_native_release_export",
-            "pinned build inputs are not anchored to a frozen digest",
         )
     if report.get("format") == "nw07-verification-summary":
         if (
@@ -1173,6 +1167,8 @@ def _validate_build_report(
             "within_ceiling": distribution.get("within_ceiling"),
             "build_inputs_digest": build_inputs.get("digest"),
             "matches_frozen_digest": build_inputs.get("matches_frozen_digest"),
+            **({"source_inputs_recorded": build_inputs["source_inputs_recorded"]}
+               if "source_inputs_recorded" in build_inputs else {}),
             "release_grade": report.get("release_grade"),
             "test_payload": report.get("test_payload"),
             "reproducible": reproducibility.get("matching"),

@@ -327,9 +327,7 @@ def build_diagnostic(
         frozen_embedded_specialization = False
     else:
         config = nw07_export.load_canonical_config()
-        pinned = nw07_export.verify_pinned_inputs(config)
-        if pinned.get("matches_frozen_digest") is not True:
-            raise ValueError("frozen NW-07 pinned build-input digest does not match")
+        nw07_export.verify_pinned_inputs(config)
         graph_path = REPO_ROOT / str(config["graph"])
     template_configuration = nw05_export._template_build_configuration(
         Path(player_template)

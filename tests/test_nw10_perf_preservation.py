@@ -170,6 +170,7 @@ def _fixture() -> tuple[dict, dict, dict, dict]:
             "nw07_frozen_digest": pinned["frozen_digest"],
             "observed_digest": pinned["digest"],
             "matches_frozen_digest": pinned["matches_frozen_digest"],
+                "source_inputs_recorded": pinned["source_inputs_recorded"],
             "nw10_digest": preservation.nw10_contract.build_inputs_digest(
                 preservation.nw10_contract.compute_build_inputs()
             ),
@@ -221,7 +222,7 @@ def test_matched_after_artifact_preserves_frozen_performance_contract() -> None:
         (("requirements_digest",), "wrong"),
         (("common_graph", "sha256"), "9" * 64),
         (("build_inputs", "observed_digest"), "wrong"),
-        (("build_inputs", "matches_frozen_digest"), False),
+        (("build_inputs", "source_inputs_recorded"), False),
         (("dependency_closure", "matches_manifest"), False),
         (("runtime_probe", "status"), "failed"),
         (("release_grade",), False),

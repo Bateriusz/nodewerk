@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw11-evidence-status.schema.json",
+  "title": "Nodewerk NW-11 aggregate evidence status",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "implementation_base",
+    "source_head_sha",
+    "evidence_status",
+    "physical_evidence",
+    "contract_evidence",
+    "common_correctness",
+    "experiments",
+    "required_physical_coverage",
+    "policy"
+  ],
+  "properties": {
+    "format": { "const": "nw11-evidence-status" },
+    "version": { "const": 1 },
+    "task": { "const": "NW-11" },
+    "implementation_base": { "const": "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b" },
+    "source_head_sha": { "type": ["string", "null"] },
+    "evidence_status": {
+      "enum": ["verified_physical", "pending_physical", "failed"]
+    },
+    "physical_evidence": { "enum": ["pending", "verified", "failed"] },
+    "contract_evidence": { "const": "verified_by_pytest" },
+    "common_correctness": {
+      "type": "object",
+      "required": [
+        "desktop_ada_representative",
+        "desktop_blackwell_representative"
+      ],
+      "properties": {
+        "desktop_ada_representative": {
+          "enum": ["pending_unverified", "verified", "failed"]
+        },
+        "desktop_blackwell_representative": {
+          "enum": ["pending_unverified", "verified", "failed"]
+        }
+      }
+    },
+    "experiments": {
+      "type": "object",
+      "required": [
+        "nw11.mesh-shader-vs-indexed.v1",
+        "nw11.ray-query-vs-analytic-reflection.v1"
+      ],
+      "properties": {
+        "nw11.mesh-shader-vs-indexed.v1": { "$ref": "#/$defs/experiment_status" },
+        "nw11.ray-query-vs-analytic-reflection.v1": { "$ref": "#/$defs/experiment_status" }
+      },
+      "additionalProperties": false
+    },
+    "required_physical_coverage": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": [
+          "device_tier",
+          "representative_gpu_metadata_only",
+          "status",
+          "satisfies_completion"
+        ],
+        "properties": {
+          "device_tier": { "type": "string", "minLength": 3 },
+          "representative_gpu_metadata_only": { "type": "string", "minLength": 3 },
+          "status": { "enum": ["pending", "verified", "failed", "unsupported"] },
+          "satisfies_completion": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "pending_bundle_requirements": { "type": "array", "items": { "type": "string" } },
+    "policy": { "type": "string", "minLength": 20 }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "experiment_status": {
+      "type": "object",
+      "required": ["status", "satisfies_completion", "reason"],
+      "properties": {
+        "status": {
+          "enum": ["accepted", "rejected", "failed", "pending", "unsupported"]
+        },
+        "satisfies_completion": { "type": "boolean" },
+        "reason": { "type": "string", "minLength": 10 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,306 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw11-evidence.schema.json",
+  "title": "Nodewerk NW-11 machine-readable validation evidence",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "implementation_base",
+    "commit",
+    "bundle_id",
+    "bundle_manifest_sha256",
+    "experiment_id",
+    "profile_id",
+    "fallback_artifact_id",
+    "capability_profile_sha256",
+    "artifact_hashes",
+    "optional_eligibility",
+    "common_eligibility",
+    "runs",
+    "raw_per_sample_results_preserved",
+    "operator_supplied_values",
+    "raw_inputs",
+    "canonical_release_correctness"
+  ],
+  "properties": {
+    "format": {
+      "const": "nw11-validation-evidence"
+    },
+    "version": {
+      "const": 1
+    },
+    "task": {
+      "const": "NW-11"
+    },
+    "implementation_base": {
+      "const": "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "bundle_id": {
+      "type": "string",
+      "minLength": 10
+    },
+    "bundle_manifest_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "experiment_id": {
+      "type": "string",
+      "minLength": 3
+    },
+    "profile_id": {
+      "type": "string",
+      "minLength": 3
+    },
+    "fallback_artifact_id": {
+      "type": "string",
+      "minLength": 3
+    },
+    "capability_profile_sha256": {
+      "type": "string",
+      "minLength": 10
+    },
+    "artifact_hashes": {
+      "type": "object",
+      "minProperties": 3,
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    },
+    "runs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "role",
+          "device_tier",
+          "device_key",
+          "environment_key",
+          "status",
+          "capability_decision",
+          "measurement"
+        ],
+        "properties": {
+          "role": {
+            "enum": [
+              "baseline",
+              "variant",
+              "fallback"
+            ]
+          },
+          "device_tier": {
+            "enum": [
+              "desktop_ada_representative",
+              "desktop_blackwell_representative"
+            ]
+          },
+          "device_key": {
+            "type": "string",
+            "minLength": 3
+          },
+          "environment_key": {
+            "type": "string",
+            "minLength": 3
+          },
+          "status": {
+            "enum": [
+              "eligible",
+              "measured",
+              "pending",
+              "unsupported",
+              "failed"
+            ]
+          },
+          "capability_decision": {
+            "type": "object",
+            "required": [
+              "status",
+              "marketing_name_used_for_eligibility"
+            ],
+            "properties": {
+              "status": {
+                "type": "string"
+              },
+              "marketing_name_used_for_eligibility": {
+                "const": false
+              }
+            }
+          },
+          "diagnostics": {
+            "type": "array"
+          },
+          "measurement": {
+            "type": "object",
+            "required": [
+              "distribution_bytes",
+              "shader_count",
+              "shader_ids",
+              "peak_engine_committed_gpu_bytes",
+              "image",
+              "process_runs"
+            ],
+            "properties": {
+              "cold_initialization_ms": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "distribution_bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "shader_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "shader_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "peak_engine_committed_gpu_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "image": {
+                "type": "object",
+                "required": [
+                  "max_abs_channel_error",
+                  "rmse",
+                  "reference_kind",
+                  "fixed_ticks"
+                ],
+                "properties": {
+                  "max_abs_channel_error": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "rmse": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "reference_kind": {
+                    "type": "string"
+                  },
+                  "fixed_ticks": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "process_runs": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 3,
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "evidence_file": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "generated_by": {
+      "type": "string"
+    },
+    "raw_per_sample_results_preserved": {
+      "const": true
+    },
+    "operator_supplied_values": {
+      "const": false
+    },
+    "optional_eligibility": {
+      "type": "object",
+      "required": [
+        "status",
+        "device_key",
+        "environment_key",
+        "marketing_name_used_for_eligibility"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "eligible",
+            "unsupported",
+            "pending"
+          ]
+        },
+        "device_key": {
+          "type": "string",
+          "minLength": 3
+        },
+        "environment_key": {
+          "type": "string",
+          "minLength": 3
+        },
+        "marketing_name_used_for_eligibility": {
+          "const": false
+        },
+        "diagnostics": {
+          "type": "array"
+        }
+      }
+    },
+    "common_eligibility": {
+      "type": "object",
+      "required": [
+        "status",
+        "device_key",
+        "environment_key",
+        "marketing_name_used_for_eligibility"
+      ],
+      "properties": {
+        "status": {
+          "const": "eligible"
+        },
+        "device_key": {
+          "type": "string",
+          "minLength": 3
+        },
+        "environment_key": {
+          "type": "string",
+          "minLength": 3
+        },
+        "marketing_name_used_for_eligibility": {
+          "const": false
+        },
+        "diagnostics": {
+          "type": "array"
+        }
+      }
+    },
+    "raw_inputs": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    },
+    "canonical_release_correctness": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

@@ -88,15 +88,20 @@ bool Win32Window::Create(const WindowConfig& config) noexcept {
             return false;
         }
     }
+    // Native-pixel borderless presentation must not inherit the desktop's
+    // logical DPI virtualization. Use the primary monitor, not the work area.
+    if (config.borderless) (void)SetProcessDPIAware();
     RECT rect{0, 0, static_cast<LONG>(config.width),
               static_cast<LONG>(config.height)};
-    const DWORD style = WS_OVERLAPPEDWINDOW;
+    const DWORD style = config.borderless ? WS_POPUP : WS_OVERLAPPEDWINDOW;
     AdjustWindowRectEx(&rect, style, FALSE, 0u);
     const int window_width = static_cast<int>(rect.right - rect.left);
     const int window_height = static_cast<int>(rect.bottom - rect.top);
+    const int x = config.borderless ? (GetSystemMetrics(SM_CXSCREEN) - window_width) / 2 : CW_USEDEFAULT;
+    const int y = config.borderless ? (GetSystemMetrics(SM_CYSCREEN) - window_height) / 2 : CW_USEDEFAULT;
     HWND hwnd = CreateWindowExW(
         0u, kWindowClassName, L"Nodewerk NW-04 Player", style,
-        CW_USEDEFAULT, CW_USEDEFAULT, window_width, window_height, nullptr,
+        x, y, window_width, window_height, nullptr,
         nullptr, instance, nullptr);
     if (hwnd == nullptr) {
         return false;
@@ -108,9 +113,16 @@ bool Win32Window::Create(const WindowConfig& config) noexcept {
     SetWindowLongPtrW(hwnd, GWLP_USERDATA,
                       reinterpret_cast<LONG_PTR>(this));
     if (config.visible) {
-        ShowWindow(hwnd, SW_SHOW);
+        ShowWindow(hwnd, config.maximized && !config.borderless ? SW_SHOWMAXIMIZED : SW_SHOW);
         UpdateWindow(hwnd);
     }
+    RECT client{};
+    if (GetClientRect(hwnd, &client) == FALSE) {
+        Destroy();
+        return false;
+    }
+    width_ = static_cast<std::uint32_t>(client.right - client.left);
+    height_ = static_cast<std::uint32_t>(client.bottom - client.top);
     return true;
 #else
     // GPU-less host simulation: model the same lifecycle without a window.
@@ -209,6 +221,11 @@ void Win32Window::RequestClientSize(std::uint32_t width,
                      static_cast<int>(rect.bottom - rect.top),
                      static_cast<UINT>(SWP_NOMOVE | SWP_NOZORDER |
                                        SWP_NOACTIVATE));
+        RECT client{};
+        if (GetClientRect(hwnd, &client) != FALSE) {
+            width_ = static_cast<std::uint32_t>(client.right - client.left);
+            height_ = static_cast<std::uint32_t>(client.bottom - client.top);
+        }
     }
 #endif
 }

@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw11-bundle-manifest.schema.json",
+  "title": "Nodewerk NW-11 deterministic validation bundle manifest",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "implementation_base",
+    "bundle_id",
+    "bundle_version",
+    "repository",
+    "commit",
+    "experiment_id",
+    "profile_id",
+    "fallback_artifact_id",
+    "artifacts",
+    "capability_profile",
+    "experiment_definition",
+    "toolchain",
+    "required_capabilities",
+    "dependency_ledger",
+    "accounting",
+    "verification",
+    "policy"
+  ],
+  "properties": {
+    "format": { "const": "nw11-validation-bundle-manifest" },
+    "version": { "const": 1 },
+    "task": { "const": "NW-11" },
+    "implementation_base": { "const": "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b" },
+    "bundle_id": { "type": "string", "pattern": "^sha256:v1:[0-9a-f]{64}$" },
+    "bundle_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "repository": { "type": "string", "minLength": 1 },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "experiment_id": { "type": "string", "minLength": 3 },
+    "profile_id": { "type": "string", "minLength": 3 },
+    "fallback_artifact_id": { "type": "string", "minLength": 3 },
+    "artifacts": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "role",
+          "sha256",
+          "bytes",
+          "distributed_bytes",
+          "optional"
+        ],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "role": {
+            "enum": [
+              "common_baseline",
+              "optional_variant",
+              "fallback_common",
+              "runtime_dependency",
+              "capability_profile",
+              "experiment_definition",
+              "verification_tool",
+              "launcher",
+              "shader",
+              "reading"
+            ]
+          },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "bytes": { "type": "integer", "minimum": 1 },
+          "distributed_bytes": { "type": "integer", "minimum": 0 },
+          "profile_id": { "type": ["string", "null"] },
+          "optional": { "type": "boolean" },
+          "shader_targets": { "type": "array", "items": { "type": "string" } },
+          "dependencies": { "type": "array", "items": { "type": "string" } },
+          "metadata": { "type": "object" }
+        }
+      }
+    },
+    "capability_profile": {
+      "type": "object",
+      "required": ["profile_id", "requirements_digest", "sha256", "path", "bytes"],
+      "properties": {
+        "profile_id": { "type": "string" },
+        "requirements_digest": { "type": "string" },
+        "sha256": { "type": "string" },
+        "path": { "type": "string" },
+        "bytes": { "type": "integer" }
+      }
+    },
+    "experiment_definition": {
+      "type": "object",
+      "required": ["experiment_id", "sha256", "path", "bytes"],
+      "properties": {
+        "experiment_id": { "type": "string" },
+        "sha256": { "type": "string" },
+        "path": { "type": "string" },
+        "bytes": { "type": "integer" }
+      }
+    },
+    "toolchain": { "type": "object" },
+    "required_capabilities": { "type": "array", "items": { "type": "string" } },
+    "dependency_ledger": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "optional", "counted", "distributed_bytes"],
+        "properties": {
+          "name": { "type": "string" },
+          "kind": { "type": "string" },
+          "optional": { "type": "boolean" },
+          "counted": { "type": "boolean" },
+          "in_common_closure": { "type": "boolean" },
+          "distributed_bytes": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "shader_payloads": {
+      "type": "object",
+      "required": ["path", "sha256", "payload_count"],
+      "properties": {
+        "path": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "payload_count": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "dependency_report": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "canonical_production": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "accounting": {
+      "type": "object",
+      "required": [
+        "common_distribution_bytes",
+        "fallback_distribution_bytes",
+        "incremental_distribution_bytes",
+        "complete_distribution_bytes",
+        "optional_dependency_bytes",
+        "artifact_budget",
+        "distribution_size_policy",
+        "within_complete_ceiling",
+        "within_incremental_budget",
+        "adoption_budget_status"
+      ],
+      "properties": {
+        "distribution_size_policy": { "enum": ["gated", "report_only"] },
+        "within_complete_ceiling": { "type": "boolean" },
+        "within_incremental_budget": { "type": "boolean" },
+        "adoption_budget_status": { "enum": ["accepted", "rejected", "report_only"] }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "required": [
+        "verifier",
+        "launcher",
+        "launcher_verifies_before_measurement",
+        "evidence_binds_commit_and_hashes",
+        "operator_supplied_values_allowed"
+      ],
+      "properties": {
+        "verifier": { "const": "tools/nw11/nw11_verify.py" },
+        "launcher": { "const": "run-validation.ps1" },
+        "launcher_verifies_before_measurement": { "const": true },
+        "evidence_binds_commit_and_hashes": { "const": true },
+        "operator_supplied_values_allowed": { "const": false }
+      },
+      "additionalProperties": false
+    },
+    "policy": { "type": "string", "minLength": 20 }
+  }
+}

@@ -1,4 +1,4 @@
-# NW-01 Measured Evidence Capture
+For physical Windows/NVIDIA validation, see [`physical-validation-playbook.md`](physical-validation-playbook.md).\n\n# NW-01 Measured Evidence Capture
 
 NW-01B turns the Windows setup and evidence workflow used to complete NW-01 into a
 repository-owned Windows Evidence Harness. The harness wraps the existing verifier; it does not

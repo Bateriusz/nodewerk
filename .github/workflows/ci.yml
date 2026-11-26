@@ -1,4 +1,4 @@
-name: NW-01 Baseline & Deployment Risk Verification
+name: Core Build and Deployment Validation
 
 on:
   workflow_dispatch:

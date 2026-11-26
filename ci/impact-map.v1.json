@@ -46,14 +46,19 @@
         "fixtures/**",
         "schemas/nw0[2-6]*",
         "schemas/nw09*",
-        "benchmarks/capability-manifest.v1.json"
+        "benchmarks/capability-manifest.v1.json",
+        "tools/build_attestation.py",
+        "tools/validation_*.py",
+        "tools/hardware_evidence_*.py",
+        "tools/presentation_metrics.py"
       ],
       "propagates_to": [
         "nw01",
         "nw07",
         "nw08",
         "nw08a",
-        "nw10"
+        "nw10",
+        "nw11"
       ]
     },
     "nw01": {
@@ -69,7 +74,8 @@
         "nw07",
         "nw08",
         "nw08a",
-        "nw10"
+        "nw10",
+        "nw11"
       ]
     },
     "nw07": {
@@ -82,7 +88,8 @@
       "propagates_to": [
         "nw08",
         "nw08a",
-        "nw10"
+        "nw10",
+        "nw11"
       ]
     },
     "nw08": {
@@ -111,7 +118,23 @@
         "tools/nw10_*.py",
         "tests/test_nw10_*",
         "benchmarks/nw10/**",
-        "schemas/nw10*"
+        "schemas/nw10*",
+        "tools/compact_export_evidence_publisher.py"
+      ],
+      "propagates_to": []
+    },
+    "nw11": {
+      "patterns": [
+        "tools/nw11/**",
+        "tools/nw11_*.py",
+        "tests/test_nw11_*",
+        "benchmarks/nw11/**",
+        "benchmarks/experiments/nw11-*",
+        "schemas/nw11*",
+        "shaders/nw11/**",
+        "src/nw11/**",
+        "tools/gpu_experiment_*.py",
+        "tools/canonical_export_reproducibility.py"
       ],
       "propagates_to": []
     }

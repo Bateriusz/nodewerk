@@ -1,0 +1,49 @@
+{
+  "format": "nw11-evidence-status",
+  "version": 1,
+  "task": "NW-11",
+  "implementation_base": "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b",
+  "source_head_sha": null,
+  "evidence_status": "pending_physical",
+  "physical_evidence": "pending",
+  "contract_evidence": "verified_by_pytest",
+  "common_correctness": {
+    "desktop_ada_representative": "pending_unverified",
+    "desktop_blackwell_representative": "pending_unverified"
+  },
+  "experiments": {
+    "nw11.mesh-shader-vs-indexed.v1": {
+      "status": "pending",
+      "satisfies_completion": false,
+      "reason": "Native physical execution reported on both devices; full raw reconstruction and cross-device verification remain pending (Blackwell ETW unavailable)."
+    },
+    "nw11.ray-query-vs-analytic-reflection.v1": {
+      "status": "pending",
+      "satisfies_completion": false,
+      "reason": "Native physical execution reported on both devices; full raw reconstruction and cross-device verification remain pending (Blackwell ETW unavailable)."
+    }
+  },
+  "required_physical_coverage": [
+    {
+      "device_tier": "desktop_ada_representative",
+      "representative_gpu_metadata_only": "NVIDIA GeForce RTX 4060 Ti",
+      "status": "pending",
+      "satisfies_completion": false
+    },
+    {
+      "device_tier": "desktop_blackwell_representative",
+      "representative_gpu_metadata_only": "NVIDIA GeForce RTX 5070 Ti",
+      "status": "pending",
+      "satisfies_completion": false
+    }
+  ],
+  "pending_bundle_requirements": [
+    "same-revision common/baseline and optional executables",
+    "separately identifiable common-profile fallback artifact",
+    "all runtime dependencies and SHA-256 identities",
+    "exact profile/capability manifests and requirements digests",
+    "frozen experiment definitions",
+    "PowerShell launcher plus repository-owned verifier"
+  ],
+  "policy": "Contract implementation is verified by pytest. Physical evidence is pending and cannot satisfy completion. Missing required coverage stays pending; unsupported capability is recorded as unsupported; initialization or execution failures are recorded as failures. No pending or unsupported result is treated as passing."
+}

@@ -30,6 +30,8 @@ graph semantics and `.nwgraph` schema.
 21. [ADR-0008: NW-09 Explicit Temporal State Extension](architecture/0008-nw09-temporal-state.md)
 22. [NW-09 Explicit Temporal State (Particles and Feedback)](nw09-temporal-state.md)
 23. [NW-10 Compact Export, Restricted Intro & Measured 64 KiB Attempt](nw10-compact-export.md)
+24. [NW-11 Advanced GPU Feature Experiments](nw11-advanced-gpu-experiments.md)
+25. [NW-11 Bounded Follow-Up Matrix](nw11-follow-up-matrix.md)
 
 ## Schemas & Recorded Baseline Artifacts
 
@@ -65,3 +67,10 @@ graph semantics and `.nwgraph` schema.
 - NW-10 Restricted Intro Profile: [`benchmarks/nw10/intro-profile.v1.json`](../benchmarks/nw10/intro-profile.v1.json) (validated by [`schemas/nw10-intro-profile.schema.json`](../schemas/nw10-intro-profile.schema.json))
 - NW-10 Evidence Status: [`benchmarks/nw10/evidence-status.v1.json`](../benchmarks/nw10/evidence-status.v1.json) (validated by [`schemas/nw10-evidence-status.schema.json`](../schemas/nw10-evidence-status.schema.json))
 - Upstream Measured-Evidence Status: [`benchmarks/evidence-status.json`](../benchmarks/evidence-status.json) (complete for recorded Windows/RTX captures)
+- NW-11 Capability Profiles: [`benchmarks/nw11/profiles/`](../benchmarks/nw11/profiles/) (validated by [`schemas/nw11-capability-profile.schema.json`](../schemas/nw11-capability-profile.schema.json))
+- NW-11 Versioned Experiments (active v2; historical v1): [`benchmarks/nw11/experiments/`](../benchmarks/nw11/experiments/) (validated by [`schemas/nw11-experiment.schema.json`](../schemas/nw11-experiment.schema.json))
+- NW-11 Evidence Status and Decisions: [`benchmarks/nw11/evidence-status.v1.json`](../benchmarks/nw11/evidence-status.v1.json), [`benchmarks/nw11/decisions/`](../benchmarks/nw11/decisions/) (validated by [`schemas/nw11-evidence-status.schema.json`](../schemas/nw11-evidence-status.schema.json) and [`schemas/nw11-decision.schema.json`](../schemas/nw11-decision.schema.json))
+- NW-11 Follow-Up Matrix: [`benchmarks/nw11/follow-up-matrix.v1.json`](../benchmarks/nw11/follow-up-matrix.v1.json) (validated by [`schemas/nw11-follow-up-matrix.schema.json`](../schemas/nw11-follow-up-matrix.schema.json))
+- NW-11 Bundle and Evidence Schemas: [`schemas/nw11-bundle-manifest.schema.json`](../schemas/nw11-bundle-manifest.schema.json), [`schemas/nw11-evidence.schema.json`](../schemas/nw11-evidence.schema.json)
+
+- [ADR 0009 — Validation and evidence lifecycle](architecture/0009-validation-and-evidence-lifecycle.md)

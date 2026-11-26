@@ -15,6 +15,14 @@
       "platform_gate": "ci.yml:windows-reproducibility-and-fixtures"
     },
     {
+      "name": "hardware-evidence",
+      "patterns": [
+        "tests/test_hardware_evidence_host.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "nw11-advanced-gpu.yml:contract-and-capability-checks"
+    },
+    {
       "name": "nw01",
       "patterns": [
         "tests/test_nw01_*.py"
@@ -102,6 +110,14 @@
       ],
       "broad_gate": "ci.yml:schema-and-contract-checks",
       "platform_gate": "nw10-compact.yml"
+    },
+    {
+      "name": "nw11",
+      "patterns": [
+        "tests/test_nw11_*.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "nw11-advanced-gpu.yml:contract-and-capability-checks"
     }
   ]
 }

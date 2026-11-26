@@ -1,0 +1,327 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw11-experiment.schema.json",
+  "title": "Nodewerk NW-11 frozen experiment definition",
+  "description": "A pre-measurement experiment definition that freezes workload, reference/quality, image criterion, budgets, warm-up, sample count, statistic, success criterion, and the graph-derived pipeline overlay.",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "implementation_base",
+    "experiment_id",
+    "kind",
+    "status",
+    "baseline_profile_id",
+    "variant_profile_id",
+    "fallback_artifact_id",
+    "base_graph",
+    "graph_derivation",
+    "workload",
+    "pipeline",
+    "reference",
+    "protocol",
+    "criteria",
+    "artifact_budget",
+    "execution",
+    "evidence_status",
+    "policy"
+  ],
+  "properties": {
+    "format": { "const": "nw11-experiment" },
+    "version": { "enum": [1, 2, 3, 4] },
+    "task": { "const": "NW-11" },
+    "implementation_base": { "const": "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b" },
+    "experiment_id": {
+      "enum": [
+        "nw11.mesh-shader-vs-indexed.v1",
+        "nw11.ray-query-vs-analytic-reflection.v1"
+      ]
+    },
+    "kind": { "enum": ["mesh_shading", "ray_query_reflection"] },
+    "status": { "enum": ["frozen", "active"] },
+    "validation_policy": { "type": "object" },
+    "baseline_profile_id": { "const": "nw.common.d3d12.fl12_0.sm6_0.v1" },
+    "variant_profile_id": {
+      "enum": [
+        "nw.optional.d3d12.mesh_shaders.ms6_5.v1",
+        "nw.optional.d3d12.ray_query.ps6_5.v1"
+      ]
+    },
+    "fallback_artifact_id": { "type": "string", "minLength": 3 },
+    "base_graph": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "const": "fixtures/nw07/production_loop.nwgraph" },
+        "sha256": { "const": "093b8429d4e592e643dc2eb307ea751a0c78d6544961beb580ea56a9361b7091" }
+      },
+      "additionalProperties": false
+    },
+    "graph_derivation": {
+      "type": "object",
+      "required": [
+        "mode",
+        "base_graph_unchanged",
+        "new_operators",
+        "hand_authored_renderer",
+        "second_production_backend",
+        "description"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "pipeline_lowering_overlay",
+            "fragment_shader_specialization_overlay"
+          ]
+        },
+        "base_graph_unchanged": { "const": true },
+        "new_operators": { "type": "array", "maxItems": 0 },
+        "hand_authored_renderer": { "const": false },
+        "second_production_backend": { "const": false },
+        "description": { "type": "string", "minLength": 20 }
+      },
+      "additionalProperties": false
+    },
+    "workload": {
+      "type": "object",
+      "required": [
+        "graph",
+        "graph_sha256",
+        "width",
+        "height",
+        "torus_instances",
+        "loop_ticks",
+        "ticks_per_second",
+        "loop_seconds",
+        "frame_rate_hz",
+        "quality_profile_id"
+      ],
+      "properties": {
+        "graph": { "const": "fixtures/nw07/production_loop.nwgraph" },
+        "graph_sha256": { "const": "093b8429d4e592e643dc2eb307ea751a0c78d6544961beb580ea56a9361b7091" },
+        "width": { "const": 1920 },
+        "height": { "const": 1080 },
+        "torus_instances": { "const": 256 },
+        "loop_ticks": { "const": 960000 },
+        "ticks_per_second": { "const": 48000 },
+        "loop_seconds": { "const": 20 },
+        "frame_rate_hz": { "const": 60 },
+        "quality_profile_id": { "const": "nw07.quality.v1" }
+      },
+      "additionalProperties": false
+    },
+    "pipeline": {
+      "type": "object",
+      "required": [
+        "baseline",
+        "variant",
+        "fallback_profile_id",
+        "fallback_artifact_id",
+        "baseline_shaders",
+        "variant_shaders"
+      ],
+      "properties": {
+        "baseline": { "type": "string", "minLength": 3 },
+        "variant": { "type": "string", "minLength": 3 },
+        "fallback_profile_id": { "const": "nw.common.d3d12.fl12_0.sm6_0.v1" },
+        "fallback_artifact_id": { "type": "string", "minLength": 3 },
+        "baseline_shaders": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/shader" }
+        },
+        "variant_shaders": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/shader" }
+        },
+        "shared_fragment_shader": { "type": "string" },
+        "shared_vertex_shader": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "reference": {
+      "type": "object",
+      "required": [
+        "quality_profile_id",
+        "capture_protocol",
+        "fixed_ticks",
+        "loop_boundary_ticks",
+        "capture_format",
+        "resolution"
+      ],
+      "properties": {
+        "quality_profile_id": { "const": "nw07.quality.v1" },
+        "capture_protocol": { "const": "nw07-correctness-capture.v1" },
+        "fixed_ticks": { "type": "array", "minItems": 1, "items": { "type": "integer" } },
+        "loop_boundary_ticks": { "type": "array", "minItems": 2, "items": { "type": "integer" } },
+        "capture_format": { "const": "rgba32f" },
+        "resolution": {
+          "type": "object",
+          "required": ["width", "height"],
+          "properties": {
+            "width": { "const": 1920 },
+            "height": { "const": 1080 }
+          }
+        }
+      }
+    },
+    "protocol": {
+      "type": "object",
+      "required": [
+        "perf_contract",
+        "perf_protocol",
+        "warmup_seconds",
+        "runs",
+        "run_seconds",
+        "min_raw_samples_per_run",
+        "fresh_process_per_run",
+        "application_pipeline_cache",
+        "percentile",
+        "percentile_method",
+        "matched_environment_required",
+        "independent_per_device"
+      ],
+      "properties": {
+        "perf_contract": { "enum": ["nw07_perf_ref_v1", "matched-gpu-comparison.v2", "functional-gpu-execution.v4"] },
+        "perf_protocol": { "const": "nw07-perf-run.v1" },
+        "warmup_seconds": { "const": 5 },
+        "runs": { "enum": [1, 3] },
+        "run_seconds": { "const": 60 },
+        "min_raw_samples_per_run": { "const": 600 },
+        "fresh_process_per_run": { "const": true },
+        "application_pipeline_cache": { "const": false },
+        "percentile": { "const": 99.0 },
+        "percentile_method": { "const": "nearest-rank" },
+        "matched_environment_required": { "const": true },
+        "independent_per_device": { "const": true }
+      }
+    },
+    "criteria": {
+      "type": "object",
+      "required": ["primary", "guardrails", "image"],
+      "properties": {
+        "primary": {
+          "type": "object",
+          "required": [
+            "metric",
+            "comparison",
+            "relative_reduction_percent_min",
+            "evaluation",
+            "statistic"
+          ],
+          "properties": {
+            "metric": { "const": "p99_gpu_time_ms" },
+            "comparison": { "const": "variant_vs_matched_baseline" },
+            "relative_reduction_percent_min": { "type": "number", "minimum": 10.0 },
+            "evaluation": { "const": "independent_per_device_environment" },
+            "statistic": { "type": "string", "minLength": 10 }
+          }
+        },
+        "guardrails": {
+          "type": "object",
+          "required": [
+            "end_to_end_frame_time_must_not_regress",
+            "microbenchmark_gain_alone_is_sufficient",
+            "cpu_submit_ms_max",
+            "complete_distribution_bytes_ceiling",
+            "incremental_distribution_bytes_ceiling",
+            "shader_count_increment_ceiling",
+            "peak_engine_committed_gpu_bytes_ceiling"
+          ],
+          "properties": {
+            "end_to_end_frame_time_must_not_regress": { "const": true },
+            "microbenchmark_gain_alone_is_sufficient": { "const": false },
+            "cpu_submit_ms_max": { "type": "number", "maximum": 16.67 },
+            "complete_distribution_bytes_ceiling": { "type": "integer", "maximum": 262144 },
+            "incremental_distribution_bytes_ceiling": { "type": "integer", "maximum": 65536 },
+            "shader_count_increment_ceiling": { "type": "integer", "maximum": 2 },
+            "cold_initialization_ms_ceiling": { "type": "number", "maximum": 2000.0 },
+            "peak_engine_committed_gpu_bytes_ceiling": { "type": "integer", "maximum": 536870912 }
+          }
+        },
+        "image": {
+          "type": "object",
+          "required": [
+            "criterion",
+            "max_abs_channel_error",
+            "rmse",
+            "fixed_quality",
+            "reference_kind",
+            "fixed_ticks"
+          ],
+          "properties": {
+            "criterion": { "const": "max_abs_channel_error_and_rmse" },
+            "max_abs_channel_error": { "type": "number", "maximum": 0.0001 },
+            "rmse": { "type": "number", "maximum": 0.0001 },
+            "fixed_quality": { "const": true },
+            "reference_kind": {
+              "enum": ["raster_reference", "analytic_reference", "sdf_reference"]
+            },
+            "fixed_ticks": { "type": "array", "minItems": 1, "items": { "type": "integer" } },
+            "loop_boundary_ticks": { "type": "array", "items": { "type": "integer" } }
+          }
+        }
+      }
+    },
+    "artifact_budget": {
+      "type": "object",
+      "required": [
+        "distribution_size_policy",
+        "complete_distribution_bytes_ceiling",
+        "incremental_distribution_bytes_ceiling",
+        "shader_count_increment_ceiling",
+        "peak_engine_committed_gpu_bytes_ceiling",
+        "process_start_to_first_present_ms_ceiling",
+        "optional_dependency_bytes_policy"
+      ],
+      "properties": {
+        "distribution_size_policy": { "enum": ["gated", "report_only"] },
+        "complete_distribution_bytes_ceiling": { "type": "integer", "maximum": 262144 },
+        "incremental_distribution_bytes_ceiling": { "type": "integer", "maximum": 65536 },
+        "shader_count_increment_ceiling": { "type": "integer", "maximum": 2 },
+        "peak_engine_committed_gpu_bytes_ceiling": { "type": "integer", "maximum": 536870912 },
+        "process_start_to_first_present_ms_ceiling": { "type": "number", "maximum": 2000.0 },
+        "optional_dependency_bytes_policy": { "type": "string", "minLength": 20 }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "required": [
+        "raw_report_format",
+        "arguments",
+        "fresh_process_per_run",
+        "preserve_raw"
+      ],
+      "properties": {
+        "raw_report_format": { "const": "nw11-raw-run.v1" },
+        "arguments": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "type": "string" }
+        },
+        "fresh_process_per_run": { "const": true },
+        "preserve_raw": { "const": true }
+      },
+      "additionalProperties": false
+    },
+    "evidence_status": {
+      "enum": ["accepted", "rejected", "failed", "pending", "unsupported"]
+    },
+    "policy": { "type": "string", "minLength": 20 }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "shader": {
+      "type": "object",
+      "required": ["path", "target", "entry_point"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^shaders/" },
+        "target": { "type": "string", "pattern": "^(vs|ps|cs|as|ms|lib)_[0-9]_[0-9]$" },
+        "entry_point": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

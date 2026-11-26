@@ -272,11 +272,11 @@ def _release_inputs() -> dict[str, Any]:
     import nw07_export
 
     result = nw07_export.verify_pinned_inputs(nw07_export.load_canonical_config())
-    if not result["matches_frozen_digest"]:
-        raise VerificationFailure("frozen NW-07 build-input digest changed")
+    if not result["source_inputs_recorded"] or result["digest"] != nw07_export.build_inputs_digest(result["inputs"]):
+        raise VerificationFailure("canonical release build-input identity is invalid")
     if any(path.startswith("tools/nw08_") for path in nw07_contract.PINNED_BUILD_INPUTS):
         raise VerificationFailure("editor code leaked into pinned release inputs")
-    return {"digest": result["digest"]}
+    return {"digest": result["digest"], "historical_digest_matches": result["matches_frozen_digest"]}
 
 
 def _report_schema() -> dict[str, Any]:

@@ -24,6 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import dependency_check  # noqa: E402
+import hardware_evidence_host as hardware_host  # noqa: E402
 import nw07_contract as contract  # noqa: E402
 import nw07_export as export  # noqa: E402
 import nwp_package as nwp  # noqa: E402
@@ -78,218 +79,15 @@ def _windows_build() -> str:
 
 
 def _windows_virtualization_probe() -> dict[str, Any]:
-    if platform.system() != "Windows":
-        return {
-            "available": False,
-            "manufacturer": "",
-            "model": "",
-            "hypervisor_present": None,
-            "virtualization_based_security_status": None,
-            "error": "not_windows",
-        }
-    command = [
-        "powershell.exe",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        (
-            "$c=Get-CimInstance Win32_ComputerSystem;"
-            "$p=$null;try{$p=Get-CimInstance Win32_ComputerSystemProduct -ErrorAction Stop}catch{};"
-            "$b=$null;try{$b=Get-CimInstance Win32_BIOS -ErrorAction Stop}catch{};"
-            "$m=$null;try{$m=Get-CimInstance Win32_BaseBoard -ErrorAction Stop}catch{};"
-            "$vbs=$null;"
-            "try{$d=Get-CimInstance -Namespace root\\Microsoft\\Windows\\DeviceGuard "
-            "-ClassName Win32_DeviceGuard -ErrorAction Stop;"
-            "$vbs=$d.VirtualizationBasedSecurityStatus}catch{};"
-            "[pscustomobject]@{Manufacturer=$c.Manufacturer;Model=$c.Model;"
-            "ProductVendor=$p.Vendor;ProductName=$p.Name;"
-            "BiosManufacturer=$b.Manufacturer;BiosVersion=$b.SMBIOSBIOSVersion;"
-            "BaseBoardManufacturer=$m.Manufacturer;BaseBoardProduct=$m.Product;"
-            "HypervisorPresent=$c.HypervisorPresent;"
-            "VirtualizationBasedSecurityStatus=$vbs}|ConvertTo-Json -Compress"
-        ),
-    ]
-    try:
-        completed = subprocess.run(
-            command, capture_output=True, text=True, timeout=15, check=False
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return {
-            "available": False,
-            "manufacturer": "",
-            "model": "",
-            "hypervisor_present": None,
-            "virtualization_based_security_status": None,
-            "error": str(exc),
-        }
-    if completed.returncode != 0:
-        return {
-            "available": False,
-            "manufacturer": "",
-            "model": "",
-            "hypervisor_present": None,
-            "virtualization_based_security_status": None,
-            "error": completed.stderr.strip() or completed.stdout.strip(),
-        }
-    try:
-        value = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        return {
-            "available": False,
-            "manufacturer": "",
-            "model": "",
-            "hypervisor_present": None,
-            "virtualization_based_security_status": None,
-            "error": str(exc),
-        }
-    raw_vbs_status = value.get("VirtualizationBasedSecurityStatus")
-    try:
-        vbs_status = int(raw_vbs_status) if raw_vbs_status is not None else None
-    except (TypeError, ValueError):
-        vbs_status = None
-    raw_hypervisor_present = value.get("HypervisorPresent")
-    hypervisor_present = (
-        raw_hypervisor_present
-        if isinstance(raw_hypervisor_present, bool)
-        else None
-    )
-    return {
-        "available": True,
-        "manufacturer": str(value.get("Manufacturer") or ""),
-        "model": str(value.get("Model") or ""),
-        "product_vendor": str(value.get("ProductVendor", "") or ""),
-        "product_name": str(value.get("ProductName", "") or ""),
-        "bios_manufacturer": str(value.get("BiosManufacturer", "") or ""),
-        "bios_version": str(value.get("BiosVersion", "") or ""),
-        "baseboard_manufacturer": str(
-            value.get("BaseBoardManufacturer", "") or ""
-        ),
-        "baseboard_product": str(value.get("BaseBoardProduct", "") or ""),
-        "hypervisor_present": hypervisor_present,
-        "virtualization_based_security_status": vbs_status,
-        "error": "",
-    }
+    """Compatibility wrapper around the shared physical-host collector."""
+    return hardware_host.windows_virtualization_probe()
 
 
 def evaluate_physical_virtualization_probe(
     probe: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Evaluate one Windows physical-host probe with a single fail-closed policy."""
-    if not isinstance(probe, Mapping):
-        return {
-            "valid": False,
-            "available": False,
-            "hypervisor_measured": False,
-            "virtualization_indicators": [],
-            "generic_identity": False,
-            "identity_complete": False,
-            "hypervisor_explained_by_vbs": False,
-            "reasons": ["virtualization probe is absent"],
-        }
-    identity_fields = (
-        "manufacturer",
-        "model",
-        "product_vendor",
-        "product_name",
-        "bios_manufacturer",
-        "bios_version",
-        "baseboard_manufacturer",
-        "baseboard_product",
-    )
-    identity_text = " ".join(
-        str(probe.get(field, "") or "") for field in identity_fields
-    ).lower()
-    vm_markers = (
-        "virtual machine",
-        "vmware",
-        "virtualbox",
-        "kvm",
-        "qemu",
-        "xen",
-        "parallels",
-        "bochs",
-        "openstack",
-        "hyper-v",
-        "innotek",
-        "bhyve",
-        "cloud hypervisor",
-        "amazon ec2",
-        "google compute engine",
-        "digitalocean",
-    )
-    indicators = sorted(marker for marker in vm_markers if marker in identity_text)
-    physical_identity_fields = (
-        probe.get("manufacturer"),
-        probe.get("model"),
-        probe.get("product_vendor"),
-        probe.get("product_name"),
-        probe.get("bios_manufacturer"),
-        probe.get("baseboard_manufacturer"),
-    )
-    identity_complete = all(
-        bool(str(value or "").strip()) for value in physical_identity_fields
-    )
-    generic_product_markers = (
-        "to be filled by o.e.m.",
-        "system product name",
-        "default string",
-        "not specified",
-        "not available",
-        "oem",
-    )
-    product_text = " ".join(
-        str(probe.get(field, "") or "")
-        for field in ("product_name", "baseboard_product", "bios_version")
-    ).lower()
-    generic_identity = any(
-        marker == product_text.strip() or marker in product_text
-        for marker in generic_product_markers
-    )
-    hypervisor_present = probe.get("hypervisor_present")
-    hypervisor_measured = isinstance(hypervisor_present, bool)
-    vbs_status = probe.get("virtualization_based_security_status")
-    explained_vbs = (
-        hypervisor_present is True
-        and vbs_status == 2
-        and not indicators
-        and identity_complete
-        and not generic_identity
-    )
-    available = probe.get("available") is True
-    valid = (
-        available
-        and hypervisor_measured
-        and bool(str(probe.get("manufacturer") or "").strip())
-        and bool(str(probe.get("model") or "").strip())
-        and not indicators
-        and not generic_identity
-        and (hypervisor_present is False or explained_vbs)
-    )
-    reasons: list[str] = []
-    if not available:
-        reasons.append("virtualization probe is unavailable")
-    if not hypervisor_measured:
-        reasons.append("hypervisor status was not measured")
-    if not str(probe.get("manufacturer") or "").strip() or not str(
-        probe.get("model") or ""
-    ).strip():
-        reasons.append("manufacturer/model identity is incomplete")
-    if indicators:
-        reasons.append("VM markers: " + ", ".join(indicators))
-    if generic_identity:
-        reasons.append("generic physical product identity")
-    if hypervisor_present is True and not explained_vbs:
-        reasons.append("active hypervisor is not independently explained by VBS")
-    return {
-        "valid": valid,
-        "available": available,
-        "hypervisor_measured": hypervisor_measured,
-        "virtualization_indicators": indicators,
-        "generic_identity": generic_identity,
-        "identity_complete": identity_complete,
-        "hypervisor_explained_by_vbs": explained_vbs,
-        "reasons": reasons,
-    }
+    """Compatibility wrapper around the shared NW-07/NW-10 host policy."""
+    return hardware_host.evaluate_physical_virtualization_probe(probe)
 
 
 def clean_host_provenance(

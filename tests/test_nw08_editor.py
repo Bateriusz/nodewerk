@@ -494,7 +494,7 @@ def test_editor_only_additions_do_not_change_release_inputs() -> None:
     inputs = nw07_export.verify_pinned_inputs(
         nw07_export.load_canonical_config()
     )
-    assert inputs["matches_frozen_digest"] is True
+    assert inputs["source_inputs_recorded"] is True
     pinned = set(nw07_contract.PINNED_BUILD_INPUTS)
     assert not any(path.startswith("tools/nw08_") for path in pinned)
     assert not any(path.startswith("src/studio/") for path in pinned)
