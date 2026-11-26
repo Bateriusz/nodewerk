@@ -39,6 +39,7 @@ struct PlayerConfig {
     bool create_window = true;
     bool visible_window = true;
     bool borderless_window = false;
+    bool maximized_window = false;
     bool enable_validation = false;
     bool headless = false;
     // Diagnostic/CI only: allow the Microsoft Basic Render Driver (WARP)
