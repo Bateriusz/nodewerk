@@ -70,9 +70,9 @@ def _require_int(value: Any, label: str) -> int:
 
 
 def _production_format_value(query_id: str, observation: Mapping[str, Any]) -> str | None:
-    # D3D12_FORMAT_SUPPORT1 and SUPPORT2 flags used by the frozen PackagePlayer.
+    # D3D12_FORMAT_SUPPORT1/2 requirements for shared production loads and typed stores.
     buffer, index, texture2d, target, depth = 0x1, 0x4, 0x20, 0x4000, 0x10000
-    shader_resource = 0x100 | 0x200 | 0x800000  # SHADER_LOAD, SHADER_SAMPLE, SHADER_GATHER
+    shader_resource = 0x100  # SHADER_LOAD (sampling/gather alone is insufficient)
     typed_uav, typed_store = 0x2000000, 0x80
     required, srv, uav = {
         "DXGI_FORMAT_R8G8B8A8_UNORM": (texture2d | target, True, True),
@@ -95,7 +95,7 @@ def _production_format_value(query_id: str, observation: Mapping[str, Any]) -> s
         raise CapabilityProfileError(f"{query_id} support masks are out of range")
     supported = ((support1 & required) == required
                  and (not srv or support1 & shader_resource)
-                 and (not uav or support1 & typed_uav or support2 & typed_store))
+                 and (not uav or ((support1 & typed_uav) and (support2 & typed_store))))
     return "production_usage_supported" if supported else "unsupported"
 
 
