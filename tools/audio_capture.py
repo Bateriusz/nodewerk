@@ -8,6 +8,7 @@ import json
 import subprocess
 import struct
 from audio_song import decode_song
+from audio_physical_validation import evidence_reference, load_verified_evidence
 import nwp_package
 import tempfile
 from pathlib import Path
@@ -102,11 +103,19 @@ def capture(offline: Path, host: Path, package: Path, song: Path,
         if any(sha256(value) != inputs[key] for key, value in
                (("package", package), ("song", song), ("host", host), ("offline", offline))):
             raise ValueError("capture inputs changed during execution")
+        # Offline capture proves deterministic PCM/frame payloads on the same
+        # absolute ticks. It never claims to have observed a displayed frame.
+        physical = evidence_reference(
+            "offline capture is not a real WASAPI/display observation",
+            verified=load_verified_evidence(
+                package_bytes=package.read_bytes(), song_bytes=payload
+            ),
+        )
         report = {"format": "nodewerk-offline-audio-video", "version": 1,
                   "inputs_sha256": inputs, "width": width, "height": height,
                   "frame_rate": 60, "sample_rate": 48000,
                   "audio_sha256": sha256(pcm), "frame_plan_sha256": sha256(plan),
-                  "images": frames, "physical_alignment": "not_measured"}
+                  "images": frames, "physical_alignment": physical}
         (root / "capture.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n",
                                           encoding="utf-8")
         root.rename(output)

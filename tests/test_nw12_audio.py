@@ -231,9 +231,331 @@ def test_coupled_capture_protocol(native_tools, tmp_path, monkeypatch, test_dxc)
     report = audio_capture.capture(native_tools / "offline", host, package, song,
                                    tmp_path / "capture", width=1, height=1)
     assert len(report["images"]) == 240
-    assert report["physical_alignment"] == "not_measured"
+    physical = report["physical_alignment"]
+    assert physical["status"] == "unavailable"
+    assert physical["evidence_record"] == "benchmarks/nw12/audio-physical-evidence.v1.json"
+    assert physical["required_observation"]
     song.write_bytes(compile_song({**fixture(), "duration_ticks": 192001}))
     with pytest.raises(ValueError, match="does not match"):
         audio_capture.capture(native_tools / "offline", host, package, song,
                               tmp_path / "invalid", width=1, height=1)
     assert not (tmp_path / "invalid").exists()
+
+
+def test_nw06_optional_profile_export_keeps_audio_injection_after_compile(
+    tmp_path, test_dxc,
+):
+    # Regression: the NW-06 specialized path must not reference the caller's
+    # audio payload. export_graph injects AUDI after _compile_profile_package,
+    # so every optional profile must still export without a NameError.
+    import nw05_export as export
+    import nwp_package as nwp
+    settings = export.ExportSettings(
+        byte_ceiling=64 * 1024 * 1024,
+        memory_budget=256 * 1024 * 1024,
+        optional_profiles=(nwp.OPTIONAL_PROFILE_WAVE_OPS,),
+        allow_optional_profiles=True,
+    )
+    result = export.export_graph(
+        ROOT / "fixtures/nw06/procedural_scene.nwgraph",
+        tmp_path / "export",
+        allow_test_payloads=True,
+        dxc_executable=test_dxc,
+        settings=settings,
+    )
+    assert set(result.artifacts) == {
+        nwp.COMMON_PROFILE_ID,
+        nwp.OPTIONAL_PROFILE_WAVE_OPS,
+    }
+    optional = result.artifacts[nwp.OPTIONAL_PROFILE_WAVE_OPS]
+    assert optional.package.capability.optional_profile_id == nwp.OPTIONAL_PROFILE_WAVE_OPS
+    assert optional.package.audio_song is None
+    assert "AUDI" not in export.section_sizes(optional.package_bytes)
+
+
+def test_stateful_audio_export_embeds_payload_and_manifest(tmp_path, test_dxc):
+    # Regression: stateful NW-09 content with an audio song must embed AUDI in
+    # the package (minor 2 with HIST+CKPT+audio), not only advertise it in the
+    # manifest. Otherwise the generated WASAPI player rejects its own package.
+    import nw05_export as export
+    import nwp_package as nwp
+    from audio_song import decode_song
+    song = compile_song(fixture())
+    result = export.export_graph(
+        ROOT / "fixtures/nw09/feedback_rect.nwgraph",
+        tmp_path / "export",
+        allow_test_payloads=True,
+        dxc_executable=test_dxc,
+        settings=export.ExportSettings(
+            byte_ceiling=64 * 1024 * 1024,
+            memory_budget=256 * 1024 * 1024,
+            audio_song_path=str(ROOT / "fixtures/audio/sync_song.json"),
+        ),
+    )
+    artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
+    decoded = nwp.decode_package(artifact.package_bytes)
+    assert decoded.history
+    assert decoded.version_minor == 2
+    assert decoded.audio_song == song
+    assert decode_song(decoded.audio_song) == fixture()
+    assert "AUDI" in export.section_sizes(artifact.package_bytes)
+    assert artifact.manifest["audio"]["song_sha256"] == __import__("hashlib").sha256(
+        song
+    ).hexdigest()
+    assert artifact.size_report["audio"]["song_payload_bytes"] == len(song)
+    assert artifact.size_report["stateful"]["package_minor"] == 2
+    assert artifact.manifest["stateful_extension"]["package_minor"] == 2
+    assert nwp.encode_package(decoded) == artifact.package_bytes
+    source = export.generate_player_source(
+        package_sha256="0" * 64,
+        manifest_sha256="sha256:v1:" + "0" * 64,
+        manifest=artifact.manifest,
+    )
+    assert "WasapiOutput" in source
+    assert "player.package().audio_song" in source
+
+
+def _audio_package_bytes():
+    from dataclasses import replace
+    import nwp_package as nwp
+    song = compile_song(fixture())
+    base = nwp.decode_package(
+        (ROOT / "fixtures/nw04/compute_display.nwp").read_bytes()
+    )
+    package = replace(
+        base, audio_song=song, flags=base.flags | nwp.AUDIO_EXTENSION_FLAG
+    )
+    return nwp.encode_package(package), song
+
+
+def _observation(deltas=(0, 0, 800, -800)):
+    events = fixture()["events"]
+    return {
+        "format": "nodewerk-audio-display-observation",
+        "version": 1,
+        "sample_rate": 48000,
+        "capture": {
+            "audio_sha256": "0" * 64,
+            "video_sha256": "1" * 64,
+            "duration_ticks": 192000,
+            "protocol": "single external A/V capture of the same desktop run",
+        },
+        "impulses": [
+            {"audio_tick": event["tick"], "display_tick": event["tick"] + delta}
+            for event, delta in zip(events, deltas)
+        ],
+    }
+
+
+def test_alignment_is_bounded_by_one_displayed_frame():
+    from audio_physical_validation import evaluate_alignment
+    song = fixture()
+    within = evaluate_alignment(_observation(), song, 60)
+    assert within["max_abs_delta_ticks"] == 800
+    assert within["within_one_displayed_frame"] is True
+    assert evaluate_alignment(_observation((0, 0, 0, 0)), song, 60)[
+        "max_abs_delta_ticks"
+    ] == 0
+    # 120 Hz shortens the displayed-frame tolerance to 400 ticks.
+    assert evaluate_alignment(_observation(), song, 120)[
+        "within_one_displayed_frame"
+    ] is False
+    with pytest.raises(ValueError, match="one impulse per song event"):
+        evaluate_alignment({**_observation(), "impulses": []}, song)
+    bad = _observation()
+    bad["impulses"][0]["audio_tick"] = 1
+    with pytest.raises(ValueError, match="does not match song onset"):
+        evaluate_alignment(bad, song)
+
+
+def test_player_telemetry_never_invents_unavailable_cpu():
+    from audio_physical_validation import parse_player_telemetry
+    available = parse_player_telemetry(
+        "AUDIO_SYNTHESIS_CPU_100NS=700\n"
+        "AUDIO_SYNTHESIS_CPU_AVAILABLE=1\n"
+        "AUDIO_WORKER_CPU_100NS=900\n"
+        "AUDIO_WORKER_CPU_AVAILABLE=1\n"
+        "AUDIO_OBSERVED_UNDERRUNS=0\n"
+        "AUDIO_MISSING_SAMPLES_LOWER_BOUND=0\n"
+        "AUDIO_CLOCK_DISCONTINUITIES=0\n"
+        "AUDIO_STARVATION_OBSERVATIONS=3\n"
+        "AUDIO_PHYSICAL_UNDERRUNS=unavailable\n"
+    )
+    assert available["synthesis_cpu_100ns"] == 700
+    assert available["worker_cpu_100ns"] == 900
+    assert available["observed_underruns"] == 0
+    assert available["physical_underruns"] == "unavailable"
+    unavailable = parse_player_telemetry(
+        "AUDIO_SYNTHESIS_CPU_AVAILABLE=0\n"
+        "AUDIO_WORKER_CPU_AVAILABLE=0\n"
+    )
+    assert unavailable["synthesis_cpu_100ns"] is None
+    assert unavailable["worker_cpu_100ns"] is None
+    assert unavailable["synthesis_cpu_available"] is False
+
+
+def test_physical_evidence_stays_pending_without_real_observation():
+    from audio_physical_validation import build_evidence, verify_evidence
+    package_bytes, song = _audio_package_bytes()
+    evidence = build_evidence(
+        package_bytes=package_bytes,
+        song_bytes=song,
+        source_head_sha="0" * 40,
+        executable_bytes=b"player",
+        telemetry_text=(
+            "AUDIO_SYNTHESIS_CPU_100NS=700\nAUDIO_SYNTHESIS_CPU_AVAILABLE=1\n"
+            "AUDIO_WORKER_CPU_100NS=900\nAUDIO_WORKER_CPU_AVAILABLE=1\n"
+            "AUDIO_OBSERVED_UNDERRUNS=1\nAUDIO_MISSING_SAMPLES_LOWER_BOUND=480\n"
+            "AUDIO_CLOCK_DISCONTINUITIES=0\nAUDIO_STARVATION_OBSERVATIONS=0\n"
+        ),
+        environment={"status": "unavailable", "reason": "no Windows endpoint"},
+    )
+    assert evidence["verification_status"] == "pending_physical"
+    assert evidence["source_head_sha"] is None
+    assert evidence["satisfies_completion"] is False
+    fields = {item["field"] for item in evidence["unavailable"]}
+    assert {"environment", "alignment"} <= fields
+    verify_evidence(evidence, package_bytes=package_bytes, song_bytes=song)
+    with pytest.raises(ValueError, match="package bytes"):
+        verify_evidence(evidence, package_bytes=b"other")
+
+
+def test_physical_evidence_verified_requires_all_observations():
+    from audio_physical_validation import build_evidence, verify_evidence
+    package_bytes, song = _audio_package_bytes()
+    environment = {
+        "status": "available",
+        "reason": "",
+        "os": {"caption": "Microsoft Windows 11 Pro", "version": "10.0.26200",
+               "build": "26200"},
+        "audio_endpoint": [{"name": "Speakers", "status": "OK", "device_id": "x"}],
+        "display": [{"name": "Display", "driver_version": "1", "width": 1920,
+                     "height": 1080, "refresh_hz": 60}],
+    }
+    telemetry = (
+        "AUDIO_SYNTHESIS_CPU_100NS=700\nAUDIO_SYNTHESIS_CPU_AVAILABLE=1\n"
+        "AUDIO_WORKER_CPU_100NS=900\nAUDIO_WORKER_CPU_AVAILABLE=1\n"
+        "AUDIO_OBSERVED_UNDERRUNS=0\nAUDIO_MISSING_SAMPLES_LOWER_BOUND=0\n"
+        "AUDIO_CLOCK_DISCONTINUITIES=0\nAUDIO_STARVATION_OBSERVATIONS=0\n"
+    )
+    evidence = build_evidence(
+        package_bytes=package_bytes, song_bytes=song, source_head_sha="0" * 40,
+        executable_bytes=b"player", telemetry_text=telemetry,
+        observation=_observation(), environment=environment,
+    )
+    assert evidence["verification_status"] == "verified_physical"
+    assert evidence["alignment"]["within_one_displayed_frame"] is True
+    assert evidence["unavailable"] == []
+    assert {item["field"] for item in evidence["unavailable_telemetry"]} == {
+        "measurements.physical_underruns"
+    }
+    verify_evidence(evidence, package_bytes=package_bytes, song_bytes=song)
+    # A forged verified record without the required observations must fail.
+    forged = dict(evidence)
+    forged["verification_status"] = "verified_physical"
+    forged["source_head_sha"] = "0" * 40
+    forged["satisfies_completion"] = True
+    forged["unavailable"] = [
+        {"field": "alignment", "reason": "missing"}
+    ]
+    with pytest.raises(ValueError, match="unavailable"):
+        verify_evidence(forged)
+    pending_without_reasons = dict(evidence)
+    pending_without_reasons["verification_status"] = "pending_physical"
+    pending_without_reasons["source_head_sha"] = None
+    pending_without_reasons["satisfies_completion"] = False
+    pending_without_reasons["unavailable"] = []
+    with pytest.raises(ValueError, match="must list unavailable"):
+        verify_evidence(pending_without_reasons)
+
+
+def test_published_physical_evidence_binds_base_and_stays_honest():
+    import audio_physical_validation as physical
+    record = json.loads(
+        (ROOT / "benchmarks/nw12/audio-physical-evidence.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    physical.verify_evidence(record)
+    assert record["implementation_base"] == "8ade0b74c78113c18c977afbde0f3e2b98c4fcf2"
+    assert record["nw11_incorporated"] is True
+    provenance = record["provenance"]
+    assert provenance["implementation_base"] == record["implementation_base"]
+    assert provenance["nw11_merge_revision"] == record["implementation_base"]
+    assert provenance["nw11_incorporated"] is True
+    for path, digest in provenance["build_inputs"].items():
+        assert __import__("hashlib").sha256(
+            (ROOT / path).read_bytes()
+        ).hexdigest() == digest
+    if record["verification_status"] != "verified_physical":
+        # A pending aggregate record must say exactly what is missing and must
+        # never present invented CPU/underrun/alignment values.
+        assert record["source_head_sha"] is None
+        assert record["satisfies_completion"] is False
+        assert record["unavailable"]
+        assert record["measurements"] == {}
+        assert record["alignment"] is None
+        assert {item["field"] for item in record["unavailable_telemetry"]} >= {
+            "measurements.physical_underruns"
+        }
+    from schema_validator import validate_file_against_schema
+    validate_file_against_schema(
+        ROOT / "benchmarks/nw12/audio-physical-evidence.v1.json",
+        ROOT / "schemas/nw12-audio-physical-evidence.schema.json",
+    )
+
+
+def test_recorded_implementation_base_includes_nw11():
+    import subprocess
+    record = json.loads(
+        (ROOT / "benchmarks/nw12/audio-physical-evidence.v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    base = record["implementation_base"]
+    assert subprocess.run(
+        ["git", "merge-base", "--is-ancestor", base, "HEAD"], cwd=ROOT
+    ).returncode == 0
+    assert subprocess.check_output(
+        ["git", "rev-parse", f"{base}^{{tree}}"], cwd=ROOT, text=True
+    ).strip() == record["provenance"]["implementation_base_tree"]
+    message = subprocess.check_output(
+        ["git", "log", "-1", "--format=%s", base], cwd=ROOT, text=True
+    )
+    assert "NW-11" in message
+
+
+def test_verified_physical_evidence_merges_only_for_matching_artifact(tmp_path, monkeypatch):
+    import audio_physical_validation as physical
+    package_bytes, song = _audio_package_bytes()
+    environment = {
+        "status": "available", "reason": "",
+        "os": {"caption": "Microsoft Windows 11 Pro", "version": "10.0.26200",
+               "build": "26200"},
+        "audio_endpoint": [{"name": "Speakers", "status": "OK", "device_id": "x"}],
+        "display": [{"name": "Display", "driver_version": "1", "width": 1920,
+                     "height": 1080, "refresh_hz": 60}],
+    }
+    evidence = physical.build_evidence(
+        package_bytes=package_bytes, song_bytes=song, source_head_sha="0" * 40,
+        executable_bytes=b"player",
+        telemetry_text=(
+            "AUDIO_SYNTHESIS_CPU_100NS=700\nAUDIO_SYNTHESIS_CPU_AVAILABLE=1\n"
+            "AUDIO_WORKER_CPU_100NS=900\nAUDIO_WORKER_CPU_AVAILABLE=1\n"
+            "AUDIO_OBSERVED_UNDERRUNS=0\nAUDIO_MISSING_SAMPLES_LOWER_BOUND=0\n"
+            "AUDIO_CLOCK_DISCONTINUITIES=0\nAUDIO_STARVATION_OBSERVATIONS=0\n"
+        ),
+        observation=_observation(), environment=environment,
+    )
+    path = tmp_path / "verified.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+    monkeypatch.setenv("NW12_PHYSICAL_EVIDENCE", str(path))
+    assert physical.load_verified_evidence(
+        package_bytes=package_bytes, song_bytes=song
+    ) is not None
+    with pytest.raises(ValueError, match="package bytes"):
+        physical.load_verified_evidence(package_bytes=b"other", song_bytes=song)
+    pending = json.loads((ROOT / "benchmarks/nw12/audio-physical-evidence.v1.json")
+                         .read_text(encoding="utf-8"))
+    path.write_text(json.dumps(pending), encoding="utf-8")
+    assert physical.load_verified_evidence() is None

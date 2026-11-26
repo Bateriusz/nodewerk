@@ -54,3 +54,46 @@ WASAPI output PE costs, preserving signed linker/alignment effects. The JSON rep
 is published with the existing runtime-smoke build inputs. The exact physical
 impulse/flash alignment, audio CPU and underrun evidence remain separate hardware-
 neutral acceptance observations, not hosted CI obligations.
+
+## Physical impulse/flash and audio telemetry evidence
+
+The real display/audio observation is recorded, not inferred, by
+`tools/audio_physical_validation.py`. It runs only on a Windows 11 desktop
+session with a real WASAPI endpoint and binds the observation to:
+
+- the exact `common.nwp` package and generated player SHA-256;
+- the exact NWAS song SHA-256 and duration;
+- the queried Windows build, active audio endpoint, and display adapter/refresh;
+- the protocol (48 kHz timebase, 60 fps fixture, one-frame tolerance
+  `48000 / refresh_hz` ticks) and the same-run `AUDIO_*` telemetry.
+
+The operator records one A/V capture containing each audible impulse and its
+displayed flash onset, then runs:
+
+```sh
+python tools/audio_physical_validation.py record \
+  --player build/audio/nw_common_d3d12_fl12_0_sm6_0_v1.exe \
+  --package build/audio/nw_common_d3d12_fl12_0_sm6_0_v1.nwp \
+  --song song.nwas --observation capture.json --output evidence.json
+```
+
+`capture.json` is a `nodewerk-audio-display-observation` v1 document with one
+`{audio_tick, display_tick}` impulse per song event and the capture file hashes.
+The harness computes the absolute delta, requires it within one displayed frame,
+and records synthesis/worker CPU (`GetThreadTimes`, 100 ns), starvation
+observations, observed underruns, the missing-sample lower bound, underrun rate,
+and clock discontinuities from that exact run. Exact audible glitch counts have
+no OS source; they stay `unavailable` rather than being inferred from stream
+coordinates.
+
+A record only becomes `verified_physical` when the environment, observation and
+required telemetry are all present; otherwise it stays `pending_physical` with
+explicit `unavailable` reasons. `tools/audio_export_validation.py` and
+`tools/audio_capture.py` never fabricate this result: they report a structured
+unavailable reference to the evidence record and merge a verified record only
+when `NW12_PHYSICAL_EVIDENCE` names one that matches the exported package and
+song. The aggregate status lives in
+[`benchmarks/nw12/audio-physical-evidence.v1.json`](../benchmarks/nw12/audio-physical-evidence.v1.json)
+and is validated by `schemas/nw12-audio-physical-evidence.schema.json`.
+Hosted CI exercises the deterministic binding/alignment logic only and does not
+require an audio endpoint, real windowed Present, or GPU qualification.

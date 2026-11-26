@@ -1,0 +1,107 @@
+{
+  "format": "nodewerk-nw12-audio-physical-evidence",
+  "version": 1,
+  "task": "NW-12",
+  "implementation_base": "8ade0b74c78113c18c977afbde0f3e2b98c4fcf2",
+  "nw11_incorporated": true,
+  "provenance": {
+    "main_ref_revision": "1dd21eb48b85921807e9b418fecba84010bbd95d",
+    "implementation_base": "8ade0b74c78113c18c977afbde0f3e2b98c4fcf2",
+    "implementation_base_tree": "6bf077705a406e2e1cea83cf27723b0c51c5ed9d",
+    "nw11_merge_revision": "8ade0b74c78113c18c977afbde0f3e2b98c4fcf2",
+    "nw11_incorporated": true,
+    "build_inputs": {
+      "CMakeLists.txt": "cf9f2e29995d94d004120da299ab2d9a41346087dae61ebbe24d23f172488bf7",
+      "CMakePresets.json": "739675ece10175933506cab88c1bd1e1458e0df24f6819af6b05fbfcf79bb43f",
+      "benchmarks/toolchain-manifest.v1.json": "db69fcc46d6c2ac4003cfff52c37e7c9b6fdbbe7762c0615d2b69dcfa4e449e3",
+      "cmake/DependencyCheck.cmake": "09b6bf55569b3947230bfedcf2a462cfc0f811fcad5d5e96c3bfa9650d55f5e3"
+    }
+  },
+  "source_head_sha": null,
+  "verification_status": "pending_physical",
+  "physical_evidence": "pending",
+  "contract_evidence": "verified_by_pytest",
+  "satisfies_completion": false,
+  "artifact": {
+    "package_sha256": null,
+    "executable_sha256": null,
+    "song_sha256": "8b80901697b512162563f45c3701813046730ff5b4c929299a6fd02fad684835",
+    "song_bytes": 100,
+    "duration_ticks": 192000
+  },
+  "environment": {
+    "status": "unavailable",
+    "reason": "No Windows 11 desktop WASAPI endpoint and display session was attached while recording this repository revision; hosted CI is explicitly headless.",
+    "os": null,
+    "audio_endpoint": null,
+    "display": null
+  },
+  "required_environment": {
+    "platform": "Windows 11 x64 desktop session on the ordinary validation host",
+    "audio": "real WASAPI render endpoint queried and active during playback",
+    "display": "real windowed Present at the recorded refresh rate (60 Hz fixture tolerance)",
+    "gpu": "no audio-specific GPU predicate; existing common-renderer representative coverage only"
+  },
+  "protocol": {
+    "tool": "tools/audio_physical_validation.py",
+    "graph": "fixtures/audio/sync_flash.nwgraph",
+    "song": "fixtures/audio/sync_song.json",
+    "sample_rate": 48000,
+    "clock": "wasapi_endpoint",
+    "display_frame_rate": 60,
+    "alignment_definition": "abs(observed_flash_onset_display_tick - authoritative_impulse_onset_tick) <= 48000 / display_refresh_hz",
+    "measurement_steps": [
+      "export fixtures/audio/sync_flash.nwgraph with fixtures/audio/sync_song.json",
+      "launch the generated audio-enabled player on a Windows 11 desktop with a real WASAPI endpoint",
+      "record the displayed flash onsets and the audible impulse onsets with one A/V capture",
+      "record the player AUDIO_* telemetry from the same run",
+      "run `python tools/audio_physical_validation.py record` with the capture and telemetry"
+    ],
+    "telemetry_fields": [
+      "AUDIO_SYNTHESIS_CPU_100NS",
+      "AUDIO_SYNTHESIS_CPU_AVAILABLE",
+      "AUDIO_WORKER_CPU_100NS",
+      "AUDIO_WORKER_CPU_AVAILABLE",
+      "AUDIO_STARVATION_OBSERVATIONS",
+      "AUDIO_OBSERVED_UNDERRUNS",
+      "AUDIO_MISSING_SAMPLES_LOWER_BOUND",
+      "AUDIO_CLOCK_DISCONTINUITIES",
+      "AUDIO_PHYSICAL_UNDERRUNS"
+    ]
+  },
+  "measurements": {},
+  "alignment": null,
+  "unavailable": [
+    {
+      "field": "environment",
+      "reason": "No Windows 11 WASAPI/display environment is attached to this recording host."
+    },
+    {
+      "field": "alignment",
+      "reason": "No real displayed impulse/flash observation was supplied; offline and headless captures do not establish displayed alignment."
+    },
+    {
+      "field": "measurements.synthesis_cpu_100ns",
+      "reason": "No physical audio-enabled player run was observed, so GetThreadTimes synthesis CPU is not available."
+    },
+    {
+      "field": "measurements.worker_cpu_100ns",
+      "reason": "No physical audio-enabled player run was observed, so audio worker CPU is not available."
+    },
+    {
+      "field": "measurements.observed_underruns",
+      "reason": "No physical audio-enabled player run was observed, so underrun counts are not available."
+    },
+    {
+      "field": "measurements.clock_discontinuities",
+      "reason": "No physical audio-enabled player run was observed, so clock discontinuities are not available."
+    }
+  ],
+  "unavailable_telemetry": [
+    {
+      "field": "measurements.physical_underruns",
+      "reason": "Exact audible glitch telemetry has no OS source; observed stream-coordinate gaps remain a lower bound."
+    }
+  ],
+  "policy": "Physical WASAPI/display evidence binds only to the exact immutable artifact, song and source head recorded by tools/audio_physical_validation.py. Missing observations stay pending and never satisfy completion; offline, headless or simulated checks never establish displayed impulse/flash alignment or audio CPU/underrun behavior."
+}

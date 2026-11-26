@@ -12,6 +12,7 @@ import dependency_check
 import nwp_package as nwp
 import nw05_export as export
 from nw10_pe_ledger import pe_summary, section_deltas
+from audio_physical_validation import evidence_reference, load_verified_evidence
 
 ROOT = Path(__file__).resolve().parents[1]
 GRAPH = ROOT / "fixtures/audio/sync_flash.nwgraph"
@@ -120,10 +121,52 @@ def validate(template: Path, dxc: str, root: Path) -> dict:
     }, sort_keys=True), encoding="utf-8")
     # Raw file-size deltas include alignment and optimizer interactions;
     # do not misrepresent these as additive per-symbol sizes.
+    # The physical WASAPI/display observation is deliberately not performed by
+    # this build-only Windows gate. Recorded CPU/underrun/alignment evidence is
+    # merged only when a verified physical record for this exact package/song is
+    # supplied through NW12_PHYSICAL_EVIDENCE; otherwise the gap is explicit.
+    source_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+    physical_run = None
+    if os.name == "nt" and os.environ.get("NW12_PHYSICAL_AUDIO_RUN") == "1":
+        # Opt-in desktop run: use the real WASAPI artifact and record its own
+        # telemetry. A display observation is still required for alignment.
+        from audio_physical_validation import (
+            build_evidence,
+            mark_player_result,
+            probe_environment,
+            provenance_snapshot,
+        )
+        observation = None
+        observation_path = os.environ.get("NW12_DISPLAY_OBSERVATION", "")
+        if observation_path:
+            observation = json.loads(
+                Path(observation_path).read_text(encoding="utf-8")
+            )
+        completed = subprocess.run(
+            [str(audio_exe)], capture_output=True, text=True, timeout=120
+        )
+        physical_run = build_evidence(
+            package_bytes=audio.package_bytes,
+            song_bytes=audio.package.audio_song,
+            source_head_sha=source_commit,
+            executable_bytes=audio_exe.read_bytes(),
+            telemetry_text=completed.stdout,
+            observation=observation,
+            environment=probe_environment(),
+            provenance=provenance_snapshot(),
+        )
+        mark_player_result(physical_run, completed.returncode)
+    physical = evidence_reference(
+        "physical WASAPI/display observation is not part of the Windows CI build gate",
+        verified=load_verified_evidence(
+            package_bytes=audio.package_bytes, song_bytes=SONG.read_bytes()
+        ),
+    ) if physical_run is None else physical_run
     return {
         "format": "nodewerk-audio-link-attribution", "version": 1,
-        "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"],
-                                                  cwd=ROOT, text=True).strip(),
+        "source_commit": source_commit,
         "independent_rebuilds": {"silent": True, "audio": True},
         "silent_closure": "verified_by_link_commands_package_and_pe_imports",
         "song_payload_bytes": song_bytes,
@@ -136,7 +179,7 @@ def validate(template: Path, dxc: str, root: Path) -> dict:
         "section_deltas_silent_to_synthesis": section_deltas(s, p),
         "section_deltas_synthesis_to_audio": section_deltas(p, a),
         "artifacts": {"silent": s, "audio": a, "nonshipping_synthesis_probe": p},
-        "physical_cpu_and_alignment": "pending_physical_measurement",
+        "physical_evidence": physical,
         "attribution_method": "matched marginal PE raw sizes including linker padding and optimizer effects",
     }
 
@@ -170,5 +213,13 @@ def validate_runtime(root: Path) -> dict:
             match = re.search(r"NW_PLAYER_IMAGE_FNV64=([0-9a-f]{16})", run.stdout)
             assert match and match.group(1) == expected, run.stdout + run.stderr
             observations.append({"tick": tick, "fnv64": match.group(1)})
+    physical = evidence_reference(
+        "headless image readback maps fixed ticks but cannot observe a displayed frame",
+        verified=load_verified_evidence(
+            package_bytes=package.read_bytes(), song_bytes=nwp.decode_package(
+                package.read_bytes()
+            ).audio_song,
+        ),
+    )
     return {"status": "verified_headless_image_mapping", "observations": observations,
-            "physical_alignment": "not_measured"}
+            "physical_alignment": physical}

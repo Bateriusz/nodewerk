@@ -2669,8 +2669,6 @@ def _compile_profile_package(
                 profile_fingerprint=capability.computed_profile_fingerprint(),
             )
             package = replace(package, capability=capability)
-            if audio_payload:
-                package = replace(package, audio_song=audio_payload, flags=package.flags | nwp.AUDIO_EXTENSION_FLAG)
             package_bytes = nwp.encode_package(package)
             valid, diagnostics = nwp.validate_package_bytes(package_bytes)
             if not valid:
@@ -3162,6 +3160,19 @@ def export_graph(
                 allow_unpinned_dxc=allow_unpinned_dxc,
                 cache_dir=str(cache_dir) if cache_dir is not None else None,
             )
+            # The stateful extension is orthogonal to the optional audio
+            # extension. Inject the compiled song before encoding so the
+            # embedded package (minor 2 with HIST/CKPT/AUDI) matches the
+            # manifest and the generated WASAPI playback path. Injecting
+            # after this block, as the stateless profile path does, would
+            # leave package.audio_song unset while the manifest advertises
+            # audio, and the generated player would reject its own package.
+            if audio_payload:
+                package = replace(
+                    package,
+                    audio_song=audio_payload,
+                    flags=package.flags | nwp.AUDIO_EXTENSION_FLAG,
+                )
             package_bytes = nwp.encode_package(package)
             valid, diagnostics = nwp.validate_package_bytes(package_bytes)
             if not valid:
@@ -3254,7 +3265,10 @@ def export_graph(
         manifest["format"] = "nw09-stateful-link-manifest"
         manifest["version"] = 1
         manifest["stateful_extension"] = {
-            "package_minor": nwp.VERSION_MINOR_STATEFUL,
+            # The stateful sections are present at section version 1, while the
+            # package header minor reflects the combined extensions (2 when the
+            # optional audio payload is also embedded).
+            "package_minor": package.version_minor,
             "sections": [nwp.SECTION_HISTORY]
             + (
                 [nwp.SECTION_CHECKPOINTS]

@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw12-audio-physical-evidence.schema.json",
+  "title": "Nodewerk NW-12 physical audio/display evidence",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "task",
+    "implementation_base",
+    "nw11_incorporated",
+    "source_head_sha",
+    "verification_status",
+    "physical_evidence",
+    "contract_evidence",
+    "satisfies_completion",
+    "artifact",
+    "environment",
+    "protocol",
+    "measurements",
+    "alignment",
+    "unavailable",
+    "unavailable_telemetry",
+    "policy"
+  ],
+  "properties": {
+    "format": { "const": "nodewerk-nw12-audio-physical-evidence" },
+    "version": { "const": 1 },
+    "task": { "const": "NW-12" },
+    "implementation_base": { "const": "8ade0b74c78113c18c977afbde0f3e2b98c4fcf2" },
+    "nw11_incorporated": { "const": true },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "main_ref_revision",
+        "implementation_base",
+        "implementation_base_tree",
+        "nw11_merge_revision",
+        "nw11_incorporated",
+        "build_inputs"
+      ],
+      "properties": {
+        "main_ref_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "implementation_base": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "implementation_base_tree": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "nw11_merge_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "nw11_incorporated": { "const": true },
+        "source_revision": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "source_tree": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "tracked_files_clean": { "type": ["boolean", "null"] },
+        "build_inputs": {
+          "type": "object",
+          "minProperties": 3,
+          "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "source_head_sha": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "verification_status": {
+      "enum": ["verified_physical", "pending_physical", "failed"]
+    },
+    "physical_evidence": { "enum": ["verified", "pending", "failed"] },
+    "contract_evidence": { "const": "verified_by_pytest" },
+    "satisfies_completion": { "type": "boolean" },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "package_sha256",
+        "executable_sha256",
+        "song_sha256",
+        "song_bytes",
+        "duration_ticks"
+      ],
+      "properties": {
+        "package_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "executable_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "song_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "song_bytes": { "type": "integer", "minimum": 20 },
+        "duration_ticks": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "environment": {
+      "type": "object",
+      "required": ["status", "reason", "os", "audio_endpoint", "display"],
+      "properties": {
+        "status": { "enum": ["available", "unavailable"] },
+        "reason": { "type": "string" },
+        "os": { "type": ["object", "null"] },
+        "audio_endpoint": { "type": ["array", "null"], "items": { "type": "object" } },
+        "display": { "type": ["array", "null"], "items": { "type": "object" } }
+      },
+      "additionalProperties": false
+    },
+    "required_environment": {
+      "type": "object",
+      "required": ["platform", "audio", "display", "gpu"],
+      "properties": {
+        "platform": { "type": "string", "minLength": 10 },
+        "audio": { "type": "string", "minLength": 10 },
+        "display": { "type": "string", "minLength": 10 },
+        "gpu": { "type": "string", "minLength": 10 }
+      },
+      "additionalProperties": false
+    },
+    "protocol": {
+      "type": "object",
+      "required": [
+        "tool",
+        "graph",
+        "song",
+        "sample_rate",
+        "clock",
+        "display_frame_rate",
+        "alignment_definition",
+        "measurement_steps",
+        "telemetry_fields"
+      ],
+      "properties": {
+        "tool": { "const": "tools/audio_physical_validation.py" },
+        "graph": { "const": "fixtures/audio/sync_flash.nwgraph" },
+        "song": { "const": "fixtures/audio/sync_song.json" },
+        "sample_rate": { "const": 48000 },
+        "clock": { "const": "wasapi_endpoint" },
+        "display_frame_rate": { "type": "integer", "minimum": 1, "maximum": 480 },
+        "alignment_definition": { "type": "string", "minLength": 20 },
+        "measurement_steps": {
+          "type": "array",
+          "minItems": 3,
+          "items": { "type": "string", "minLength": 10 }
+        },
+        "telemetry_fields": {
+          "type": "array",
+          "minItems": 5,
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "measurements": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["number", "integer", "string"],
+        "minimum": 0
+      }
+    },
+    "alignment": {
+      "type": ["object", "null"],
+      "properties": {
+        "display_refresh_hz": { "type": "integer", "minimum": 1 },
+        "tolerance_ticks": { "type": "number", "minimum": 0 },
+        "deltas_ticks": { "type": "array", "items": { "type": "integer" } },
+        "max_abs_delta_ticks": { "type": "integer", "minimum": 0 },
+        "within_one_displayed_frame": { "type": "boolean" },
+        "impulse_count": { "type": "integer", "minimum": 1 },
+        "capture": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "unavailable": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "reason"],
+        "properties": {
+          "field": { "type": "string", "minLength": 3 },
+          "reason": { "type": "string", "minLength": 5 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "unavailable_telemetry": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["field", "reason"],
+        "properties": {
+          "field": { "type": "string", "minLength": 3 },
+          "reason": { "type": "string", "minLength": 5 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "player_returncode": { "type": "integer" },
+    "policy": { "type": "string", "minLength": 40 }
+  },
+  "additionalProperties": false
+}

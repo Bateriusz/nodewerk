@@ -46,6 +46,8 @@
         "fixtures/**",
         "schemas/nw0[2-6]*",
         "schemas/nw09*",
+        "schemas/nw12*",
+        "benchmarks/nw12/**",
         "benchmarks/capability-manifest.v1.json",
         "tools/build_attestation.py",
         "tools/validation_*.py",
