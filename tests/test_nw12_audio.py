@@ -185,3 +185,43 @@ def test_editor_transport_uses_native_session_and_reconstructs_before_start():
     with pytest.raises(RuntimeSessionError):
         AuthoringRuntimeSession.audio_command(session, "audio-start 200")
     assert commands[-1] == "closed"
+
+def test_coupled_capture_protocol(native_tools, tmp_path, monkeypatch):
+    import audio_capture
+    import nw05_export as export
+    import nwp_package as nwp
+    song = tmp_path / "song.nwas"
+    song.write_bytes(compile_song(fixture()))
+    result = export.export_graph(
+        ROOT / "fixtures/audio/sync_flash.nwgraph", tmp_path / "export",
+        allow_test_payloads=True, settings=export.ExportSettings(
+            audio_song_path=str(ROOT / "fixtures/audio/sync_song.json"), byte_ceiling=64 * 1024 * 1024))
+    package = tmp_path / "export/common.nwp"
+    assert nwp.decode_package(package.read_bytes()).audio_song == song.read_bytes()
+    host = tmp_path / "host.exe"
+    host.write_bytes(b"controlled native protocol stand-in")
+    real_run = subprocess.run
+    def controlled_run(command, **kwargs):
+        if command[0] != str(host):
+            return real_run(command, **kwargs)
+        directory = Path(command[command.index("--capture-dir") + 1])
+        messages = [{"event": "ready", "package_sha256": audio_capture.sha256(package)}]
+        for line in kwargs["input"].splitlines():
+            if line == "quit":
+                messages.append({"event": "shutdown", "ok": True})
+            else:
+                tick = int(line.split()[1])
+                level = float(tick % 48000 < 2400)
+                (directory / f"tick_{tick}.rgba32f").write_bytes(struct.pack("<4f", level, level, level, 1))
+                messages.append({"event": "rendered", "ok": True, "tick": tick, "capture": True})
+        return subprocess.CompletedProcess(command, 0, stdout="\n".join(map(json.dumps, messages)))
+    monkeypatch.setattr(audio_capture.subprocess, "run", controlled_run)
+    report = audio_capture.capture(native_tools / "offline", host, package, song,
+                                   tmp_path / "capture", width=1, height=1)
+    assert len(report["images"]) == 240
+    assert report["physical_alignment"] == "not_measured"
+    song.write_bytes(compile_song({**fixture(), "duration_ticks": 192001}))
+    with pytest.raises(ValueError, match="does not match"):
+        audio_capture.capture(native_tools / "offline", host, package, song,
+                              tmp_path / "invalid", width=1, height=1)
+    assert not (tmp_path / "invalid").exists()

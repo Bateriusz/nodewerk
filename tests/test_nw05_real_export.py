@@ -347,3 +347,21 @@ def test_unused_nw06_runtime_is_absent_from_legacy_real_pe(
     assert nw05_export._pe_runtime_dependencies(legacy_pe) == (
         nw05_export._pe_runtime_dependencies(enabled_pe)
     )
+
+def test_nw12_real_audio_and_silent_export_closure(tmp_path):
+    # This file is explicitly executed by the mandatory Windows build-only
+    # CI step with NW05_REAL_PLAYER_TEMPLATE and the pinned DXC on PATH.
+    template_value = os.environ.get("NW05_REAL_PLAYER_TEMPLATE", "")
+    if os.name != "nt" or not template_value:
+        pytest.skip("real audio PE validation runs in Windows build gate")
+    from audio_export_validation import validate
+    dxc = shutil.which("dxc") or shutil.which("dxc.exe")
+    assert dxc
+    report = validate(Path(template_value), dxc, tmp_path / "audio-link")
+    output = os.environ.get("NW05_RUNTIME_BUNDLE_OUTPUT")
+    if output:
+        destination = Path(output) / "audio-closure.json"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n",
+                               encoding="utf-8")
+    assert report["independent_rebuilds"] == {"silent": True, "audio": True}

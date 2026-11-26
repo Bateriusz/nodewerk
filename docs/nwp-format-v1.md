@@ -321,3 +321,7 @@ Reproducing an archived demo requires the source graph, pinned DXC/toolchain
 identity, build report, development sidecar (source maps/reflection), and the
 recorded package hash. Release blobs alone are sufficient to execute, not to
 re-author.
+
+## Optional audio extension (1.2)
+
+Minor 2 and header flag 0x4 require exactly one `AUDI` directory record containing the canonical NWAS v1 synthesis/song payload. `HIST` and `CKPT` may coexist with audio when the stateful flag 0x2 is also set. Without audio, 1.0 and 1.1 retain their existing layout. The section encodes mono PCM16 procedural synthesis with an authoritative 48 kHz tick timeline; it declares a CPU/audio playback capability, not a GPU feature. The whole NWP checksum covers the section, and the export manifest binds its SHA-256 without duplicating song bytes. The reader rejects unsupported versions, incorrect counts, bounds and flag/section mismatches. Silent generated player builds disable the audio reader and synthesis/output linkage. Audio currently requires the full package reader, not the historical frozen specialization.

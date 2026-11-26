@@ -766,6 +766,16 @@ def _audio_playback_source(audio: Mapping[str, Any]) -> str:
     if (!song_bytes || song_bytes->size() != {int(audio["song_bytes"])}u ||
         nw::package::Sha256Hex(*song_bytes) != "{expected}" ||
         !nw::audio::DecodeSong(song_bytes->data(), song_bytes->size(), song)) return 70;
+#if NW_AUDIO_MEASURE_SYNTHESIS_ONLY
+    // Nonshipping attribution probe: retain the real decoder/synthesis path
+    // with the identical input, without linking the Windows output layer.
+    std::int16_t pcm[256]{{}};
+    if (!nw::audio::RenderPcm(song, {{}}, 0, pcm, 256)) return 70;
+    std::uint64_t checksum = 0;
+    for (const auto sample : pcm)
+        checksum = checksum * 1099511628211ULL + static_cast<std::uint16_t>(sample);
+    std::printf("AUDIO_SYNTHESIS_PROBE=%llu\\n", static_cast<unsigned long long>(checksum));
+#else
     nw::audio::WasapiOutput audio_output;
     if (!audio_output.start(song)) {{
         std::fprintf(stderr, "NW_AUDIO_INITIALIZATION_FAILED\\n");
@@ -792,6 +802,7 @@ def _audio_playback_source(audio: Mapping[str, Any]) -> str:
         static_cast<unsigned long long>(audio_output.missing_samples_lower_bound()),
         audio_output.synthesis_cpu_available() ? 1u : 0u);
     if (audio_output.failed()) return 81;
+#endif
 """
 
 
@@ -851,7 +862,9 @@ def generate_player_source(
             "timeline"
         )
     if manifest.get("audio"):
-        clock_includes = '#include "audio/wasapi_output.h"\n'
+        clock_includes = ('#include "audio/procedural_audio.h"\n'
+                          '#if !NW_AUDIO_MEASURE_SYNTHESIS_ONLY\n'
+                          '#include "audio/wasapi_output.h"\n#endif\n')
         playback_loop = _audio_playback_source(manifest["audio"])
     elif temporal_fixed_step:
         if ticks_per_second != 48_000:
@@ -1451,7 +1464,10 @@ def _build_specialized_player(
     *,
     build_root_override: Path | None = None,
     frozen_embedded_specialization: bool = False,
+    audio_measure_synthesis_only: bool = False,
 ) -> bytes:
+    if audio_measure_synthesis_only and not manifest.get("audio"):
+        raise ExportError("synthesis-only measurement requires audio manifest")
     if os.name != "nt":
         raise ExportError(
             "production specialized-player linking requires the pinned Windows build",
@@ -1496,6 +1512,7 @@ def _build_specialized_player(
             str(build_root),
             f"-DNW05_GENERATED_PLAYER_SOURCE:FILEPATH={source_path}",
             "-DNW_GENERATED_PLAYER_AUDIO:BOOL=" + ("ON" if manifest.get("audio") else "OFF"),
+            "-DNW_AUDIO_MEASURE_SYNTHESIS_ONLY:BOOL=" + ("ON" if audio_measure_synthesis_only else "OFF"),
             "-DNW05_FROZEN_EMBEDDED_SPECIALIZATION:BOOL="
             + ("ON" if frozen_embedded_specialization else "OFF"),
         ]
@@ -2641,7 +2658,7 @@ def _compile_profile_package(
             )
             package = replace(package, capability=capability)
             if audio_payload:
-                package = replace(package, audio_song=audio_payload)
+                package = replace(package, audio_song=audio_payload, flags=package.flags | nwp.AUDIO_EXTENSION_FLAG)
             package_bytes = nwp.encode_package(package)
             valid, diagnostics = nwp.validate_package_bytes(package_bytes)
             if not valid:
@@ -3595,7 +3612,7 @@ def export_graph(
             except nw03.CompilerError:
                 raise
             if audio_payload:
-                package = replace(package, audio_song=audio_payload)
+                package = replace(package, audio_song=audio_payload, flags=package.flags | nwp.AUDIO_EXTENSION_FLAG)
                 package_bytes = nwp.encode_package(package)
                 package_path.write_bytes(package_bytes)
             compile_reports[profile_id] = compile_report

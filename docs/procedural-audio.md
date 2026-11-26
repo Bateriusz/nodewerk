@@ -1,52 +1,53 @@
 # Optional procedural audio (NW-12)
 
-This is the initial audio implementation on the post-NW-11 shared architecture.
-It adds no audio code or link dependency to existing player targets. Enable it
-explicitly with `-DNW_BUILD_AUDIO=ON`. NWAS v1 is a bounded, little-endian song
-payload (20-byte header: magic, uint32 version, uint64 duration in 48 kHz ticks,
-uint32 event count; 20 bytes per event: uint64 tick, uint32 duration, uint32
-frequency in millihertz, uint32 gain). Maximum 64 events, one hour, sorted by
-absolute tick. It uses a deterministic integer triangle oscillator with bounded
-attack/release and saturating mono PCM16 mixing. No external synth or codec.
-It is a separate, versioned song payload recorded in the generated player link manifest (including its SHA-256), not a section of the existing NWP container.
+Audio is an explicit optional NWP 1.2 extension: the AUDI section carries the bounded
+NWAS v1 song (20-byte header, 20-byte events, max 64, duration at most one hour).
+See [the NWP specification](nwp-format-v1.md). A silent package retains its existing
+version and does not carry the section. Generated silent targets disable the audio
+reader and synthesis/output linkage. Audio exports currently use the full reader.
 
-Sample-to-tick is floor(sample * 48000 / rate); event-to-sample is
-ceil(tick * rate / 48000), using checked quotient/remainder arithmetic. Seeking
-restarts audio output and synthesizes directly at the absolute sample origin,
-without replaying previous events. WASAPI shared mode uses the endpoint clock's
-reported frequency, not submitted-buffer length. The worker owns COM and
-writes directly into endpoint-provided buffers; the renderer observes atomic
-tick snapshots. Initialization and runtime failures fail explicitly in the
-diagnostic player. Zero-padding observations are not asserted to be measured
-underruns; the physical endpoint test must establish actual behavior.
+The integer triangle oscillator produces mono PCM16 with bounded envelopes and
+saturating mixing. Tick/sample conversion is rational floor/ceil. WASAPI uses
+IAudioClock frequency and absolute position, not queued sample count. Endpoint
+zero-padding observations are not physical underruns. A clock position beyond the
+submitted frontier with an empty queue is an observed stream-coordinate gap:
+stop/reset/restart at the fresh absolute tick, preserving monotonic time, and report
+the gap count, missing-sample lower bound and discontinuity. Contradictory or
+backward clock observations fail explicitly. Exact audible glitch telemetry is
+unavailable; synthesis CPU time is reported in 100 ns units with availability.
 
-## Commands
+## Use
 
 ```sh
 python tools/audio_song.py fixtures/audio/sync_song.json song.nwas
-cmake -S . -B build/audio -DNW_BUILD_AUDIO=ON -DNW_ENFORCE_PINNED_TOOLCHAIN=OFF
-cmake --build build/audio --target nw_audio_contract nw_audio_offline
+python tools/nodewerkc.py export fixtures/audio/sync_flash.nwgraph --output build/audio-export --audio-song fixtures/audio/sync_song.json --player-template <configured-exe>
 ```
 
-Run the contract executable, then `nw_audio_offline song.nwas audio.wav frames.csv`
-(with the platform executable suffix/path). The CSV is the exact 60 fps frame/tick/sample schedule. For offline video use
-`python tools/audio_capture.py --offline <nw_audio_offline.exe> --host <nodewerk-studio-preview.exe> --package <scene.nwp> --song song.nwas --output <new-directory>`.
-It drives the existing headless Studio session, exports the raw RGBA32F image
-sequence and WAV with a SHA-256 manifest and refuses incomplete publication. The Linux hosted pytest suite compiles and exercises the native
-synthesis and offline writer, checks malformed inputs, and compares repeated
-WAV and CSV byte output.
+Use the generated executable for playback, or configure the root Windows build with
+NW_BUILD_AUDIO=ON and build nw_audio_player, nw_audio_contract and nw_audio_offline.
+The diagnostic player takes the exported common.nwp; it reads the embedded song.
+The offline writer takes song.nwas, audio.wav and frames.csv. The paired flash
+graph and song share absolute onset ticks. For offline video capture run
+`python tools/audio_capture.py --offline <nw_audio_offline.exe> --host <nodewerk-studio-preview.exe> --package <common.nwp> --song song.nwas --output <new-dir>`.
+The capture validates exact song identity, PCM length/header and frame plan, then
+captures RGBA32F images through the existing headless Studio host. It publishes
+only a complete bundle; the bundle does not certify real displayed alignment.
 
-On a Windows build configured with the normal pinned toolchain and
-`NW_BUILD_AUDIO=ON`, build `nw_audio_player` and run it with a compatible
-exported scene NWP and song NWAS. It uses the existing PackagePlayer renderer.
-The diagnostic program reports synthesis CPU time and clock discontinuities.
-The playback fixture is not an embedded production export. The shared production exporter also accepts `nodewerkc export ... --audio-song fixtures/audio/sync_song.json --player-template <configured-exe>`. The manifest records an explicit audio capability, the generated main embeds the bounded song and uses the endpoint clock, and only the audio-enabled generated target links WASAPI and synthesis. Silent export builds explicitly disable that target linkage. Real PE build and matched closure measurement are pending.
+Studio supports --audio-song in the gui/export CLI and a song field in Export
+Settings. Play/Stop and timeline scrubbing use the existing native package-host
+session. The worker reconstructs the target visual state before starting sound;
+the native host stops output before rewind/reload/device loss/exit. GUI preview
+cadence is not a physical alignment measurement.
 
-## Outstanding acceptance
+## Validation
 
-Interactive Studio playback/seek UI and native NWP section integration,
-final byte attribution and same-revision silent closure proof,
-and real impulse/flash display measurements remain open. The paired fixtures/audio/sync_flash.nwgraph and sync_song.json use white
-flashes and audio impulses at integer seconds. Studio's export CLI accepts
---audio-song. The image sequence and physical measurement must still be
-validated on Windows. No physical evidence is claimed.
+Linux pytest exercises the native synthesis and stream state machine, package
+roundtrip, fixture compile/oracle transitions, and controlled capture. The existing
+mandatory Windows real-export gate builds independent silent and audio-enabled
+PEs, validates link commands, sections/imports and native package decoding, and
+builds/runs the native contract without an audio endpoint or windowed Present.
+A nonshipping synthesis-only link probe measures marginal synthesis/reader and
+WASAPI output PE costs, preserving signed linker/alignment effects. The JSON report
+is published with the existing runtime-smoke build inputs. The exact physical
+impulse/flash alignment, audio CPU and underrun evidence remain separate hardware-
+neutral acceptance observations, not hosted CI obligations.
