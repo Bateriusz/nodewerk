@@ -23,6 +23,47 @@ import nw11_measurements as measurements
 import nw11_verify as verifier
 
 
+RENDERER_EXIT_NAMES = {
+    0: "Success",
+    3: "OptionalFeatureUnsupported",
+    10: "InvalidArguments",
+    11: "OsVersionUnsupported",
+    12: "WindowCreationFailed",
+    20: "DxgiFactoryCreationFailed",
+    21: "AdapterEnumerationFailed",
+    22: "D3D12DeviceCreationFailed",
+    23: "CapabilityBaselineUnmet",
+    24: "OptionalFeatureUnsupported",
+    25: "InboxRuntimeBlocker",
+    26: "DebugLayerUnavailable",
+    30: "CommandQueueCreationFailed",
+    31: "SwapChainCreationFailed",
+    32: "DescriptorHeapCreationFailed",
+    33: "ResourceAllocationFailed",
+    34: "CommandListRecordingFailed",
+    35: "PresentationFailed",
+    36: "PresentationOccluded",
+    40: "OfflineShaderPayloadInvalid",
+    41: "RootSignatureCreationFailed",
+    42: "PipelineStateCreationFailed",
+    50: "ExecutionFenceTimeout",
+    51: "DeviceRemoved",
+    52: "GpuSubmissionFailed",
+    60: "ComputeVerificationFailed",
+    61: "D3D12ValidationError",
+    70: "PackageValidationFailed",
+    80: "InvalidMeasurementContract",
+    81: "ArtifactIdentityUnavailable",
+    82: "EvidenceIoFailure",
+    83: "PresentationSourceGeometryMismatch",
+    84: "PresentationClientGeometryMismatch",
+    85: "PresentationWindowClosed",
+    86: "MeasurementUnavailable",
+    87: "CaptureValidationFailed",
+    89: "UnhandledHarnessFailure",
+}
+
+
 class ValidationError(RuntimeError):
     def __init__(self, message: str, code: int = 4):
         super().__init__(message)
@@ -149,7 +190,13 @@ def launch_renderer(root: Path, manifest: dict, settings: dict, decision: dict,
                     "before": before, "window": windows, "after": operating_sample(root),
                 })
             if timed_out or code != 0:
-                raise ValidationError(f"{role} {mode} exited {code}; see {folder / 'renderer.log'}")
+                name = "ProcessTimeout" if timed_out else RENDERER_EXIT_NAMES.get(
+                    code, "UnknownRendererExit"
+                )
+                raise ValidationError(
+                    f"{role} {mode} exited {code} ({name}); "
+                    f"see {folder / 'renderer.log'}"
+                )
     return launch
 
 
