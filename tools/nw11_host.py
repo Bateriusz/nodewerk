@@ -185,11 +185,9 @@ def _gpu_ceiling_power_limit(gpu: ET.Element) -> float:
         gpu.find("power_readings"),
     ]
     preferred_tags = (
-        "enforced_power_limit",
         "current_power_limit",
-        "requested_power_limit",
+        "enforced_power_limit",
         "power_limit",
-        "default_power_limit",
     )
     for container in containers:
         if container is None:
