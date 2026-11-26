@@ -349,6 +349,9 @@ def test_open_graph_failure_keeps_previous_application_open(
             return None
 
     window = object.__new__(StudioWindow)
+    # Headless fixture bypasses the real Tk constructor: initialize transport state.
+    window._audio_playing = False
+    window._audio_pending = None
     window.application = Application()
     window.dispatcher = Dispatcher()
     window.actions = Actions()

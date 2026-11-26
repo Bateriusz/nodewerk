@@ -117,7 +117,15 @@ def test_studio_export_parser_accepts_audio():
         ["export", "--output", "build/audio", "--audio-song", "song.json"])
     assert args.audio_song == "song.json"
 
-def test_package_audio_and_flash_compile(tmp_path):
+@pytest.fixture
+def test_dxc(tmp_path, monkeypatch):
+    # Use the established test-only DXIL producer and graph identity seam on
+    # portable CI. The real Windows export test must still use pinned DXC.
+    from test_nw05_export import _make_dxc
+    monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
+    return str(_make_dxc(tmp_path / "toolchain"))
+
+def test_package_audio_and_flash_compile(tmp_path, test_dxc):
     import nw05_export as export
     import nw03_compiler as compiler
     import nw03_oracle as oracle
@@ -135,7 +143,7 @@ def test_package_audio_and_flash_compile(tmp_path):
                                          float32=True)
             assert value[:3] == (expected,) * 3
     result = export.export_graph(
-        graph, tmp_path / "export", allow_test_payloads=True,
+        graph, tmp_path / "export", allow_test_payloads=True, dxc_executable=test_dxc,
         settings=export.ExportSettings(audio_song_path=str(ROOT / "fixtures/audio/sync_song.json"),
                                        byte_ceiling=64 * 1024 * 1024))
     artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
@@ -186,7 +194,7 @@ def test_editor_transport_uses_native_session_and_reconstructs_before_start():
         AuthoringRuntimeSession.audio_command(session, "audio-start 200")
     assert commands[-1] == "closed"
 
-def test_coupled_capture_protocol(native_tools, tmp_path, monkeypatch):
+def test_coupled_capture_protocol(native_tools, tmp_path, monkeypatch, test_dxc):
     import audio_capture
     import nw05_export as export
     import nwp_package as nwp
@@ -194,9 +202,10 @@ def test_coupled_capture_protocol(native_tools, tmp_path, monkeypatch):
     song.write_bytes(compile_song(fixture()))
     result = export.export_graph(
         ROOT / "fixtures/audio/sync_flash.nwgraph", tmp_path / "export",
-        allow_test_payloads=True, settings=export.ExportSettings(
+        allow_test_payloads=True, dxc_executable=test_dxc, settings=export.ExportSettings(
             audio_song_path=str(ROOT / "fixtures/audio/sync_song.json"), byte_ceiling=64 * 1024 * 1024))
-    package = tmp_path / "export/common.nwp"
+    artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
+    package = tmp_path / "export" / (export._profile_file_stem(artifact.profile_id) + ".nwp")
     assert nwp.decode_package(package.read_bytes()).audio_song == song.read_bytes()
     host = tmp_path / "host.exe"
     host.write_bytes(b"controlled native protocol stand-in")

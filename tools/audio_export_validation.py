@@ -62,6 +62,8 @@ def validate(template: Path, dxc: str, root: Path) -> dict:
         results[variant] = first
     silent, silent_exe, silent_build = results["silent"]
     audio, audio_exe, audio_build = results["audio"]
+    # Stateless exports publish the profile-named package and generated source.
+    audio_package = audio_exe.with_suffix(".nwp")
     assert audio.package.audio_song
     assert export.section_sizes(audio.package_bytes)["AUDI"]["size_bytes"] == len(audio.package.audio_song)
     assert "AUDI" not in export.section_sizes(silent.package_bytes)
@@ -83,14 +85,14 @@ def validate(template: Path, dxc: str, root: Path) -> dict:
                     "--parallel", "2"], check=True)
     subprocess.run([str(audio_build / "nw_audio_contract.exe")], check=True)
     native = subprocess.run([str(audio_build / "nodewerkc.exe"), "inspect",
-                             str(audio_exe.parent / "common.nwp")],
+                             str(audio_package)],
                             check=True, capture_output=True, text=True)
     inspection = json.loads(native.stdout)
     assert inspection["valid"] and inspection["version"]["minor"] == 2
     assert inspection["audio_extension"]["song_sha256"] == _hash(audio.package.audio_song)
     # Same source and build profile, with only output-layer linkage disabled.
     probe_root = root / "synthesis-probe-build"
-    source = (audio_exe.parent / "common.player.cpp").read_text(encoding="utf-8")
+    source = audio_exe.with_suffix(".player.cpp").read_text(encoding="utf-8")
     probe = export._build_specialized_player(
         template, source, audio.manifest, nwp.COMMON_PROFILE_ID,
         build_root_override=probe_root, audio_measure_synthesis_only=True)
@@ -105,7 +107,7 @@ def validate(template: Path, dxc: str, root: Path) -> dict:
     runtime = root / "headless-runtime"
     runtime.mkdir()
     shutil.copy2(audio_build / "nw_package_player_fixture.exe", runtime / "player.exe")
-    shutil.copy2(audio_exe.parent / "common.nwp", runtime / "audio.nwp")
+    shutil.copy2(audio_package, runtime / "audio.nwp")
     (runtime / "identity.json").write_text(json.dumps({
         "package_sha256": _hash(audio.package_bytes),
         "fixture_sha256": _hash((runtime / "player.exe").read_bytes()),
