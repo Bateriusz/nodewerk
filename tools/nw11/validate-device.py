@@ -172,7 +172,7 @@ def capture_release(root: Path, manifest: dict, output: Path, adapter_luid: str)
     images = []
     for tick in ticks:
         path = output / f"{tick}.rgba"
-        command = [str(release), "--tick", str(tick), "--frames", "1"]
+        command = [str(release), "--tick", str(tick), "--frames", "1", "--borderless"]
         reference = output.parent / "canonical-reference" / f"{tick}.rgba"
         capture_path = output / f"{tick}-display.json"
         with (output / f"{tick}.log").open("wb") as log, capture_path.open("wb") as capture_log:
@@ -207,7 +207,8 @@ def capture_release(root: Path, manifest: dict, output: Path, adapter_luid: str)
         if exit_code != 0:
             raise ValidationError(f"Canonical release exited {exit_code} at tick {tick}")
         if capture.returncode != 0:
-            raise ValidationError(f"Canonical release scene was not observed by the startup deadline at tick {tick}")
+            raise ValidationError(f"Canonical release scene was not observed by the startup deadline at tick {tick}; "
+                                  f"see {capture_path} for display diagnostics")
         images.append({"tick": tick, "path": path.name, "sha256": contract.sha256_file(path),
                        "width": contract.OUTPUT_WIDTH, "height": contract.OUTPUT_HEIGHT,
                        "format": "rgba32f"})
@@ -292,15 +293,17 @@ def validate_device(root: Path, manifest: dict, output: Path, args: argparse.Nam
         "collected_by_process_id": os.getpid(), "start_filetime": audit_start, "end_filetime": filetime(),
         "observation": audit,
     })
+    # Validate native presentation before spending minutes on warm benchmarks.
+    # First-use startup launches and the reboot audit must precede this check.
+    launch_renderer(root, manifest, settings, common, output / "canonical-reference",
+                    "canonical_reference", "bin/canonical_reference.exe",
+                    mode="canonical_reference", capture=True)
+    capture_release(root, manifest, output / "canonical-release", common["adapter"]["adapter_luid"])
     for role, index in measurements.warm_run_schedule(settings, roles):
         decision = optional if role == "variant" else common
         launch_renderer(root, manifest, settings, decision,
                         output / "raw" / role / f"run-{index}", role, roles[role], mode="warm",
                         capture=index == settings["protocol"]["runs"])
-    launch_renderer(root, manifest, settings, common, output / "canonical-reference",
-                    "canonical_reference", "bin/canonical_reference.exe",
-                    mode="canonical_reference", capture=True)
-    capture_release(root, manifest, output / "canonical-release", common["adapter"]["adapter_luid"])
 
     record = measurements.collect(root, manifest, output, "evidence.json")
     write_json(output / "evidence.json", record)
