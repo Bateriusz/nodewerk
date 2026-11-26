@@ -5,7 +5,7 @@
     "incremental_distribution_bytes_ceiling": 65536,
     "optional_dependency_bytes_policy": "Every optional byte is counted; no RTX Kit, DLSS, model weights, or vendor SDK component is permitted in the common/fallback closure.",
     "peak_engine_committed_gpu_bytes_ceiling": 536870912,
-    "process_start_to_first_present_ms_ceiling": 2000.0,
+    "process_start_to_first_present_ms_ceiling": 2000,
     "shader_count_increment_ceiling": 1
   },
   "base_graph": {
@@ -15,7 +15,7 @@
   "baseline_profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
   "criteria": {
     "guardrails": {
-      "cold_initialization_ms_ceiling": 2000.0,
+      "cold_initialization_ms_ceiling": 2000,
       "complete_distribution_bytes_ceiling": 262144,
       "cpu_submit_ms_max": 16.67,
       "end_to_end_frame_time_must_not_regress": true,
@@ -53,7 +53,7 @@
       "comparison": "variant_vs_matched_baseline",
       "evaluation": "independent_per_device_environment",
       "metric": "p99_gpu_time_ms",
-      "relative_reduction_percent_min": 10.0,
+      "relative_reduction_percent_min": 10,
       "statistic": "nearest-rank p99 per 60-second process; require every matched run pair to improve"
     }
   },
@@ -119,7 +119,7 @@
       }
     ]
   },
-  "policy": "Use the same canonical workload and fixed-quality image comparison. Adopt only when independent matched physical runs meet the relative GPU improvement and explicit runtime guardrails. Report complete and incremental distribution bytes without gating adoption. Hosted CI validates the headless WARP command path; real presentation and cold start are physical validation requirements.",
+  "policy": "Use the same canonical workload and fixed-quality image comparison. Adopt only when independent matched physical runs meet the relative GPU improvement and explicit runtime guardrails. Report complete and incremental distribution bytes without gating adoption. Hosted CI validates the headless WARP command path; real presentation and cold start are physical validation requirements. Launch warm runs in the predeclared alternating baseline/variant order, with fallback in each round. Matched starting temperatures must differ by at most 5 C and observed starting clocks by at most 20% of the reported maximum for each clock domain; unavailable or mismatched conditions remain pending. Workload-induced clock/temperature differences are retained, not used as starting-condition gates.",
   "protocol": {
     "application_pipeline_cache": false,
     "capture_protocol": "nw07-correctness-capture.v1",
@@ -127,7 +127,7 @@
     "independent_per_device": true,
     "matched_environment_required": true,
     "min_raw_samples_per_run": 600,
-    "percentile": 99.0,
+    "percentile": 99,
     "percentile_method": "nearest-rank",
     "perf_contract": "matched-gpu-comparison.v2",
     "perf_protocol": "nw07-perf-run.v1",
@@ -180,7 +180,26 @@
     "physical": {
       "requires_real_gpu": true,
       "requires_real_present": true,
-      "requires_cold_start": true
+      "requires_cold_start": true,
+      "warm_run_order": [
+        [
+          "baseline",
+          "variant",
+          "fallback"
+        ],
+        [
+          "variant",
+          "baseline",
+          "fallback"
+        ],
+        [
+          "baseline",
+          "variant",
+          "fallback"
+        ]
+      ],
+      "max_start_temperature_delta_c": 5,
+      "max_start_clock_delta_fraction_of_max": 0.2
     },
     "performance": "matched_relative"
   }
