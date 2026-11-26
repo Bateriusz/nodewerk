@@ -970,6 +970,33 @@ def test_nw11_host_requires_vbs_to_explain_active_hypervisor() -> None:
     assert qualified is None
 
 
+def test_nw11_host_accepts_nested_gpu_ceiling_power_limit() -> None:
+    raw = _host_observation()
+    raw["nvidia_smi_xml"] = raw["nvidia_smi_xml"].replace(
+        "<gpu_power_readings><enforced_power_limit>165 W</enforced_power_limit></gpu_power_readings>",
+        "<gpu_power_readings><gpu_ceiling_power_limit><current_power_limit>165 W</current_power_limit>"
+        "</gpu_ceiling_power_limit></gpu_power_readings>",
+    )
+    qualified = host.qualify(
+        raw, {"vendor_id": 0x10DE, "device_id": 0x2805, "subsystem_id": 0x10DE}
+    )
+    assert qualified is not None
+    assert qualified["environment"]["gpu_power_state"]["enforced_limit_w"] == 165.0
+
+
+def test_nw11_host_rejects_default_only_gpu_power_limit() -> None:
+    raw = _host_observation()
+    raw["nvidia_smi_xml"] = raw["nvidia_smi_xml"].replace(
+        "<gpu_power_readings><enforced_power_limit>165 W</enforced_power_limit></gpu_power_readings>",
+        "<gpu_power_readings><gpu_ceiling_power_limit><default_power_limit>165 W</default_power_limit>"
+        "</gpu_ceiling_power_limit></gpu_power_readings>",
+    )
+    qualified = host.qualify(
+        raw, {"vendor_id": 0x10DE, "device_id": 0x2805, "subsystem_id": 0x10DE}
+    )
+    assert qualified is None
+
+
 def test_nw11_host_accepts_nvidia_pci_ids_without_0x_prefix() -> None:
     raw = _host_observation(hypervisor=True)
     raw["nvidia_smi_xml"] = raw["nvidia_smi_xml"].replace("<pci_device_id>0x", "<pci_device_id>")
