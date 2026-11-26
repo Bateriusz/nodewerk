@@ -408,7 +408,7 @@ def _canonical_capture(root: Path, directory: Path, manifest: dict, common: dict
         identity = (execution["process_id"], execution["start_filetime"])
         if (identity in launch_ids or not isinstance(identity[0], int) or identity[0] <= 0
                 or execution["end_filetime"] <= execution["start_filetime"]
-                or command[1:] != ["--tick", str(tick), "--frames", "1"]
+                or command[1:] != ["--tick", str(tick), "--frames", "1", "--borderless"]
                 or Path(command[0].replace("\\", "/")).name != "canonical_release.exe"):
             raise evidence.EvidenceError(f"Invalid canonical release execution at {tick}")
         display_record = release / f"{tick}-display.json"
