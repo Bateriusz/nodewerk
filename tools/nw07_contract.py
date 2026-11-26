@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nwp_package as nwp  # noqa: E402
+import hardware_evidence_devices as hardware_devices  # noqa: E402
 
 TASK = "NW-07"
 
@@ -75,12 +76,21 @@ DIAGNOSTIC_OVERHEAD_PROTOCOL = "nw07-diagnostic-overhead.v1"
 
 # Reference performance contract: the exact board name is recorded because
 # NW-07 intentionally keeps an explicitly justified absolute performance
-# reference.  It is never used as a compatibility predicate.  The pending
-# nw07_perf_ref_v1 binding keeps the originally frozen PCI identity; changing
-# it requires a fresh exact-board capture and a new contract version.
+# reference.  It is never used as a compatibility predicate.
+#
+# IMPORTANT: nw07_perf_ref_v1 froze 0x2805 before an exact-board reference
+# capture existed.  The repository's verified NW-01 RTX 4060 Ti baseline
+# measures 0x2803.  Because this v1 contract is frozen and still
+# pending_reference_capture, preserve its historical identifier here for
+# change-control/audit purposes only.  Physical device classification in
+# NW-11 and later tasks MUST use hardware_evidence_devices.py instead of
+# copying this task-local frozen performance-reference identifier.
 REFERENCE_BOARD_MODEL = "NVIDIA GeForce RTX 4060 Ti"
 REFERENCE_BOARD_VENDOR_ID = 0x10DE
 REFERENCE_BOARD_DEVICE_ID = 0x2805
+VERIFIED_ADA_DEVICE_ID = hardware_devices.PHYSICAL_DEVICE_TIERS[
+    "desktop_ada_representative"
+]["device_id"]
 REFERENCE_BOARD_VRAM_MIB = 8_192
 REFERENCE_ARCHITECTURE = "Ada"
 
