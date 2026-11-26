@@ -76,3 +76,27 @@ def test_offline_pcm_and_frame_plan_are_reproducible(native_tools, tmp_path):
         result = subprocess.run([str(native_tools / "offline"), str(song),
                                  str(tmp_path / "bad.wav"), str(tmp_path / "bad.csv")])
         assert result.returncode != 0
+
+def test_audio_manifest_and_generated_source_are_opt_in():
+    import nw05_export as export
+    from hashlib import sha256
+    song = compile_song(fixture())
+    silent = {"retained": {"code": [], "data": []}}
+    export._attach_audio_manifest(silent, b"")
+    assert "audio" not in silent
+    audio = {"retained": {"code": [], "data": []}}
+    export._attach_audio_manifest(audio, song)
+    assert audio["audio"]["song_sha256"] == sha256(song).hexdigest()
+    assert audio["audio"]["initialization_failure"] == "fail"
+    assert "feature_requirements" not in audio
+    assert audio["retained"]["data"] == ["audio.song.nwas"]
+    kwargs = {"package_sha256": "0" * 64, "manifest_sha256": "0" * 64}
+    silent_source = export.generate_player_source(manifest=silent, **kwargs)
+    audio_source = export.generate_player_source(manifest=audio, **kwargs)
+    assert "WasapiOutput" not in silent_source
+    assert "song_bytes[]" not in silent_source
+    assert "WasapiOutput" in audio_source and "song_bytes[]" in audio_source
+    assert "audio_output.now_ticks()" in audio_source
+    with pytest.raises(export.ExportError):
+        export._attach_audio_manifest({"timeline": {"duration_ticks": 1},
+                                      "retained": {}}, song)

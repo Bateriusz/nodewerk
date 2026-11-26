@@ -32,6 +32,7 @@ import nw05_optimizer as optimizer
 import nw05_schedule as schedule
 import nw06_export
 import dependency_check
+import audio_song
 
 
 EXPORT_FORMAT = "nw05-export-report"
@@ -145,6 +146,7 @@ class ExportSettings:
     fusion_max_nodes: int = optimizer.DEFAULT_FUSION_MAX_NODES
     fusion_max_expression_bytes: int = optimizer.DEFAULT_FUSION_MAX_EXPRESSION_BYTES
     packaged_checkpoint_ticks: tuple[int, ...] = ()
+    audio_song_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -173,6 +175,8 @@ class ExportSettings:
             payload["packaged_checkpoint_ticks"] = list(
                 self.packaged_checkpoint_ticks
             )
+        if self.audio_song_path:
+            payload["audio_enabled"] = True
         return payload
 
 
@@ -728,6 +732,65 @@ def _specialized_implementation_mask(
         | (256 if flags["NW06_COMPILE_TONEMAP"] else 0)
     )
 
+def _attach_audio_manifest(manifest: dict[str, Any], song: bytes) -> None:
+    """Explicit opt-in CPU/audio capability; the GPU profile is unchanged."""
+    if not song:
+        return
+    _, _, duration, _ = struct.unpack_from("<4sIQI", song)
+    timeline = manifest.get("timeline", {})
+    if int(timeline.get("ticks_per_second", 48000)) != 48000:
+        raise ExportError("audio requires a 48000 Hz absolute timeline")
+    if int(timeline.get("duration_ticks", 0)) not in (0, duration):
+        raise ExportError("song duration must match the visual timeline")
+    manifest["audio"] = {
+        "format": "NWAS", "version": 1, "duration_ticks": duration,
+        "sample_rate": 48000, "channels": 1, "bits_per_sample": 16,
+        "clock": "wasapi_endpoint", "initialization_failure": "fail",
+        "song_sha256": hashlib.sha256(song).hexdigest(),
+        "song_bytes": len(song), "song_hex": song.hex(),
+    }
+    retained = manifest["retained"]
+    for key, values in (
+        ("code", ["audio.procedural_pcm", "audio.wasapi_output"]),
+        ("data", ["audio.song.nwas"]),
+    ):
+        retained[key] = sorted(set(retained.get(key, [])) | set(values))
+
+
+def _audio_playback_source(audio: Mapping[str, Any]) -> str:
+    payload = bytes.fromhex(audio["song_hex"])
+    if (hashlib.sha256(payload).hexdigest() != audio["song_sha256"]
+            or len(payload) != audio["song_bytes"]):
+        raise ExportError("audio manifest song binding mismatch")
+    values = ",".join(str(value) for value in payload)
+    return f"""    static constexpr std::uint8_t song_bytes[] = {{{values}}};
+    nw::audio::Song song{{}};
+    if (!nw::audio::DecodeSong(song_bytes, sizeof(song_bytes), song)) return 70;
+    nw::audio::WasapiOutput audio_output;
+    if (!audio_output.start(song)) {{
+        std::fprintf(stderr, "NW_AUDIO_INITIALIZATION_FAILED\\n");
+        return 80;
+    }}
+    std::uint64_t frames = 0;
+    std::uint64_t previous = UINT64_MAX;
+    while (!player.window_closed() && !audio_output.failed()) {{
+        const auto tick = audio_output.now_ticks();
+        if (tick >= song.duration_ticks) break;
+        if (tick == previous) {{ ::Sleep(1); continue; }}
+        previous = tick;
+        const auto frame = player.renderAtTick(tick);
+        if (frame != nw::player::ExitCode::Success) return static_cast<int>(frame);
+        if (max_frames != 0 && ++frames >= max_frames) break;
+    }}
+    audio_output.stop();
+    std::printf("AUDIO_STARVATION_OBSERVATIONS=%llu\\nAUDIO_CLOCK_DISCONTINUITIES=%llu\\nAUDIO_SYNTHESIS_CPU_100NS=%llu\\n",
+        static_cast<unsigned long long>(audio_output.starvation_observations()),
+        static_cast<unsigned long long>(audio_output.clock_discontinuities()),
+        static_cast<unsigned long long>(audio_output.synthesis_cpu_100ns()));
+    if (audio_output.failed()) return 81;
+"""
+
+
 def generate_player_source(
     *,
     package_sha256: str,
@@ -783,7 +846,10 @@ def generate_player_source(
             "NW-06 generated playback requires the fixed 48,000 Hz rational "
             "timeline"
         )
-    if temporal_fixed_step:
+    if manifest.get("audio"):
+        clock_includes = '#include "audio/wasapi_output.h"\n'
+        playback_loop = _audio_playback_source(manifest["audio"])
+    elif temporal_fixed_step:
         if ticks_per_second != 48_000:
             raise ExportError(
                 "NW-09 generated playback requires the fixed 48,000 Hz "
@@ -1425,6 +1491,7 @@ def _build_specialized_player(
             "-B",
             str(build_root),
             f"-DNW05_GENERATED_PLAYER_SOURCE:FILEPATH={source_path}",
+            "-DNW_GENERATED_PLAYER_AUDIO:BOOL=" + ("ON" if manifest.get("audio") else "OFF"),
             "-DNW05_FROZEN_EMBEDDED_SPECIALIZATION:BOOL="
             + ("ON" if frozen_embedded_specialization else "OFF"),
         ]
@@ -2948,6 +3015,18 @@ def export_graph(
 ) -> ExportResult:
     """Export one artifact per capability profile with transactional publication."""
     settings = settings or ExportSettings()
+    audio_payload = b""
+    if settings.audio_song_path:
+        try:
+            audio_payload = audio_song.compile_song(json.loads(
+                Path(settings.audio_song_path).read_text(encoding="utf-8")
+            ))
+        except (ValueError, OSError) as exc:
+            raise ExportError(f"invalid audio song: {exc}") from exc
+        if not settings.player_template and not allow_test_payloads:
+            raise ExportError("audio export requires a configured Windows player template")
+        if settings.player_template and allow_test_payloads:
+            raise ExportError("audio executable cannot use a test player template")
     graph_path = Path(graph_path)
     output_directory = Path(output_directory)
     document = nw03.load_graph(graph_path)
@@ -3204,6 +3283,7 @@ def export_graph(
                 "memory_budget_bytes": int(settings.memory_budget),
             }
         )
+        _attach_audio_manifest(manifest, audio_payload)
         _refresh_manifest_sha256(manifest)
         manifest_data = optimizer.manifest_bytes(manifest)
         specialized_player_bytes: bytes | None = None
@@ -3326,6 +3406,9 @@ def export_graph(
                 "common.player.cpp": len(player_source),
             },
         )
+        if audio_payload:
+            size_report["audio"] = {"song_payload_bytes": len(audio_payload),
+                                    "synthesis_and_output_bytes": "pending_matched_measurement"}
         size_report["stateful"] = {
             "package_minor": package.version_minor,
             "history_bytes": sum(
@@ -3613,6 +3696,7 @@ def export_graph(
                 profile_id, requirements_digest, emitted_requirements(package)
             )
             manifest["optional_artifact"] = not is_common
+            _attach_audio_manifest(manifest, audio_payload)
             manifest["manifest_sha256"] = "sha256:v1:" + hashlib.sha256(
                 nwp.canonical_json_bytes(
                     {
@@ -3750,6 +3834,9 @@ def export_graph(
                 dependency_source=dependency_source,
                 artifact_files=aux_files,
             )
+            if audio_payload:
+                size_report["audio"] = {"song_payload_bytes": len(audio_payload),
+                                        "synthesis_and_output_bytes": "pending_matched_measurement"}
             size_report["content"]["reachable_node_ids"] = list(
                 optimized.reachable_node_ids
             )

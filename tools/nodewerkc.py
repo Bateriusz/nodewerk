@@ -326,6 +326,7 @@ def command_export(args: argparse.Namespace) -> int:
             bake_overrides=_override_pairs(args.bake_override),
             frames_in_flight=args.frames_in_flight,
             player_template=args.player_template or "",
+            audio_song_path=getattr(args, "audio_song", None) or "",
             allow_optional_profiles=(
                 args.allow_optional_profiles
                 or bool(args.optional_profile)
@@ -618,6 +619,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow optional profiles to be emitted separately",
     )
+    export.add_argument("--audio-song", help="optional NWAS v1 source song JSON")
     export.add_argument(
         "--player-template",
         help="specialized player executable template to embed the package into",
