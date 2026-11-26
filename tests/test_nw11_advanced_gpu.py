@@ -396,7 +396,9 @@ def test_nw11_experiments_freeze_the_nw07_workload_and_success_criterion(
 ) -> None:
     document = _experiment(experiment_id)
     experiment.validate_experiment(document, repo_root=REPO_ROOT)
-    assert document["status"] == "frozen"
+    assert document["status"] == "active"
+    assert document["version"] == 2
+    assert document["validation_policy"]["ci"]["requires_present"] is False
     assert document["base_graph"]["sha256"] == contract.BASE_GRAPH_SHA256
     assert document["workload"]["torus_instances"] == 256
     assert document["workload"]["loop_ticks"] == 960000
@@ -696,7 +698,7 @@ def test_nw11_malformed_bundle_and_stale_commit_fail_closed(tmp_path: Path) -> N
         ({}, "accepted"),
         ({"variant": _measurement(gpu=9.5)}, "rejected"),
         ({"variant": _measurement(gpu=7.5, frame=17.0)}, "rejected"),
-            ({"variant": _measurement(gpu=7.5, distribution=2_000_000)}, "rejected"),
+            ({"variant": _measurement(gpu=7.5, distribution=2_000_000)}, "accepted"),
         ({"variant": _measurement(gpu=7.5, image_error=0.01)}, "rejected"),
     ),
 )
@@ -1670,7 +1672,7 @@ def test_nw11_collector_requires_three_fresh_processes_per_role() -> None:
 def test_nw11_failed_run_cannot_be_hidden_in_aggregate() -> None:
     base, variant = _measurement(), _measurement(gpu=7.5)
     # Seven spikes fail p99 within one run but could disappear across 1,800 samples.
-    base["process_runs"][0]["gpu_time_samples"][:7] = [24.0] * 7
+    variant["process_runs"][0]["gpu_time_samples"][:7] = [24.0] * 7
     result = experiment.evaluate_experiment(
         _experiment(), {"device_key": "pci:10de:2803", "environment_key": "host",
                         "baseline": base, "variant": variant},

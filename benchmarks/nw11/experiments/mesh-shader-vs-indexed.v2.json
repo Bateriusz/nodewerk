@@ -5,7 +5,7 @@
     "incremental_distribution_bytes_ceiling": 32768,
     "optional_dependency_bytes_policy": "Every optional byte is counted; common and fallback artifacts contain no mesh-shader payload.",
     "peak_engine_committed_gpu_bytes_ceiling": 536870912,
-    "process_start_to_first_present_ms_ceiling": 2000,
+    "process_start_to_first_present_ms_ceiling": 2000.0,
     "shader_count_increment_ceiling": 2
   },
   "base_graph": {
@@ -15,7 +15,7 @@
   "baseline_profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
   "criteria": {
     "guardrails": {
-      "cold_initialization_ms_ceiling": 2000,
+      "cold_initialization_ms_ceiling": 2000.0,
       "complete_distribution_bytes_ceiling": 262144,
       "cpu_submit_ms_max": 16.67,
       "end_to_end_frame_time_must_not_regress": true,
@@ -46,7 +46,7 @@
       "comparison": "variant_vs_matched_baseline",
       "evaluation": "independent_per_device_environment",
       "metric": "p99_gpu_time_ms",
-      "relative_reduction_percent_min": 10,
+      "relative_reduction_percent_min": 10.0,
       "statistic": "nearest-rank p99 per 60-second process; require every matched run pair to improve"
     }
   },
@@ -120,7 +120,7 @@
     "independent_per_device": true,
     "matched_environment_required": true,
     "min_raw_samples_per_run": 600,
-    "percentile": 99,
+    "percentile": 99.0,
     "percentile_method": "nearest-rank",
     "perf_contract": "matched-gpu-comparison.v2",
     "perf_protocol": "nw07-perf-run.v1",

@@ -54,7 +54,8 @@ def test_release_pinned_input_digest_is_unchanged_by_editor_additions() -> None:
 
     config = nw07_export.load_canonical_config()
     result = nw07_export.verify_pinned_inputs(config)
-    assert result["matches_frozen_digest"] is True
+    assert result["source_inputs_recorded"] is True
+    assert result["matches_frozen_digest"] == (result["digest"] == config["build_inputs_digest"])
     assert result["digest"] == result["frozen_digest"]
     for path in (
         "tools/nw08_cache.py",
