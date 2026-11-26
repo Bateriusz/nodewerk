@@ -17,9 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import nw11_bundle as bundle
 import nw11_contract as contract
-import nw11_cold_start
-import nw11_host
-import nw11_measurements as measurements
+import validation_cold_start as nw11_cold_start
+import validation_gpu_telemetry as nw11_host
+import gpu_experiment_measurements as measurements
 import nw11_verify as verifier
 
 

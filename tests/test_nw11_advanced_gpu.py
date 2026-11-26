@@ -23,9 +23,9 @@ import nw11_contract as contract  # noqa: E402
 import nw11_evidence as evidence  # noqa: E402
 import nw11_experiment as experiment  # noqa: E402
 import nw11_followup as followup  # noqa: E402
-import nw11_measurements as measurements  # noqa: E402
-import nw11_host as host  # noqa: E402
-from nw11_host import MEASURED_APPLICATIONS  # noqa: E402
+import gpu_experiment_measurements as measurements  # noqa: E402
+import validation_gpu_telemetry as host  # noqa: E402
+from validation_gpu_telemetry import MEASURED_APPLICATIONS  # noqa: E402
 import nw11_graph_scene as graph_scene  # noqa: E402
 import nw11_pe_dependencies as pe_dependencies  # noqa: E402
 import nw11_pack_python_runtime as python_runtime  # noqa: E402

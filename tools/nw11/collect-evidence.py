@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import nw11_bundle as bundle
-import nw11_measurements as measurements
+import gpu_experiment_measurements as measurements
 
 
 def main() -> int:
