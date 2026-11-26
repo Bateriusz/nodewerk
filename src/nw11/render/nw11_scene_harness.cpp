@@ -296,7 +296,7 @@ int RunProduction(const RendererOptions& options) {
                     "physical validation requires a probe-selected adapter and presentation");
     }
     if (!SetEnvironmentVariableA(
-            "NW11_ADAPTER_LUID",
+            "NODEWERK_ADAPTER_LUID",
             options.adapter_luid.empty() ? nullptr : options.adapter_luid.c_str())) {
         FailHarness(HarnessExitCode::InvalidMeasurementContract,
                     "adapter_selection_environment_failed",
