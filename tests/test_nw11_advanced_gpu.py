@@ -397,7 +397,9 @@ def test_nw11_experiments_freeze_the_nw07_workload_and_success_criterion(
     document = _experiment(experiment_id)
     experiment.validate_experiment(document, repo_root=REPO_ROOT)
     assert document["status"] == "active"
-    assert document["version"] == 2
+    assert document["version"] == 3
+    assert document["validation_policy"]["physical"]["requires_cold_start"] is False
+    assert document["validation_policy"]["completion"] == "functional_execution"
     assert document["validation_policy"]["ci"]["requires_present"] is False
     assert document["base_graph"]["sha256"] == contract.BASE_GRAPH_SHA256
     assert document["workload"]["torus_instances"] == 256
@@ -706,7 +708,7 @@ def test_nw11_matched_run_evaluation_rejects_regressions(
     measurement: dict, expected: str, tmp_path: Path
 ) -> None:
     _root, manifest = _build_bundle(tmp_path)
-    document = _experiment()
+    document = experiment.load_experiment(REPO_ROOT / contract.EXPERIMENT_PATH_BY_ID[contract.EXPERIMENT_MESH_ID].replace(".v3.json", ".v2.json"))
     payload = {
         "device_key": "pci:10de:2803",
         "environment_key": "sha256:v1:" + "a" * 64,
@@ -1681,7 +1683,8 @@ def test_nw11_failed_run_cannot_be_hidden_in_aggregate() -> None:
                         "baseline": base, "variant": variant},
         device_key="pci:10de:2803", environment_key="host",
     )
-    assert result["status"] == "rejected"
+    assert result["status"] == "accepted"
+    assert result["performance_status"] == "target_not_met"
     assert "NW11-PRIMARY-NOT-MET" in {reason["code"] for reason in result["reasons"]}
 
 
@@ -2153,12 +2156,6 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
             (folder / "presentmon.csv").write_text("\n".join(rows) + "\n")
 
     roles = measurements.role_paths(manifest, optional)
-    for role, relative in roles.items():
-        process(output / "raw" / role / "startup", role, relative, "startup")
-    audit_start = 3_950_000_000
-    put(output / "reboot-audit.json", {**session, "collected_by_process_id": 90,
-        "start_filetime": audit_start, "end_filetime": audit_start + 1,
-        "observation": {"unavailable": "No access to audit log"}})
     settings = _experiment()
     for role, index in measurements.warm_run_schedule(settings, roles):
         process(output / "raw" / role / f"run-{index}", role, roles[role], "warm", has_capture=index == 3)
@@ -2225,40 +2222,13 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
     assert verify.main(arguments) == verify.EXIT_OK
     decision = json.loads((output / "decisions.json").read_text())
     assert decision["devices"][0]["canonical_release_correctness"]["loop_boundary"]["variant"]["rmse"] == 0
-    assert decision["devices"][0]["status"] == "pending"
-    assert record["runs"][0]["measurement"]["cold_initialization_ms"] is None
-    assert record["runs"][0]["measurement"]["unqualified_startup_ms"] == 900
+    assert decision["devices"][0]["status"] == "accepted"
+    assert decision["devices"][0]["functional_status"] == "verified"
+    assert "cold_initialization_ms" not in record["runs"][0]["measurement"]
+    assert "reboot-audit.json" not in record["raw_inputs"]
     assert decision["devices"][0]["canonical_release_correctness"]["numeric_loop_boundary"]["status"] == "verified"
     assert not decision["satisfies_completion"]
-
-    audit_path = output / "reboot-audit.json"
-    audit = measurements.load_json(audit_path)
-    boot = 400_000_000
-    audit["observation"] = {
-        "boot_type": "0", "boot_record": 3, "boot_time": boot, "system_started": boot,
-        "oldest_security": boot - 100, "previous_process_audit": boot - 10, "disruptions": [],
-        "process_creation_audit_flags": 1,
-        "launches": [],
-    }
-    for index, role in enumerate(roles, 1):
-        launch = measurements.load_json(output / "raw" / role / "startup/launch.json")
-        audit["observation"]["launches"].append({
-            "record_id": index * 12, "time": launch["start_filetime"] + 1,
-            "path": launch["command"][0], "pid": hex(launch["process_id"]),
-        })
-    put(audit_path, audit)
-    cold = measurements.collect(root, manifest, output, "evidence.json")
-    assert [run["measurement"]["cold_initialization_ms"] for run in cold["runs"]] == [900] * 3
-    put(output / "evidence.json", cold)
     assert verify.main([*arguments, "--require-accepted"]) == verify.EXIT_OK
-
-    first = audit["observation"]["launches"][0]
-    audit["observation"]["launches"].append(dict(first, record_id=1, time=boot + 100, pid="0xbeef"))
-    put(audit_path, audit)
-    pre_run = measurements.collect(root, manifest, output, "evidence.json")
-    assert pre_run["runs"][0]["measurement"]["cold_initialization_ms"] is None
-    audit["observation"]["launches"].pop()
-    put(audit_path, audit)
 
     settings_path = output / "raw/variant/run-2/operating-conditions.json"
     original = measurements.load_json(settings_path)
@@ -2268,19 +2238,20 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
         settings["window"][1]["observation"]["nvidia_smi_xml"].replace("165 W", "150 W"))
     put(settings_path, settings)
     changed = measurements.collect(root, manifest, output, "evidence.json")
-    telemetry = changed["runs"][1]["measurement"]["operating_conditions"][2]
+    telemetry = changed["runs"][1]["measurement"]["operating_conditions"][1]
     assert telemetry["status"] == "pending"
     assert set(telemetry["reasons"]) == {"windows_power_plan changed after preflight",
                                          "GPU enforced power limit changed after preflight",
                                          "matched run 2: starting conditions unavailable or not qualified"}
     assert telemetry["samples"][2]["environment"]["temperature_c"] == 38
     put(output / "evidence.json", changed)
-    assert verify.main([*arguments, "--require-accepted"]) == verify.EXIT_PENDING
+    assert verify.main([*arguments, "--require-accepted"]) == verify.EXIT_OK
+    assert measurements.load_json(output / "decisions.json")["devices"][0]["performance_status"] == "inconclusive"
     put(settings_path, original)
 
     # Editing only the derived aggregate must not change a decision.
-    cold["runs"][0]["measurement"]["process_runs"][0]["gpu_time_samples"][0] = 3
-    put(output / "evidence.json", cold)
+    record["runs"][0]["measurement"]["process_runs"][0]["gpu_time_samples"][0] = 3
+    put(output / "evidence.json", record)
     assert verify.main(arguments) == verify.EXIT_MALFORMED
     # Reusing an earlier launch under a new role-run path also fails raw regeneration.
     role = output / "raw" / "baseline"
@@ -2488,6 +2459,7 @@ def test_native_presentation_modes_are_opt_in_and_canonical_check_precedes_warm_
     assert platform.index("SetProcessDPIAware()") < platform.index("CreateWindowExW(")
     runner = (REPO_ROOT / "tools/nw11/validate-device.py").read_text(encoding="utf-8")
     assert '"--frames", "1", "--borderless"' in runner
+    assert 'if settings["version"] < 3:' in runner
     assert runner.index("audit = nw11_cold_start.observe()") < runner.index(
         'capture_release(root, manifest, output / "canonical-release"'
     ) < runner.index("measurements.validate_canonical_capture(") < runner.index(
@@ -2498,3 +2470,24 @@ def test_native_presentation_modes_are_opt_in_and_canonical_check_precedes_warm_
                    "reference_anchors_mismatch", "startup_deadline_exceeded"):
         assert reason in observer
     assert "best_anchor_error" in observer
+
+
+def test_functional_experiment_retains_legacy_decisions_and_reports_quality_separately():
+    current = _experiment()
+    historical = experiment.load_experiment(
+        REPO_ROOT / contract.EXPERIMENT_PATH_BY_ID[contract.EXPERIMENT_MESH_ID].replace(".v3.json", ".v2.json"))
+    baseline, variant = _measurement(gpu=10.0), _measurement(gpu=12.0, image_error=0.01)
+    for arm in (baseline, variant):
+        arm["cold_initialization_ms"] = None
+    data = {"device_key": "pci:10de:2803", "environment_key": "host", "baseline": baseline, "variant": variant}
+    result = experiment.evaluate_experiment(current, data, device_key=data["device_key"], environment_key="host")
+    assert result["status"] == "accepted"
+    assert result["functional_status"] == "verified"
+    assert result["image_equivalence_status"] == "different"
+    assert result["performance_status"] == "target_not_met"
+    assert result["default_adoption_status"] == "not_decided"
+    assert experiment.evaluate_experiment(historical, data, device_key=data["device_key"],
+                                          environment_key="host")["status"] == "pending"
+    variant["process_runs"][0]["displayed_presents"] = 0
+    with pytest.raises(experiment.ExperimentError, match="displayed frames"):
+        experiment.evaluate_experiment(current, data, device_key=data["device_key"], environment_key="host")

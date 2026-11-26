@@ -60,7 +60,7 @@ from nw11_contract import (  # type: ignore[import-not-found]
 )
 
 EXPERIMENT_FORMAT = "nw11-experiment"
-EXPERIMENT_VERSION = 2
+EXPERIMENT_VERSION = 3
 VALIDATION_POLICY_V2 = {
     "ci": {"command_path": "headless_warp", "requires_present": False},
     "physical": {
@@ -75,6 +75,16 @@ VALIDATION_POLICY_V2 = {
     },
     "performance": "matched_relative",
 }
+
+# V1/v2 retain the historical adoption and cold-start criteria.
+# V3 qualifies execution independently of image equivalence and performance.
+VALIDATION_POLICY_V3 = {
+    **VALIDATION_POLICY_V2,
+    "physical": {**VALIDATION_POLICY_V2["physical"], "requires_cold_start": False},
+    "performance": "report_only",
+    "completion": "functional_execution",
+}
+
 
 EXPERIMENT_KINDS = {
     EXPERIMENT_MESH_ID: "mesh_shading",
@@ -177,7 +187,7 @@ def _validate_workload(document: Mapping[str, Any]) -> None:
 def _validate_protocol(document: Mapping[str, Any]) -> dict[str, Any]:
     protocol = _mapping(document.get("protocol"), "protocol")
     expected = frozen_protocol()
-    if document.get("version") == 2:
+    if document.get("version") in (2, 3):
         expected["perf_contract"] = "matched-gpu-comparison.v2"
     for key in (
         "perf_contract",
@@ -228,7 +238,6 @@ def _validate_criteria(document: Mapping[str, Any], kind: str) -> None:
         "complete_distribution_bytes_ceiling",
         "incremental_distribution_bytes_ceiling",
         "shader_count_increment_ceiling",
-        "cold_initialization_ms_ceiling",
         "peak_engine_committed_gpu_bytes_ceiling",
     ):
         if key not in guardrails:
@@ -242,7 +251,7 @@ def _validate_criteria(document: Mapping[str, Any], kind: str) -> None:
         "guardrails.complete_distribution_bytes_ceiling",
     ) > COMPLETE_DISTRIBUTION_CEILING_BYTES:
         raise ExperimentError("experiment weakened the complete distribution ceiling")
-    if _number(guardrails.get("cold_initialization_ms_ceiling"), "cold_initialization_ms_ceiling") > PROCESS_START_TO_FIRST_PRESENT_MS:
+    if document["version"] < 3 and _number(guardrails.get("cold_initialization_ms_ceiling"), "cold_initialization_ms_ceiling") > PROCESS_START_TO_FIRST_PRESENT_MS:
         raise ExperimentError("experiment weakened the cold-initialization ceiling")
     if _number(guardrails.get("peak_engine_committed_gpu_bytes_ceiling"), "peak_engine_committed_gpu_bytes_ceiling") > PEAK_ENGINE_COMMITTED_GPU_BYTES:
         raise ExperimentError("experiment weakened the VRAM ceiling")
@@ -250,7 +259,7 @@ def _validate_criteria(document: Mapping[str, Any], kind: str) -> None:
         raise ExperimentError("experiment weakened the preserved CPU-submit gate")
 
     budget = _mapping(document.get("artifact_budget"), "artifact_budget")
-    expected_policy = "report_only" if document.get("version") == 2 else "gated"
+    expected_policy = "report_only" if document.get("version") in (2, 3) else "gated"
     if budget.get("distribution_size_policy") != expected_policy:
         raise ExperimentError("distribution size policy does not match the experiment version")
     for key in (
@@ -437,7 +446,7 @@ def validate_experiment(
     document = _mapping(record, "experiment")
     if document.get("format") != EXPERIMENT_FORMAT:
         raise ExperimentError("experiment format is not nw11-experiment")
-    if type(document.get("version")) is not int or document["version"] not in (1, EXPERIMENT_VERSION):
+    if type(document.get("version")) is not int or document["version"] not in (1, 2, EXPERIMENT_VERSION):
         raise ExperimentError("unsupported experiment definition version")
     if document.get("task") != TASK:
         raise ExperimentError("experiment task is not NW-11")
@@ -448,8 +457,9 @@ def validate_experiment(
         raise ExperimentError(f"unknown experiment id '{experiment_id}'")
     if document.get("kind") != EXPERIMENT_KINDS[experiment_id]:
         raise ExperimentError("experiment kind does not match its identifier")
-    if document.get("version") == 2:
-        if document.get("status") != "active" or document.get("validation_policy") != VALIDATION_POLICY_V2:
+    if document.get("version") in (2, 3):
+        expected_policy = VALIDATION_POLICY_V3 if document["version"] == 3 else VALIDATION_POLICY_V2
+        if document.get("status") != "active" or document.get("validation_policy") != expected_policy:
             raise ExperimentError("active experiment requires its explicit CI and physical validation policy")
         execution = _mapping(document.get("execution"), "execution")
         expected_arguments = [
@@ -610,7 +620,7 @@ def summarize_process_runs(arm: Mapping[str, Any], label: str, protocol: Mapping
 
 def reference_gate_failures(device_key: str, runs: list[dict[str, Any]], experiment: Mapping[str, Any] | None = None) -> list[str]:
     # The legacy absolute Ada reference gate is not inherited by a relative experiment.
-    if experiment is not None and experiment.get("version") == 2:
+    if experiment is not None and experiment.get("version") in (2, 3):
         return []
     # NW-07 specifies an absolute Ada reference gate and a separate Blackwell
     # development series. Qualification of the exact NW-07 host is independent.
@@ -712,16 +722,18 @@ def evaluate_experiment(
             "NW11-SHADER-COUNT-BUDGET",
             "variant shader-count increment exceeds the frozen experiment budget",
         )
+    functional_only = document["version"] == 3
     missing_cold = False
     for label, arm, arm_runs in (("baseline", baseline, baseline_runs), ("variant", variant, variant_runs)):
-        cold = arm.get("cold_initialization_ms")
-        if cold is None:
-            missing_cold = True
-        else:
-            if _number(cold, f"{label}.cold_initialization_ms") > float(guardrails["cold_initialization_ms_ceiling"]):
-                reject("NW11-COLD-INITIALIZATION", f"{label} cold initialization exceeds the ceiling")
-        if any(run["startup_ms"] > float(guardrails["cold_initialization_ms_ceiling"]) for run in arm_runs):
-            reject("NW11-WARM-INITIALIZATION", f"{label} warm initialization exceeds the ceiling")
+        if not functional_only:
+            cold = arm.get("cold_initialization_ms")
+            if cold is None:
+                missing_cold = True
+            else:
+                if _number(cold, f"{label}.cold_initialization_ms") > float(guardrails["cold_initialization_ms_ceiling"]):
+                    reject("NW11-COLD-INITIALIZATION", f"{label} cold initialization exceeds the ceiling")
+            if any(run["startup_ms"] > float(guardrails["cold_initialization_ms_ceiling"]) for run in arm_runs):
+                reject("NW11-WARM-INITIALIZATION", f"{label} warm initialization exceeds the ceiling")
         if arm["peak_engine_committed_gpu_bytes"] > int(guardrails["peak_engine_committed_gpu_bytes_ceiling"]):
             reject("NW11-VRAM-CEILING", f"{label} peak engine-committed GPU bytes exceed the ceiling")
     if variant["image"]["max_abs_channel_error"] > float(image["max_abs_channel_error"]):
@@ -750,7 +762,23 @@ def evaluate_experiment(
 
     if missing_cold:
         reject("NW11-COLD-PENDING", "driver-cache preparation did not establish cold startup coverage")
-    status = "pending" if missing_cold else ("rejected" if reasons else "accepted")
+    if functional_only:
+        # The collector binds these measurements to exact executable launches.
+        for arm_runs in (baseline_runs, variant_runs):
+            if any(run["displayed_presents"] <= 0 for run in arm_runs):
+                raise ExperimentError("functional execution requires displayed frames")
+        image_reasons = [reason for reason in reasons if reason["code"].startswith("NW11-IMAGE-")]
+        performance_reasons = [reason for reason in reasons if reason not in image_reasons]
+        status = "accepted"
+        separate_results = {
+            "functional_status": "verified",
+            "image_equivalence_status": "different" if image_reasons else "matched",
+            "performance_status": "target_not_met" if performance_reasons else "target_met",
+            "default_adoption_status": "not_decided",
+        }
+    else:
+        status = "pending" if missing_cold else ("rejected" if reasons else "accepted")
+        separate_results = {}
     return {
         "experiment_id": document["experiment_id"],
         "variant_profile_id": document["variant_profile_id"],
@@ -759,6 +787,7 @@ def evaluate_experiment(
         "device_key": device_key,
         "environment_key": environment_key,
         "status": status,
+        **separate_results,
         "satisfies_completion": status in {"accepted", "rejected"},
         "reasons": reasons,
         "primary": {

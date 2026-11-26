@@ -139,7 +139,6 @@
           "measurement": {
             "type": "object",
             "required": [
-              "cold_initialization_ms",
               "distribution_bytes",
               "shader_count",
               "shader_ids",

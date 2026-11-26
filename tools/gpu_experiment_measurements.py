@@ -66,7 +66,7 @@ def role_paths(manifest: dict, optional: dict) -> dict[str, str]:
 
 def warm_run_schedule(settings: dict, roles: dict) -> list[tuple[str, int]]:
     """One predeclared order, used by the launcher and by evidence reconstruction."""
-    if settings.get("version") == 2:
+    if settings.get("version") in (2, 3):
         order = settings["validation_policy"]["physical"]["warm_run_order"]
         return [(role, index) for index, row in enumerate(order, 1)
                 for role in row if role in roles]
@@ -85,7 +85,7 @@ def validate_warm_run_order(settings: dict, roles: dict, observed: list[tuple[st
 
 def matched_start_conditions(settings: dict, baseline: dict, variant: dict) -> list[str]:
     """Compare only pre-launch samples, not workload-induced operating differences."""
-    if settings.get("version") != 2:
+    if settings.get("version") not in (2, 3):
         return []
     policy = settings["validation_policy"]["physical"]
     try:
@@ -496,25 +496,31 @@ def collect(root: Path, manifest: dict, directory: Path, evidence_file: str) -> 
     runs = {}
     captures = {}
     warm_launches = []
-    audit = load_json(directory / "reboot-audit.json")
-    for key in ("commit", "bundle_id"):
-        _equal(audit.get(key), manifest[key], f"reboot audit {key}")
-    if not 0 < audit["start_filetime"] <= audit["end_filetime"] or audit["collected_by_process_id"] <= 0:
-        raise evidence.EvidenceError("Invalid reboot audit collection identity")
+    requires_cold = settings["version"] < 3
+    if requires_cold:
+        audit = load_json(directory / "reboot-audit.json")
+        for key in ("commit", "bundle_id"):
+            _equal(audit.get(key), manifest[key], f"reboot audit {key}")
+        if not 0 < audit["start_filetime"] <= audit["end_filetime"] or audit["collected_by_process_id"] <= 0:
+            raise evidence.EvidenceError("Invalid reboot audit collection identity")
     for role, relative in roles.items():
         path = directory / "raw" / role
         decision = optional if role == "variant" else common
-        startup_launch, startup = _validate_launch(path / "startup", manifest, decision,
-                                                   relative, "startup", role, launch_ids, protocol)
-        if not probe["end_filetime"] <= startup_launch["start_filetime"] < startup_launch["end_filetime"] <= audit["start_filetime"]:
-            raise evidence.EvidenceError(f"Invalid reboot evidence timing for {role}")
-        preparation = nw11_cold_start.qualify(audit["observation"], startup_launch, startup,
-                                             audit["start_filetime"], audit["end_filetime"])
         initial = common["physical_provenance"]["environment"]
-        startup_conditions = operating_conditions(path / "startup", startup_launch, startup,
-                                                   host, observation["adapter"], initial)
         processes = []
-        previous_end = audit["end_filetime"]
+        previous_end = probe["end_filetime"]
+        if requires_cold:
+            startup_launch, startup = _validate_launch(path / "startup", manifest, decision,
+                                                       relative, "startup", role, launch_ids, protocol)
+            if not probe["end_filetime"] <= startup_launch["start_filetime"] < startup_launch["end_filetime"] <= audit["start_filetime"]:
+                raise evidence.EvidenceError(f"Invalid reboot evidence timing for {role}")
+            preparation = nw11_cold_start.qualify(audit["observation"], startup_launch, startup,
+                                                  audit["start_filetime"], audit["end_filetime"])
+            startup_conditions = operating_conditions(path / "startup", startup_launch, startup,
+                                                       host, observation["adapter"], initial)
+            previous_end = audit["end_filetime"]
+        elif (path / "startup").exists():
+            raise evidence.EvidenceError("Unscheduled startup launch in functional experiment")
         for index in range(1, protocol["runs"] + 1):
             folder = path / f"run-{index}"
             launch, report = _validate_launch(folder, manifest, decision, relative, "warm", role, launch_ids, protocol)
@@ -528,18 +534,25 @@ def collect(root: Path, manifest: dict, directory: Path, evidence_file: str) -> 
                                                               host, observation["adapter"], initial),
             })
         captures[role] = _capture(folder, report)
-        startup_ms = startup["measurement"]["process_start_to_first_present_ms"]
-        cold = preparation["status"] == "cold_driver_cache" and startup_conditions["status"] == "matched"
-        operating = [startup_conditions, *(run["operating_conditions"] for run in processes)]
+        operating = [run["operating_conditions"] for run in processes]
+        startup_metrics = {}
+        peaks = [run["peak_engine_committed_gpu_bytes"] for run in processes]
+        if requires_cold:
+            startup_ms = startup["measurement"]["process_start_to_first_present_ms"]
+            cold = preparation["status"] == "cold_driver_cache" and startup_conditions["status"] == "matched"
+            operating.insert(0, startup_conditions)
+            peaks.append(startup["measurement"]["peak_engine_committed_gpu_bytes"])
+            startup_metrics = {
+                "cold_initialization_ms": startup_ms if cold else None,
+                "unqualified_startup_ms": None if cold else startup_ms,
+                "cache_preparation": preparation,
+            }
         metrics = {
             "process_runs": processes,
-            "cold_initialization_ms": startup_ms if cold else None,
-            "unqualified_startup_ms": None if cold else startup_ms,
-            "cache_preparation": preparation,
+            **startup_metrics,
             "operating_conditions": operating,
             "operating_conditions_matched": all(item["status"] == "matched" for item in operating),
-            "peak_engine_committed_gpu_bytes": max(startup["measurement"]["peak_engine_committed_gpu_bytes"],
-                                                   *(run["peak_engine_committed_gpu_bytes"] for run in processes)),
+            "peak_engine_committed_gpu_bytes": max(peaks),
             **{key: report["measurement"][key] for key in ("shader_count", "shader_ids", "distribution_bytes")},
         }
         runs[role] = {**{key: report[key] for key in ("role", "device_tier", "device_key", "environment_key",
@@ -576,7 +589,10 @@ def collect(root: Path, manifest: dict, directory: Path, evidence_file: str) -> 
               if path.is_file() and path.suffix in {".json", ".csv", ".rgba", ".log"}}
     inputs[snapshot.name] = contract.sha256_file(snapshot)
     inputs[host_path.name] = contract.sha256_file(host_path)
-    for name in ("common-eligibility.json", "eligibility.json", "probe-execution.json", "reboot-audit.json"):
+    for name in ("common-eligibility.json", "eligibility.json", "probe-execution.json"):
+        inputs[name] = contract.sha256_file(directory / name)
+    if requires_cold:
+        name = "reboot-audit.json"
         inputs[name] = contract.sha256_file(directory / name)
     return {
         "format": evidence.EVIDENCE_FORMAT, "version": evidence.EVIDENCE_VERSION,

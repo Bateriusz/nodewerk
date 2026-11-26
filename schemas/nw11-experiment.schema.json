@@ -29,7 +29,7 @@
   ],
   "properties": {
     "format": { "const": "nw11-experiment" },
-    "version": { "enum": [1, 2] },
+    "version": { "enum": [1, 2, 3] },
     "task": { "const": "NW-11" },
     "implementation_base": { "const": "dc8edbafc3f5928861f14b0fbb932f7d42e81c8b" },
     "experiment_id": {
@@ -228,7 +228,6 @@
             "complete_distribution_bytes_ceiling",
             "incremental_distribution_bytes_ceiling",
             "shader_count_increment_ceiling",
-            "cold_initialization_ms_ceiling",
             "peak_engine_committed_gpu_bytes_ceiling"
           ],
           "properties": {

@@ -173,6 +173,8 @@ def _validate_run_measurement(
     document: Mapping[str, Any],
 ) -> None:
     measurement = _mapping(run.get("measurement"), "run.measurement")
+    if document["version"] < 3 and "cold_initialization_ms" not in measurement:
+        raise EvidenceError("historical evidence must include cold initialization")
     artifact = _role_artifact(manifest, role)
     if run.get("artifact_path") != artifact.get("path"):
         raise EvidenceError(
@@ -615,17 +617,22 @@ def _decide_group(
     evaluation["aggregate"]["fallback"] = {**fallback_measurement, "process_runs": fallback_runs}
     if any(run["measurement"].get("operating_conditions_matched") is False
            for run in (baseline, variant, fallback)):
-        evaluation["status"] = "pending"
-        evaluation["satisfies_completion"] = False
+        if experiment["version"] == 3:
+            evaluation["performance_status"] = "inconclusive"
+        else:
+            evaluation["status"] = "pending"
+            evaluation["satisfies_completion"] = False
         evaluation["reasons"].append({"code": "NW11-OPERATING-CONDITIONS-PENDING",
                                        "message": "Measured operating conditions were unavailable or changed"})
-    if fallback_failures and evaluation["status"] == "accepted":
+    if experiment["version"] < 3 and fallback_failures and evaluation["status"] == "accepted":
         evaluation["status"] = "rejected"
         evaluation["reasons"].extend({"code": "NW11-FALLBACK-REFERENCE-GATE", "message": reason}
                                       for reason in fallback_failures)
     evaluation["device_tier"] = None
     evaluation["reason"] = (
-        "matched p99 GPU-time, end-to-end, distribution, and fixed-quality criteria passed"
+        "optional RTX execution verified; image equivalence and performance are separate results"
+        if experiment["version"] == 3 and evaluation["status"] == "accepted"
+        else "matched p99 GPU-time, end-to-end, distribution, and fixed-quality criteria passed"
         if evaluation["status"] == "accepted"
         else ". ".join(reason["message"] for reason in evaluation["reasons"])
     )

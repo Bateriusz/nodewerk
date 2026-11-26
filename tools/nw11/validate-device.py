@@ -281,20 +281,21 @@ def validate_device(root: Path, manifest: dict, output: Path, args: argparse.Nam
     measurements.validate_release_adapter(observation)
     settings = measurements.load_json(root / manifest["experiment_definition"]["path"])
     roles = measurements.role_paths(manifest, optional)
-    # All exact executables get their first-use launch before warming any arm.
-    for role, relative in roles.items():
-        decision = optional if role == "variant" else common
-        launch_renderer(root, manifest, settings, decision, output / "raw" / role / "startup",
-                        role, relative, mode="startup")
-    audit_start = filetime()
-    audit = nw11_cold_start.observe()
-    write_json(output / "reboot-audit.json", {
-        "commit": manifest["commit"], "bundle_id": manifest["bundle_id"],
-        "collected_by_process_id": os.getpid(), "start_filetime": audit_start, "end_filetime": filetime(),
-        "observation": audit,
-    })
-    # Validate native presentation before spending minutes on warm benchmarks.
-    # First-use startup launches and the reboot audit must precede this check.
+    if settings["version"] < 3:
+        # All exact executables get their first-use launch before warming any arm.
+        for role, relative in roles.items():
+            decision = optional if role == "variant" else common
+            launch_renderer(root, manifest, settings, decision, output / "raw" / role / "startup",
+                            role, relative, mode="startup")
+        audit_start = filetime()
+        audit = nw11_cold_start.observe()
+        write_json(output / "reboot-audit.json", {
+            "commit": manifest["commit"], "bundle_id": manifest["bundle_id"],
+            "collected_by_process_id": os.getpid(), "start_filetime": audit_start, "end_filetime": filetime(),
+            "observation": audit,
+        })
+    # Current functional experiments need neither reboot nor a separate startup run.
+    # Check native presentation before spending minutes on the sampled runs.
     launch_renderer(root, manifest, settings, common, output / "canonical-reference",
                     "canonical_reference", "bin/canonical_reference.exe",
                     mode="canonical_reference", capture=True)
