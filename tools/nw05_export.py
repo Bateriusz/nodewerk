@@ -3183,6 +3183,14 @@ def export_graph(
             raise ExportError(
                 str(exc), exc.diagnostics, dependency_path=["stateful_extension"]
             ) from exc
+        # build_stateful_package describes the stateful-only package it
+        # returned.  The audio extension is injected after that call, so the
+        # published report must follow the final combined package minor
+        # (2 for stateful + AUDI) instead of the stateful-only value.
+        stateful_report["package_version"] = {
+            "major": nwp.VERSION_MAJOR,
+            "minor": package.version_minor,
+        }
         package_path = output_directory / "common.nwp"
         logical_schedule = schedule.build_logical_schedule(
             package, frames_in_flight=settings.frames_in_flight

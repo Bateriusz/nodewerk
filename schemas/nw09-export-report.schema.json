@@ -29,7 +29,10 @@
       "required": ["major", "minor"],
       "properties": {
         "major": { "const": 1 },
-        "minor": { "const": 1 }
+        "minor": {
+          "type": "integer",
+          "enum": [1, 2]
+        }
       },
       "additionalProperties": false
     },

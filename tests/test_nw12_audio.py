@@ -281,11 +281,13 @@ def test_stateful_audio_export_embeds_payload_and_manifest(tmp_path, test_dxc):
     import nwp_package as nwp
     from audio_song import decode_song
     song = compile_song(fixture())
+    report_path = tmp_path / "export" / "stateful-report.json"
     result = export.export_graph(
         ROOT / "fixtures/nw09/feedback_rect.nwgraph",
         tmp_path / "export",
         allow_test_payloads=True,
         dxc_executable=test_dxc,
+        report_path=report_path,
         settings=export.ExportSettings(
             byte_ceiling=64 * 1024 * 1024,
             memory_budget=256 * 1024 * 1024,
@@ -305,6 +307,15 @@ def test_stateful_audio_export_embeds_payload_and_manifest(tmp_path, test_dxc):
     assert artifact.size_report["audio"]["song_payload_bytes"] == len(song)
     assert artifact.size_report["stateful"]["package_minor"] == 2
     assert artifact.manifest["stateful_extension"]["package_minor"] == 2
+    # The written report and the in-memory result must follow the combined
+    # package minor rather than the stateful-only value from the base build.
+    assert result.report["package_version"] == {"major": 1, "minor": 2}
+    written_report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert written_report["package_version"] == {"major": 1, "minor": 2}
+    from schema_validator import validate_file_against_schema
+    validate_file_against_schema(
+        report_path, ROOT / "schemas" / "nw09-export-report.schema.json"
+    )
     assert nwp.encode_package(decoded) == artifact.package_bytes
     source = export.generate_player_source(
         package_sha256="0" * 64,

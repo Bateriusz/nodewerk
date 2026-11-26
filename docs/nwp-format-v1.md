@@ -81,7 +81,8 @@ History-free exports continue to emit exactly `.nwp` version `1.0` with the
 seven baseline sections and no new bytes. A document that declares NW-09
 History selects the explicit, additive stateful extension:
 
-* header minor version becomes `1`;
+* header minor version becomes `1` (or `2` when the optional audio extension
+  is also present, since the audio minor takes precedence);
 * package `flags` bit 1 (`STATEFUL_EXTENSION_FLAG`) is set;
 * `HIST` is emitted when History records exist;
 * `CKPT` is emitted only when the caller explicitly requests packaged release
