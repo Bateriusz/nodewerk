@@ -136,9 +136,9 @@ def _observation(
         "runtime": {"native_architecture": "x64", "d3d12_dll_version": "10.0.26300.9818",
                     "dxgi_dll_version": "10.0.26300.9818"},
         "format_queries": {
-            "DXGI_FORMAT_R8G8B8A8_UNORM": {"hresult": 0, "support1": 0x2004220, "support2": 0},
-            "DXGI_FORMAT_R32G32B32A32_FLOAT": {"hresult": 0, "support1": 0x4121, "support2": 0x80},
-            "DXGI_FORMAT_R32_UINT": {"hresult": 0, "support1": 0x2000105, "support2": 0},
+            "DXGI_FORMAT_R8G8B8A8_UNORM": {"hresult": 0, "support1": 0x2004320, "support2": 0x80},
+            "DXGI_FORMAT_R32G32B32A32_FLOAT": {"hresult": 0, "support1": 0x2004121, "support2": 0x80},
+            "DXGI_FORMAT_R32_UINT": {"hresult": 0, "support1": 0x2000105, "support2": 0x80},
             "DXGI_FORMAT_D32_FLOAT": {"hresult": 0, "support1": 0x10020, "support2": 0},
         },
         "features": {
@@ -1373,9 +1373,11 @@ def test_nw11_probe_adapter_luid_is_propagated_to_measured_artifacts() -> None:
     runner = (REPO_ROOT / "tools/nw11/validate-device.py").read_text()
     assert "adapter_luid" in probe
     assert '"--adapter-luid"' in main
-    assert "NW11_ADAPTER_LUID" in harness
+    assert "NODEWERK_ADAPTER_LUID" in harness
     production = (REPO_ROOT / "src/player/package_player.cpp").read_text(encoding="utf-8")
-    assert "NW11_ADAPTER_LUID" in production
+    assert "NODEWERK_ADAPTER_LUID" in production
+    assert "NODEWERK_SELECTED_ADAPTER_LUID" in production
+    assert "NODEWERK_ADAPTER_LUID" in runner
     assert "adapter_desc.AdapterLuid" in production
     assert '"--adapter-luid", decision["adapter"]["adapter_luid"]' in runner
     assert 'contract.sha256_file(path) != entry["sha256"]' in runner
@@ -2157,10 +2159,9 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
     put(output / "reboot-audit.json", {**session, "collected_by_process_id": 90,
         "start_filetime": audit_start, "end_filetime": audit_start + 1,
         "observation": {"unavailable": "No access to audit log"}})
-    for role, relative in roles.items():
-        folder = output / "raw" / role
-        for index in range(1, 4):
-            process(folder / f"run-{index}", role, relative, "warm", has_capture=index == 3)
+    settings = _experiment()
+    for role, index in measurements.warm_run_schedule(settings, roles):
+        process(output / "raw" / role / f"run-{index}", role, roles[role], "warm", has_capture=index == 3)
 
     process(output / "canonical-reference", "canonical_reference", "bin/canonical_reference.exe",
             "canonical_reference", has_capture=True)
@@ -2169,7 +2170,9 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
     put(release / "captures.json", captures(release, {}))
     for index, tick in enumerate((*contract.REFERENCE_FIXED_TICKS, contract.LOOP_TICKS), 1):
         player_log = release / f"{tick}.log"
-        player_log.write_text(f"NW05_EXPLICIT_TICK={tick}\n", encoding="utf-8")
+        player_log.write_text(
+            f"NODEWERK_SELECTED_ADAPTER_LUID={common['adapter']['adapter_luid']}\nNW05_EXPLICIT_TICK={tick}\n",
+            encoding="utf-8")
         display = release / f"{tick}-display.json"
         put(display, {"source": "dwm_composed_client", "process_id": 1000 + index, "observed_qpc_ms": 920})
         put(release / f"{tick}-execution.json", {
@@ -2179,6 +2182,7 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
             "player_log_sha256": contract.sha256_file(player_log),
             **session, "executable_sha256": contract.sha256_file(root / "bin/canonical_release.exe"),
             "process_id": 1000 + index, "tick": tick, "start_filetime": 2000 + index,
+            "adapter_luid": common["adapter"]["adapter_luid"],
             "end_filetime": 3000 + index, "player_exit_code": 0, "capture_exit_code": 0,
             "command": ["canonical_release.exe", "--tick", str(tick), "--frames", "1"],
         })
@@ -2246,7 +2250,8 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
     telemetry = changed["runs"][1]["measurement"]["operating_conditions"][2]
     assert telemetry["status"] == "pending"
     assert set(telemetry["reasons"]) == {"windows_power_plan changed after preflight",
-                                         "GPU enforced power limit changed after preflight"}
+                                         "GPU enforced power limit changed after preflight",
+                                         "matched run 2: starting conditions unavailable or not qualified"}
     assert telemetry["samples"][2]["environment"]["temperature_c"] == 38
     put(output / "evidence.json", changed)
     assert verify.main([*arguments, "--require-accepted"]) == verify.EXIT_PENDING
@@ -2313,3 +2318,124 @@ def test_shared_renderer_failure_keeps_native_diagnostic(tmp_path):
     assert "1904x1032" in failure["diagnostic"]["message"]
     assert failure["launch_id"] == launch["launch_id"]
     assert renderer_failure(dict(launch, timed_out=True), log)["code"] == "ProcessTimeout"
+
+
+@pytest.mark.parametrize("status", ["pending", "rejected"])
+def test_nw11_tracked_decision_cannot_claim_contradictory_acceptance(status) -> None:
+    document = json.loads((REPO_ROOT / contract.DECISION_PATH_BY_ID[contract.EXPERIMENT_MESH_ID]).read_text())
+    for item in document["devices"]:
+        item["status"] = status
+    document["aggregate_status"] = "accepted"
+    document["decision_id"] = evidence.decision_id(document)
+    with pytest.raises(evidence.EvidenceError, match="aggregate status"):
+        evidence.validate_decision_document(document, published=True)
+
+
+def test_nw11_published_acceptance_requires_complete_bound_coverage(tmp_path) -> None:
+    root, manifest = _build_bundle(tmp_path)
+    data = _evidence(root, manifest, _experiment(), [
+        _run("baseline", measurement=_measurement(gpu=10.0)),
+        _run("variant", measurement=_measurement(gpu=7.5)),
+        _run("fallback", measurement=_measurement(gpu=10.0)),
+    ])
+    decision = evidence.build_decision_document(
+        evidence=data, experiment=_experiment(), bundle_manifest=manifest,
+        bundle_manifest_sha256=data["bundle_manifest_sha256"])
+    assert evidence.validate_decision_document(decision)["aggregate_status"] == "accepted"
+    with pytest.raises(evidence.EvidenceError, match="complete representative"):
+        evidence.validate_decision_document(decision, published=True)
+    for field in ("fallback_tested", "satisfies_completion"):
+        tampered = dict(decision, **{field: not decision[field]})
+        tampered["decision_id"] = evidence.decision_id(tampered)
+        with pytest.raises(evidence.EvidenceError, match="disagrees"):
+            evidence.validate_decision_document(tampered)
+
+
+@pytest.mark.parametrize("name", ["DXGI_FORMAT_R8G8B8A8_UNORM", "DXGI_FORMAT_R32G32B32A32_FLOAT",
+                                 "DXGI_FORMAT_R32_UINT"])
+@pytest.mark.parametrize("mask,bit", [("support1", 0x100), ("support1", 0x2000000), ("support2", 0x80)])
+def test_production_format_requires_each_load_and_store_bit(name, mask, bit) -> None:
+    observation = _observation()
+    observation["format_queries"][name][mask] &= ~bit
+    # Sampling alone is not shader-load capability.
+    observation["format_queries"][name]["support1"] |= 0x200
+    assert capability._production_format_value(name, observation) == "unsupported"
+
+
+def test_dxdiag_pci_identifiers_use_numeric_identity() -> None:
+    observation = _observation()
+    raw = observation["host_observation"]
+    display = raw["display_devices"][0]
+    display.update(VendorID="10de", DeviceID="00002803", SubSysID="10DE")
+    assert host.qualify(raw, observation["adapter"]) is not None
+    display.pop("SubSysID")
+    assert host.qualify(raw, observation["adapter"]) is not None
+    for value in ("not-a-pci-id", "0x2805"):
+        display["DeviceID"] = value
+        assert host.qualify(raw, observation["adapter"]) is None
+
+
+def test_canonical_adapter_override_accepts_valid_mixed_gpu_host() -> None:
+    observation = _observation()
+    observation["release_default_adapter_luid"] = "00000000:00001234"
+    measurements.validate_release_adapter(observation)
+    observation["adapter"]["adapter_luid"] = "malformed"
+    with pytest.raises(evidence.EvidenceError, match="LUID"):
+        measurements.validate_release_adapter(observation)
+
+
+@pytest.mark.parametrize("experiment_id", [contract.EXPERIMENT_MESH_ID, contract.EXPERIMENT_RAY_ID])
+def test_active_experiment_schema_and_single_process_command(experiment_id, tmp_path) -> None:
+    from schema_validator import ARTIFACT_SCHEMA_MAPPINGS, SchemaValidationError, validate_file_against_schema
+    document = _experiment(experiment_id)
+    relative = contract.EXPERIMENT_PATH_BY_ID[experiment_id]
+    schema = "schemas/nw11-experiment.schema.json"
+    assert (relative, schema) in ARTIFACT_SCHEMA_MAPPINGS
+    arguments = document["execution"]["arguments"]
+    assert arguments[arguments.index("--runs") + 1] == "1"
+    assert document["protocol"]["runs"] == 3
+    for invalid in ("missing", "three-processes"):
+        broken = copy.deepcopy(document)
+        if invalid == "missing":
+            del broken["execution"]
+        else:
+            args = broken["execution"]["arguments"]
+            args[args.index("--runs") + 1] = "3"
+        path = tmp_path / "active.json"
+        path.write_text(json.dumps(broken), encoding="utf-8")
+        with pytest.raises(SchemaValidationError):
+            validate_file_against_schema(path, REPO_ROOT / schema)
+    slug = "mesh-shader" if experiment_id == contract.EXPERIMENT_MESH_ID else "ray-query"
+    record = json.loads((REPO_ROOT / f"benchmarks/experiments/nw11-{slug}-experiment.json").read_text())
+    assert "-TrustRecord" in record["reproducible_command"]
+
+
+def test_matched_schedule_and_prelaunch_conditions() -> None:
+    settings = _experiment()
+    roles = dict.fromkeys(measurements.ROLE_ORDER)
+    order = measurements.warm_run_schedule(settings, roles)
+    assert order == [
+        ("baseline", 1), ("variant", 1), ("fallback", 1),
+        ("variant", 2), ("baseline", 2), ("fallback", 2),
+        ("baseline", 3), ("variant", 3), ("fallback", 3)]
+    launches = [(role, index, {"start_filetime": pos * 10, "end_filetime": pos * 10 + 5})
+                for pos, (role, index) in enumerate(order)]
+    measurements.validate_warm_run_order(settings, roles, launches)
+    wrong = copy.deepcopy(launches)
+    wrong[0][2]["start_filetime"], wrong[1][2]["start_filetime"] = (
+        wrong[1][2]["start_filetime"], wrong[0][2]["start_filetime"])
+    with pytest.raises(evidence.EvidenceError, match="sequence"):
+        measurements.validate_warm_run_order(settings, roles, wrong)
+    env = host.qualify(_host_observation(), _observation()["adapter"])["environment"]
+    base = {"status": "matched", "samples": [{"environment": env}]}
+    variant = copy.deepcopy(base)
+    assert measurements.matched_start_conditions(settings, base, variant) == []
+    variant["samples"][0]["environment"]["temperature_c"] += 6
+    variant["samples"][0]["environment"]["gpu_clocks"]["graphics_clock"]["observed_mhz"] -= 600
+    assert len(measurements.matched_start_conditions(settings, base, variant)) == 2
+
+
+def test_workflow_does_not_warn_report_only_and_preserves_negative_aggregate() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/nw11-advanced-gpu.yml").read_text()
+    assert 'if ($accounting.adoption_budget_status -eq "rejected")' in workflow
+    assert "if: ${{ !cancelled() && hashFiles('build/nw11-decisions.json') != '' }}" in workflow
