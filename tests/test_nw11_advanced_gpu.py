@@ -1591,6 +1591,26 @@ def test_nw11_experiment_runtime_validator_enforces_frozen_guardrails() -> None:
         experiment.validate_experiment(weakened)
 
 
+def test_nw11_renderer_preserves_player_exit_codes_and_repairs_client_geometry() -> None:
+    harness = (
+        REPO_ROOT / "src/nw11/render/nw11_scene_harness.cpp"
+    ).read_text(encoding="utf-8")
+    runner = (REPO_ROOT / "tools/nw11/validate-device.py").read_text(
+        encoding="utf-8"
+    )
+    assert "kExitInitializationFailed" not in harness
+    assert "return static_cast<int>(status);" in harness
+    assert "ExitCodeName(status)" in harness
+    assert "HarnessExitCode::UnhandledFailure" in harness
+    assert "player.present_source_width() != scene::kOutputWidth" in harness
+    assert "player.present_source_height() != scene::kOutputHeight" in harness
+    assert "player.resize(scene::kOutputWidth, scene::kOutputHeight)" in harness
+    assert "presentation_client_geometry_changed" in harness
+    assert '84: "PresentationClientGeometryMismatch"' in runner
+    assert '31: "SwapChainCreationFailed"' in runner
+    assert "RENDERER_EXIT_NAMES.get" in runner
+
+
 def test_nw11_renderer_sources_exist_and_declare_required_d3d12_paths() -> None:
     cmake = (REPO_ROOT / "src/nw11/CMakeLists.txt").read_text(encoding="utf-8")
     for target in (
