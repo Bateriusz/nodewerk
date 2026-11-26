@@ -203,107 +203,168 @@ def _gpu_ceiling_power_limit(gpu: ET.Element) -> float:
     raise ValueError("GPU ceiling power limit is unavailable")
 
 
-def qualify(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Return stable bound provenance only when the physical host is identified."""
-    try:
-        if "unavailable" in raw:
-            return None
-        probe = raw.get("virtualization_probe")
-        host_evaluation = hardware_host.evaluate_physical_virtualization_probe(probe)
-        if host_evaluation["valid"] is not True:
-            return None
-        cim = raw["cim"]
-        system = cim["system"]
-        manufacturer, model = _text(system["Manufacturer"]), _text(system["Model"])
-        hypervisor_present = system["HypervisorPresent"]
-        if (
-            type(hypervisor_present) is not bool
-            or system["PCSystemType"] not in (1, 3)
-            or hypervisor_present is not probe.get("hypervisor_present")
-            or manufacturer.casefold() != _text(probe.get("manufacturer")).casefold()
-            or model.casefold() != _text(probe.get("model")).casefold()
-        ):
-            return None
-        processors = [{"model": _text(item["Name"]), "physical_cores": item["NumberOfCores"]}
-                      for item in cim["processor"]]
-        board = [{"manufacturer": _text(item["Manufacturer"]), "product": _text(item["Product"])}
-                 for item in cim["motherboard"]]
-        memory, logical = system["TotalPhysicalMemory"], system["NumberOfLogicalProcessors"]
-        if not processors or not board or type(memory) is not int or memory <= 0 or type(logical) is not int or logical <= 0:
-            return None
-        if any(type(item["physical_cores"]) is not int or item["physical_cores"] <= 0 for item in processors):
-            return None
-        plan = re.search(r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b",
-                         raw["power_plan"], flags=re.IGNORECASE)
-        pcie = re.findall(r":\s*(0x[0-9a-f]{8})\s*$", raw["pcie_power"], flags=re.MULTILINE | re.IGNORECASE)
-        if plan is None or len(pcie) < 2:
-            return None
+def _qualify_impl(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[str, Any]:
+    """Return stable bound provenance or raise with the exact failed predicate."""
+    if "unavailable" in raw:
+        raise ValueError(f"host observation unavailable: {raw.get('unavailable')}")
+    probe = raw.get("virtualization_probe")
+    host_evaluation = hardware_host.evaluate_physical_virtualization_probe(probe)
+    if host_evaluation["valid"] is not True:
+        detail = "; ".join(host_evaluation.get("reasons") or ["shared physical-host policy rejected the host"])
+        raise ValueError(f"physical-host qualification failed: {detail}")
+    cim = raw["cim"]
+    system = cim["system"]
+    manufacturer, model = _text(system["Manufacturer"]), _text(system["Model"])
+    hypervisor_present = system["HypervisorPresent"]
+    if type(hypervisor_present) is not bool:
+        raise ValueError("Win32_ComputerSystem.HypervisorPresent is not a measured boolean")
+    if system["PCSystemType"] not in (1, 3):
+        raise ValueError(f"Win32_ComputerSystem.PCSystemType={system['PCSystemType']} is not a desktop/workstation")
+    if hypervisor_present is not probe.get("hypervisor_present"):
+        raise ValueError("CIM and shared virtualization probe disagree on HypervisorPresent")
+    if manufacturer.casefold() != _text(probe.get("manufacturer")).casefold():
+        raise ValueError("CIM and shared virtualization probe disagree on system manufacturer")
+    if model.casefold() != _text(probe.get("model")).casefold():
+        raise ValueError("CIM and shared virtualization probe disagree on system model")
 
-        root = ET.fromstring(raw["nvidia_smi_xml"])
-        device_id, vendor_id = adapter["device_id"], adapter["vendor_id"]
-        query_pci = (device_id << 16) | vendor_id
-        def pci_match(gpu: ET.Element) -> bool:
-            try:
-                return hardware_host.parse_pci_hex(
-                    gpu.findtext("pci/pci_device_id")
-                ) == query_pci
-            except ValueError:
-                return False
-        gpu, = [item for item in root.findall("gpu") if pci_match(item)]
-        virtualization = _text(gpu.findtext("gpu_virtualization_mode/virtualization_mode"))
-        if virtualization.casefold() != "none":
-            return None
-        if hardware_host.parse_pci_hex(
-            gpu.findtext("pci/pci_sub_system_id")
-        ) != adapter["subsystem_id"]:
-            return None
-        displays = [row for row in raw["display_devices"] if
-                    str(row.get("VendorID", "")).casefold() == f"0x{vendor_id:04x}"
-                    and str(row.get("DeviceID", "")).casefold() == f"0x{device_id:04x}"
-                    and (not row.get("SubSysID") or
-                         row["SubSysID"].casefold() == f"0x{adapter['subsystem_id']:08x}")]
-        wddm = {_text(row["DriverModel"]) for row in displays}
-        if len(wddm) != 1 or not re.fullmatch(r"WDDM \d+\.\d+", next(iter(wddm))):
-            return None
-        enforced_limit_w = _gpu_ceiling_power_limit(gpu)
-        clocks = {}
-        for kind in ("graphics_clock", "mem_clock"):
-            clocks[kind] = {"observed_mhz": _observed_number(gpu.findtext(f"clocks/{kind}"), "MHz"),
-                            "maximum_mhz": _observed_number(gpu.findtext(f"max_clocks/{kind}"), "MHz")}
-        modes = raw["nvidia_power_profiles"]
-        if set(modes) != set(MEASURED_APPLICATIONS) or any(
-            type(mode["value"]) is not int or mode["value"] not in range(6)
-            or type(mode["location"]) is not int or mode["location"] not in range(4)
-            for mode in modes.values()
-        ):
-            return None
-        return {
-            "execution_environment": {
-                "kind": "physical",
-                "hypervisor_present": hypervisor_present,
-                "hypervisor_explained_by_vbs": host_evaluation[
-                    "hypervisor_explained_by_vbs"
-                ],
-                "gpu_virtualization_mode": virtualization,
-                "documentation": (
-                    "Shared physical-host probe accepts the active hypervisor because VBS "
-                    "independently explains it; NVIDIA reports GPU virtualization mode None."
-                    if hypervisor_present else ""
-                ),
-            },
-            "host": {"manufacturer": manufacturer, "model": model, "cpu": processors,
-                     "motherboard": board, "memory_bytes": memory, "logical_processors": logical},
-            "environment": {
-                "wddm_driver_version": next(iter(wddm)), "windows_power_plan": plan[0].lower(),
-                "nvidia_power_management_mode": modes,
-                "gpu_power_state": {"pstate": _text(gpu.findtext("performance_state")),
-                                    "enforced_limit_w": enforced_limit_w},
-                "pcie_power_management": {"ac": pcie[-2].lower(), "dc": pcie[-1].lower()},
-                "gpu_clocks": clocks, "temperature_c": _observed_number(gpu.findtext("temperature/gpu_temp"), "C"),
-                "nvidia_driver_reported_version": _text(root.findtext("driver_version")),
-                "gpu_uuid": _text(gpu.findtext("uuid")),
-                "gpu_pci_bus": _text(gpu.findtext("pci/pci_bus_id")),
-            },
+    processors = [{"model": _text(item["Name"]), "physical_cores": item["NumberOfCores"]}
+                  for item in cim["processor"]]
+    board = [{"manufacturer": _text(item["Manufacturer"]), "product": _text(item["Product"])}
+             for item in cim["motherboard"]]
+    memory, logical = system["TotalPhysicalMemory"], system["NumberOfLogicalProcessors"]
+    if not processors:
+        raise ValueError("processor inventory is empty")
+    if not board:
+        raise ValueError("motherboard inventory is empty")
+    if type(memory) is not int or memory <= 0:
+        raise ValueError("physical memory inventory is unavailable")
+    if type(logical) is not int or logical <= 0:
+        raise ValueError("logical processor inventory is unavailable")
+    if any(type(item["physical_cores"]) is not int or item["physical_cores"] <= 0 for item in processors):
+        raise ValueError("physical core inventory is unavailable")
+
+    plan = re.search(r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b",
+                     raw["power_plan"], flags=re.IGNORECASE)
+    if plan is None:
+        raise ValueError("active Windows power-plan GUID is unavailable")
+    pcie = re.findall(r":\s*(0x[0-9a-f]{8})\s*$", raw["pcie_power"],
+                      flags=re.MULTILINE | re.IGNORECASE)
+    if len(pcie) < 2:
+        raise ValueError("PCIe AC/DC power-management values are unavailable")
+
+    root = ET.fromstring(raw["nvidia_smi_xml"])
+    device_id, vendor_id = adapter["device_id"], adapter["vendor_id"]
+    query_pci = (device_id << 16) | vendor_id
+
+    def pci_match(gpu: ET.Element) -> bool:
+        try:
+            return hardware_host.parse_pci_hex(
+                gpu.findtext("pci/pci_device_id")
+            ) == query_pci
+        except ValueError:
+            return False
+
+    matching_gpus = [item for item in root.findall("gpu") if pci_match(item)]
+    if len(matching_gpus) != 1:
+        raise ValueError(
+            f"nvidia-smi PCI identity matched {len(matching_gpus)} GPUs; expected exactly one"
+        )
+    gpu = matching_gpus[0]
+    virtualization = _text(gpu.findtext("gpu_virtualization_mode/virtualization_mode"))
+    if virtualization.casefold() != "none":
+        raise ValueError(f"NVIDIA GPU virtualization mode is {virtualization!r}, expected 'None'")
+
+    nvidia_subsystem = hardware_host.parse_pci_hex(gpu.findtext("pci/pci_sub_system_id"))
+    if nvidia_subsystem != adapter["subsystem_id"]:
+        raise ValueError(
+            f"NVIDIA subsystem id 0x{nvidia_subsystem:08x} disagrees with DXGI "
+            f"0x{adapter['subsystem_id']:08x}"
+        )
+
+    displays = [row for row in raw["display_devices"] if
+                str(row.get("VendorID", "")).casefold() == f"0x{vendor_id:04x}"
+                and str(row.get("DeviceID", "")).casefold() == f"0x{device_id:04x}"
+                and (not row.get("SubSysID") or
+                     str(row["SubSysID"]).casefold() == f"0x{adapter['subsystem_id']:08x}")]
+    if not displays:
+        raise ValueError("dxdiag did not expose a display device matching DXGI vendor/device/subsystem identity")
+    wddm = {_text(row["DriverModel"]) for row in displays}
+    if len(wddm) != 1:
+        raise ValueError(f"matching dxdiag rows disagree on WDDM driver model: {sorted(wddm)}")
+    driver_model = next(iter(wddm))
+    if not re.fullmatch(r"WDDM \d+\.\d+", driver_model):
+        raise ValueError(f"dxdiag driver model {driver_model!r} is not a WDDM version")
+
+    enforced_limit_w = _gpu_ceiling_power_limit(gpu)
+    clocks = {}
+    for kind in ("graphics_clock", "mem_clock"):
+        clocks[kind] = {
+            "observed_mhz": _observed_number(gpu.findtext(f"clocks/{kind}"), "MHz"),
+            "maximum_mhz": _observed_number(gpu.findtext(f"max_clocks/{kind}"), "MHz"),
         }
-    except (AttributeError, ValueError, TypeError, KeyError, ET.ParseError):
-        return None
+
+    modes = raw["nvidia_power_profiles"]
+    if set(modes) != set(MEASURED_APPLICATIONS):
+        missing = sorted(set(MEASURED_APPLICATIONS) - set(modes))
+        extra = sorted(set(modes) - set(MEASURED_APPLICATIONS))
+        raise ValueError(f"NVIDIA power-profile coverage mismatch; missing={missing}, extra={extra}")
+    for name, mode in modes.items():
+        if type(mode["value"]) is not int or mode["value"] not in range(6):
+            raise ValueError(f"NVIDIA power-profile value for {name} is invalid: {mode.get('value')!r}")
+        if type(mode["location"]) is not int or mode["location"] not in range(4):
+            raise ValueError(f"NVIDIA power-profile location for {name} is invalid: {mode.get('location')!r}")
+
+    return {
+        "execution_environment": {
+            "kind": "physical",
+            "hypervisor_present": hypervisor_present,
+            "hypervisor_explained_by_vbs": host_evaluation[
+                "hypervisor_explained_by_vbs"
+            ],
+            "gpu_virtualization_mode": virtualization,
+            "documentation": (
+                "Shared physical-host probe accepts the active hypervisor because VBS "
+                "independently explains it; NVIDIA reports GPU virtualization mode None."
+                if hypervisor_present else ""
+            ),
+        },
+        "host": {
+            "manufacturer": manufacturer,
+            "model": model,
+            "cpu": processors,
+            "motherboard": board,
+            "memory_bytes": memory,
+            "logical_processors": logical,
+        },
+        "environment": {
+            "wddm_driver_version": driver_model,
+            "windows_power_plan": plan[0].lower(),
+            "nvidia_power_management_mode": modes,
+            "gpu_power_state": {
+                "pstate": _text(gpu.findtext("performance_state")),
+                "enforced_limit_w": enforced_limit_w,
+            },
+            "pcie_power_management": {"ac": pcie[-2].lower(), "dc": pcie[-1].lower()},
+            "gpu_clocks": clocks,
+            "temperature_c": _observed_number(gpu.findtext("temperature/gpu_temp"), "C"),
+            "nvidia_driver_reported_version": _text(root.findtext("driver_version")),
+            "gpu_uuid": _text(gpu.findtext("uuid")),
+            "gpu_pci_bus": _text(gpu.findtext("pci/pci_bus_id")),
+        },
+    }
+
+
+def qualify_with_diagnostics(
+    raw: Mapping[str, Any], adapter: Mapping[str, Any]
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """Return provenance plus an exact fail-closed rejection reason."""
+    try:
+        return _qualify_impl(raw, adapter), []
+    except (AttributeError, ValueError, TypeError, KeyError, ET.ParseError) as exc:
+        return None, [f"{type(exc).__name__}: {exc}"]
+
+
+def qualify(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Compatibility wrapper used by evidence reconstruction."""
+    provenance, _ = qualify_with_diagnostics(raw, adapter)
+    return provenance
