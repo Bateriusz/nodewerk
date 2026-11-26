@@ -74,7 +74,7 @@ def _build_bundle(
     return target, manifest
 
 
-def _host_observation(device_id: int = 0x2805, *, hypervisor: bool = False) -> dict:
+def _host_observation(device_id: int = 0x2803, *, hypervisor: bool = False) -> dict:
     return {
         "cim": {"system": {"Manufacturer": "Example Computers", "Model": "Desktop",
                            "HypervisorPresent": hypervisor, "PCSystemType": 1,
@@ -115,7 +115,7 @@ def _host_observation(device_id: int = 0x2805, *, hypervisor: bool = False) -> d
 
 def _observation(
     *,
-    device_id: int = 0x2805,
+    device_id: int = 0x2803,
     mesh: str = "D3D12_MESH_SHADER_TIER_1",
     ray: int = 11,
     shader_model: str = "D3D12_SHADER_MODEL_6_7",
@@ -199,7 +199,7 @@ def _measurement(
 def _run(
     role: str,
     *,
-    device_key: str = "pci:10de:2805",
+    device_key: str = "pci:10de:2803",
     environment_key: str = "sha256:v1:" + "a" * 64,
     tier: str = "desktop_ada_representative",
     status: str = "eligible",
@@ -555,6 +555,12 @@ def test_nw11_production_format_preflight_uses_observed_support_masks() -> None:
     assert capability.evaluate_observation(profile, observation)["status"] == "pending"
 
 
+def test_nw11_physical_tier_uses_observed_rtx_4060_ti_pci_id() -> None:
+    assert capability.physical_device_tier("pci:10de:2803") == "desktop_ada_representative"
+    assert capability.physical_device_tier("pci:10de:2805") is None
+    assert capability.physical_device_tier("pci:10de:2c05") == "desktop_blackwell_representative"
+
+
 def test_nw11_physical_tier_and_environment_bind_host_provenance(tmp_path: Path) -> None:
     profile = capability.profile_manifest_template(contract.COMMON_PROFILE_ID)
     observation = _observation()
@@ -698,7 +704,7 @@ def test_nw11_matched_run_evaluation_rejects_regressions(
     _root, manifest = _build_bundle(tmp_path)
     document = _experiment()
     payload = {
-        "device_key": "pci:10de:2805",
+        "device_key": "pci:10de:2803",
         "environment_key": "sha256:v1:" + "a" * 64,
         "baseline": _measurement(gpu=10.0),
         "variant": measurement.get("variant", _measurement(gpu=7.5)),
@@ -708,7 +714,7 @@ def test_nw11_matched_run_evaluation_rejects_regressions(
     result = experiment.evaluate_experiment(
         document,
         payload,
-        device_key="pci:10de:2805",
+        device_key="pci:10de:2803",
         environment_key="sha256:v1:" + "a" * 64,
     )
     assert result["status"] == expected
@@ -721,7 +727,7 @@ def test_nw11_evaluation_never_crosses_device_or_environment(
 ) -> None:
     document = _experiment()
     payload = {
-        "device_key": "pci:10de:2805",
+        "device_key": "pci:10de:2803",
         "environment_key": "sha256:v1:" + "a" * 64,
         "baseline": _measurement(gpu=10.0),
         "variant": _measurement(gpu=7.5),
@@ -737,7 +743,7 @@ def test_nw11_evaluation_never_crosses_device_or_environment(
         experiment.evaluate_experiment(
             document,
             payload,
-            device_key="pci:10de:2805",
+            device_key="pci:10de:2803",
             environment_key="sha256:v1:" + "b" * 64,
         )
 
@@ -965,7 +971,7 @@ def test_nw11_host_requires_vbs_to_explain_active_hypervisor() -> None:
     raw = _host_observation(hypervisor=True)
     raw["virtualization_probe"]["virtualization_based_security_status"] = 0
     qualified = host.qualify(
-        raw, {"vendor_id": 0x10DE, "device_id": 0x2805, "subsystem_id": 0x10DE}
+        raw, {"vendor_id": 0x10DE, "device_id": 0x2803, "subsystem_id": 0x10DE}
     )
     assert qualified is None
 
@@ -978,7 +984,7 @@ def test_nw11_host_accepts_nested_gpu_ceiling_power_limit() -> None:
         "</gpu_ceiling_power_limit></gpu_power_readings>",
     )
     qualified = host.qualify(
-        raw, {"vendor_id": 0x10DE, "device_id": 0x2805, "subsystem_id": 0x10DE}
+        raw, {"vendor_id": 0x10DE, "device_id": 0x2803, "subsystem_id": 0x10DE}
     )
     assert qualified is not None
     assert qualified["environment"]["gpu_power_state"]["enforced_limit_w"] == 165.0
@@ -992,7 +998,7 @@ def test_nw11_host_rejects_default_only_gpu_power_limit() -> None:
         "</gpu_ceiling_power_limit></gpu_power_readings>",
     )
     qualified, reasons = host.qualify_with_diagnostics(
-        raw, {"vendor_id": 0x10DE, "device_id": 0x2805, "subsystem_id": 0x10DE}
+        raw, {"vendor_id": 0x10DE, "device_id": 0x2803, "subsystem_id": 0x10DE}
     )
     assert qualified is None
     assert reasons == ["ValueError: GPU ceiling power limit is unavailable"]
@@ -1001,7 +1007,7 @@ def test_nw11_host_rejects_default_only_gpu_power_limit() -> None:
 def test_nw11_host_accepts_nvidia_pci_ids_without_0x_prefix() -> None:
     raw = _host_observation(hypervisor=True)
     raw["nvidia_smi_xml"] = raw["nvidia_smi_xml"].replace("<pci_device_id>0x", "<pci_device_id>")
-    qualified = host.qualify(raw, {"vendor_id": 0x10DE, "device_id": 0x2805, "subsystem_id": 0x10DE})
+    qualified = host.qualify(raw, {"vendor_id": 0x10DE, "device_id": 0x2803, "subsystem_id": 0x10DE})
     assert qualified is not None
     assert qualified["execution_environment"]["hypervisor_present"] is True
     assert qualified["execution_environment"]["gpu_virtualization_mode"] == "None"
@@ -1648,9 +1654,9 @@ def test_nw11_failed_run_cannot_be_hidden_in_aggregate() -> None:
     # Seven spikes fail p99 within one run but could disappear across 1,800 samples.
     base["process_runs"][0]["gpu_time_samples"][:7] = [24.0] * 7
     result = experiment.evaluate_experiment(
-        _experiment(), {"device_key": "pci:10de:2805", "environment_key": "host",
+        _experiment(), {"device_key": "pci:10de:2803", "environment_key": "host",
                         "baseline": base, "variant": variant},
-        device_key="pci:10de:2805", environment_key="host",
+        device_key="pci:10de:2803", environment_key="host",
     )
     assert result["status"] == "rejected"
     assert "NW11-NW07-REFERENCE-GATE" in {reason["code"] for reason in result["reasons"]}
