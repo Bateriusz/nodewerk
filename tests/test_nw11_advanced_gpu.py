@@ -817,12 +817,14 @@ def test_nw11_per_device_decisions_are_isolated(tmp_path: Path) -> None:
     assert blackwell_decisions["satisfies_completion"] is False
     blackwell_evidence["runs"][1]["measurement"] = _measurement(gpu=9.5)
     blackwell_evidence = _evidence(root, manifest, document, blackwell_evidence["runs"])
-    rejected = evidence.build_decision_document(
+    slower = evidence.build_decision_document(
         evidence=blackwell_evidence, experiment=document, bundle_manifest=manifest,
         bundle_manifest_sha256=blackwell_evidence["bundle_manifest_sha256"],
     )
-    both = evidence.aggregate_verified_decisions([decisions, rejected])
-    assert [item["status"] for item in both["devices"]] == ["accepted", "rejected"]
+    both = evidence.aggregate_verified_decisions([decisions, slower])
+    assert [item["status"] for item in both["devices"]] == ["accepted", "accepted"]
+    assert [item["performance_status"] for item in both["devices"]] == ["target_met", "target_not_met"]
+    assert all(item["functional_status"] == "verified" for item in both["devices"])
     assert both["satisfies_completion"] is False
     failed = evidence.aggregate_verified_decisions(
         [decisions, blackwell_decisions], cross_device_equivalence={"status": "failed"})
@@ -830,15 +832,15 @@ def test_nw11_per_device_decisions_are_isolated(tmp_path: Path) -> None:
     assert [item["status"] for item in failed["devices"]] == ["accepted", "accepted"]
     assert failed["satisfies_completion"] is False
     with pytest.raises(evidence.EvidenceError, match="comparison rows"):
-        evidence.aggregate_verified_decisions([decisions, rejected],
+        evidence.aggregate_verified_decisions([decisions, slower],
                                              cross_device_equivalence={"status": "verified"})
-    for item in (decisions, rejected):
+    for item in (decisions, slower):
         item["devices"][0]["canonical_release_correctness"] = {"numeric_loop_boundary": {"status": "verified"}}
         item["decision_id"] = evidence.decision_id(item)
     comparison = {"status": "verified", "tolerance": nw07_contract.IMAGE_ABSOLUTE_TOLERANCE,
                   "rows": {str(tick): {"maximum_error": 0, "maximum_relative_error": 0}
                            for tick in contract.REFERENCE_FIXED_TICKS}}
-    crossed = evidence.aggregate_verified_decisions([decisions, rejected], cross_device_equivalence=comparison)
+    crossed = evidence.aggregate_verified_decisions([decisions, slower], cross_device_equivalence=comparison)
     assert crossed["satisfies_completion"] is True
     for bad_row in (None, {"maximum_error": 1, "maximum_relative_error": 0},
                     {"maximum_error": 0, "maximum_relative_error": float("inf")},
