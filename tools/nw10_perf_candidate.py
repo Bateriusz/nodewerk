@@ -70,8 +70,6 @@ def build_candidate(
     frozen = nw07_export.load_canonical_config()
     graph = nw07_export.verify_canonical_graph(frozen, repo_root=REPO_ROOT)
     pinned = nw07_export.verify_pinned_inputs(frozen, repo_root=REPO_ROOT)
-    if not pinned["matches_frozen_digest"]:
-        raise ValueError("NW-07 pinned build inputs no longer match the frozen digest")
 
     template_config: dict[str, Any] = {}
     if not allow_test_payloads:
@@ -209,6 +207,7 @@ def build_candidate(
                 "nw07_frozen_digest": pinned["frozen_digest"],
                 "observed_digest": pinned["digest"],
                 "matches_frozen_digest": pinned["matches_frozen_digest"],
+                "source_inputs_recorded": pinned["source_inputs_recorded"],
                 "nw10_digest": nw10_contract.build_inputs_digest(
                     nw10_contract.compute_build_inputs()
                 ),

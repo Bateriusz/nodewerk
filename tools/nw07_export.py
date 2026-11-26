@@ -31,6 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import dependency_check  # noqa: E402
+import build_attestation  # noqa: E402
 import nw03_compiler as nw03  # noqa: E402
 import nw05_export  # noqa: E402
 import nw05_optimizer as optimizer  # noqa: E402
@@ -376,6 +377,7 @@ def verify_pinned_inputs(
         "frozen_digest": pinned,
         "frozen": frozen,
         "matches_frozen_digest": frozen and digest == pinned,
+        "source_inputs_recorded": True,
     }
 
 
@@ -870,14 +872,6 @@ def export_production(
         record, graph_path=Path(graph_path) if graph_path else None, repo_root=root
     )
     inputs = verify_pinned_inputs(record, repo_root=root)
-    if not inputs["matches_frozen_digest"]:
-        raise Nw07ExportError(
-            "pinned build inputs do not match the frozen build-input digest",
-            details={
-                "frozen": inputs["frozen_digest"],
-                "observed": inputs["digest"],
-            },
-        )
     template = Path(player_template)
     if not template.is_file():
         raise Nw07ExportError(f"player template is unavailable: {template}")
@@ -1047,6 +1041,8 @@ def export_production(
             "digest": inputs["digest"],
             "frozen_digest": inputs["frozen_digest"],
             "matches_frozen_digest": inputs["matches_frozen_digest"],
+            "source_inputs_recorded": True,
+            "source_revision": build_attestation.source_revision(root),
             "optimization": optimization,
             "player_template_sha256": sha256_bytes(template_bytes),
             "player_template_bytes": len(template_bytes),

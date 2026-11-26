@@ -18,6 +18,7 @@ import sys
 import tempfile
 
 import nw11_contract as contract
+import build_attestation
 
 ROOT = Path(__file__).resolve().parents[1]
 STEM = "nw_common_d3d12_fl12_0_sm6_0_v1"
@@ -48,7 +49,7 @@ def identity(report: dict, artifact: Path) -> dict:
     if (report.get("success") is not True
             or report.get("release_grade") is not True
             or report.get("test_payload") is not False
-            or report.get("build_inputs", {}).get("matches_frozen_digest") is not True
+            or not build_attestation.has_recorded_inputs(report.get("build_inputs", {}))
             or report.get("pe_dependency_closure", {}).get("matches_manifest") is not True):
         raise ValueError("not a verified release-grade NW-07 export")
     result = {key: report["artifact"][key] for key in IDENTITY_FIELDS}

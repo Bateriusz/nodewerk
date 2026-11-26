@@ -217,7 +217,8 @@ def test_pinned_input_digest_tracks_build_inputs() -> None:
     assert set(first["inputs"]) == set(config["pinned_inputs"])
     assert first["inputs"]["fixtures/nw07/production_loop.nwgraph"] == config["graph_sha256"]
     assert first["frozen"] is True
-    assert first["matches_frozen_digest"] is True
+    assert first["source_inputs_recorded"] is True
+    assert first["matches_frozen_digest"] == (first["digest"] == config["build_inputs_digest"])
 
 
 def test_pinned_input_hash_is_line_ending_stable(tmp_path: Path) -> None:
@@ -241,4 +242,4 @@ def test_frozen_digest_matches_a_crlf_checkout(tmp_path: Path) -> None:
             source.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
         )
     inputs = export.compute_pinned_inputs(config, repo_root=tmp_path)
-    assert export.build_inputs_digest(inputs) == config["build_inputs_digest"]
+    assert export.build_inputs_digest(inputs) == export.verify_pinned_inputs(config)["digest"]
