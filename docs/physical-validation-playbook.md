@@ -8,6 +8,7 @@ decoding, or evidence identity rules locally.
 The shared implementation is:
 
 - `tools/hardware_evidence_host.py`
+- `tools/hardware_evidence_devices.py`
 - `hardware_evidence_host.windows_virtualization_probe()`
 - `hardware_evidence_host.evaluate_physical_virtualization_probe()`
 - `hardware_evidence_host.decode_windows_output()`
@@ -66,6 +67,28 @@ Parsers must accept the documented old/new nesting for the same semantic signal,
 while preserving the distinction between the currently enforced/current ceiling
 and merely requested/default limits. Missing current/enforced telemetry remains
 unavailable; do not promote a default/requested value to measured current state.
+
+### Physical GPU identities have one repository source of truth
+
+Do not copy PCI vendor/device IDs from task-local performance contracts,
+comments, model-name tables, or previous experiment code.
+
+The authoritative representative-device registry is
+`tools/hardware_evidence_devices.py`. Its Ada and Blackwell identities are
+regression-checked against the verified NW-01 hardware baselines under
+`benchmarks/hardware/`.
+
+This distinction matters because `nw07_perf_ref_v1` historically froze an
+RTX 4060 Ti device id of `0x2805` while the verified NW-01 physical baseline
+and later capability probes measure `0x2803`. That NW-07 v1 value remains
+preserved only for frozen-contract audit/change-control and must never be used
+as a physical-tier classifier for later tasks.
+
+Task-specific code may cross-check subsystem IDs, LUIDs, capability support and
+other experiment-specific details, but representative vendor/device tier
+classification must come from the shared registry. A mismatch between the
+registry and a verified hardware baseline is a CI failure, not something to
+rediscover during a physical run.
 
 ### Hardware identifiers have multiple textual representations
 
@@ -134,9 +157,10 @@ A new issue that requires physical Windows/GPU validation should explicitly
 state:
 
 > Reuse `docs/physical-validation-playbook.md` and the repository shared
-> physical-host/evidence helpers. Do not introduce task-local host/VM
-> classification, locale-dependent Windows subprocess decoding, PCI-ID parsing,
-> Present/cold-start semantics, or artifact-binding rules unless the shared
+> physical-host/evidence helpers and the shared physical-device registry.
+> Do not introduce task-local host/VM classification, representative PCI
+> vendor/device mappings, locale-dependent Windows subprocess decoding, PCI-ID
+> parsing, Present/cold-start semantics, or artifact-binding rules unless the shared
 > contract is intentionally being extended with regression tests.
 
 If a task discovers a new reusable environmental failure mode, fix the shared
@@ -152,8 +176,9 @@ only in a PR review comment or a task-specific script.
    use the shared fail-closed policy.
 4. Windows subprocess output is decoded through the shared locale-independent
    path.
-5. GPU PCI identity and driver/WDDM identity agree across the independent
-   probes.
+5. Representative GPU vendor/device identity comes from
+   `hardware_evidence_devices.py`, and the observed PCI identity plus
+   driver/WDDM identity agree across the independent probes.
 6. Power plan, PCIe power management, clocks, power limit and temperature are
    observed rather than operator-invented.
 7. For cold-start qualification, audit prerequisites are enabled and the host
