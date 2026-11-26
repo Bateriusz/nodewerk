@@ -368,8 +368,16 @@ reboot. It needs permission to read the Security log and query the system
 audit policy. Incomplete audit
 coverage, a prior launch, or an unverified boot leaves cold startup pending.
 The launcher runs each cold process before any warm process. Warm
-measurements use three fresh 60-second uncapped processes with a five-second
-warm-up each. [Microsoft Audit Process Creation](https://learn.microsoft.com/windows/security/threat-protection/auditing/audit-process-creation)
+measurements use three fresh 60-second uncapped processes per role, with a
+five-second warm-up each. For active v2 the declared order is baseline,
+variant, fallback in round one, variant, baseline, fallback in round two,
+and baseline, variant, fallback in round three (omit the variant only
+when ineligible). The verifier reconstructs chronological order from bound
+launch timestamps and rejects overlaps or a different sequence. Each
+baseline/variant pair must begin within 5 C and within 20% of the reported
+maximum graphics and memory clocks in their respective domains; unavailable
+or mismatched starting conditions remain pending. Workload-induced clock
+and temperature changes are recorded, not required to be identical. [Microsoft Audit Process Creation](https://learn.microsoft.com/windows/security/threat-protection/auditing/audit-process-creation)
 
 The per-process windows bind production CPU command-recording and submission
 samples through DXGI Present with PresentMon GPU frame times and displayed intervals. Dropped
@@ -378,7 +386,10 @@ must meet the relative GPU criterion and the end-to-end guardrails. Both Ada and
 [PresentMon 2.3.1 console metrics](https://github.com/GameTechDev/PresentMon/blob/v2.3.1/README-ConsoleApplication.md)
 
 The canonical correctness check launches the exact NW-07 release executable
-covered by the independent same-revision reproducibility proof. It uses the release fixed-tick
+covered by the independent same-revision reproducibility proof. It explicitly
+selects the probe-qualified LUID using the shared `NODEWERK_ADAPTER_LUID`
+mechanism, and verifies the actual DXGI adapter reported by the release.
+The default first-compatible adapter may differ on multi-GPU hosts. It uses the release fixed-tick
 `--tick N --frames 1` interface. The capture probe uses a DWM composition
 flush and the visible foreground client pixels to observe the held frame within
 the startup ceiling. It recognizes the scene using sample pixels and records
