@@ -20,6 +20,12 @@ from nw11_contract import (  # type: ignore[import-not-found]
     DEVICE_TIERS,
     EVIDENCE_STATUSES,
     EXPERIMENT_PATH_BY_ID,
+    EXPERIMENT_MESH_ID,
+    EXPERIMENT_RAY_ID,
+    MESH_PROFILE_ID,
+    RAY_QUERY_PROFILE_ID,
+    MESH_FALLBACK_ARTIFACT_ID,
+    RAY_FALLBACK_ARTIFACT_ID,
     IMPLEMENTATION_BASE,
     TASK,
     canonical_json_bytes,
@@ -815,8 +821,29 @@ def _cross_device_verified(comparison: Mapping[str, Any], devices: list[dict[str
                .get("status") == "verified" for item in devices)
 
 
-def validate_decision_document(document: Mapping[str, Any], *, published: bool = False) -> dict[str, Any]:
+def validate_decision_document(
+    document: Mapping[str, Any], *, published: bool = False,
+    expected_experiment_id: str | None = None,
+    expected_experiment: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     record = _mapping(document, "decision document")
+    identities = {
+        EXPERIMENT_MESH_ID: (MESH_PROFILE_ID, MESH_FALLBACK_ARTIFACT_ID),
+        EXPERIMENT_RAY_ID: (RAY_QUERY_PROFILE_ID, RAY_FALLBACK_ARTIFACT_ID),
+    }
+    experiment_id = record.get("experiment_id")
+    if not isinstance(experiment_id, str) or experiment_id not in identities:
+        raise EvidenceError("decision has an unknown experiment identity")
+    if expected_experiment_id is not None and experiment_id != expected_experiment_id:
+        raise EvidenceError("decision experiment identity differs from expected experiment")
+    profile_id, fallback_id = identities[experiment_id]
+    if (record.get("variant_profile_id"), record.get("fallback_artifact_id")) != (profile_id, fallback_id):
+        raise EvidenceError("decision profile or fallback identity differs from its experiment")
+    if expected_experiment is not None and any(
+        record.get(key) != expected_experiment.get(key)
+        for key in ("experiment_id", "variant_profile_id", "fallback_artifact_id")
+    ):
+        raise EvidenceError("decision identities differ from the expected experiment definition")
     if record.get("format") != DECISIONS_FORMAT:
         raise EvidenceError("decision document has the wrong format")
     if record.get("version") != DECISIONS_VERSION:

@@ -91,11 +91,15 @@ def _validate_tracked(root: Path) -> dict[str, Any]:
     for experiment_id, relative in contract.EXPERIMENT_PATH_BY_ID.items():
         experiments[experiment_id] = experiment.load_experiment(path=root / relative)
         experiment.validate_experiment(experiments[experiment_id], repo_root=root)
+        if experiments[experiment_id]["experiment_id"] != experiment_id:
+            raise evidence.EvidenceError("tracked definition experiment identity differs from expected experiment")
     matrix = followup.load_matrix(root / contract.FOLLOWUP_MATRIX_PATH)
     shader_contract = bundle.validate_variant_sources(root)
     decisions = {
         experiment_id: evidence.validate_decision_document(
-            _load_json(root / relative), published=True
+            _load_json(root / relative), published=True,
+            expected_experiment_id=experiment_id,
+            expected_experiment=experiments[experiment_id],
         )
         for experiment_id, relative in contract.DECISION_PATH_BY_ID.items()
     }

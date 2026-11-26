@@ -2279,6 +2279,33 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
     assert public["satisfies_completion"]
     assert public["commit"] == COMMIT
     assert public["devices"][0]["raw_aggregate_decision_id"] == aggregate["decision_id"]
+    assert evidence.validate_decision_document(
+        public, published=True, expected_experiment=_experiment(version=protocol_version)
+    ) == public
+    for field, value in (("variant_profile_id", contract.RAY_QUERY_PROFILE_ID),
+                         ("fallback_artifact_id", contract.RAY_FALLBACK_ARTIFACT_ID)):
+        wrong = dict(public, **{field: value})
+        wrong["decision_id"] = evidence.decision_id(wrong)
+        with pytest.raises(evidence.EvidenceError, match="identity"):
+            evidence.validate_decision_document(wrong, published=True)
+    wrong_manifest = dict(manifest, experiment_id=contract.EXPERIMENT_RAY_ID)
+    with pytest.raises(evidence.EvidenceError, match="expected experiment"):
+        projection(aggregate, wrong_manifest, protocol_version)
+
+    # A complete and valid mesh decision must not qualify the ray-query slot.
+    ray_path = REPO_ROOT / contract.DECISION_PATH_BY_ID[contract.EXPERIMENT_RAY_ID]
+    original_load = verify._load_json
+    with monkeypatch.context() as patch:
+        patch.setattr(verify, "_load_json", lambda path:
+                      public if Path(path) == ray_path else original_load(path))
+        with pytest.raises(evidence.EvidenceError, match="expected experiment"):
+            verify._validate_tracked(REPO_ROOT)
+    from schema_validator import validate_file_against_schema, SchemaValidationError
+    wrong_path = tmp_path / "nw11" / "decisions" / ray_path.name
+    wrong_path.parent.mkdir(parents=True)
+    put(wrong_path, public)
+    with pytest.raises(SchemaValidationError, match="expected experiment"):
+        validate_file_against_schema(wrong_path, REPO_ROOT / "schemas/nw11-decision.schema.json")
     assert public["devices"][0]["metrics"]["variant"]["process_runs"][0]["displayed_presents"] is None
     encoded = json.dumps(public)
     assert str(output) not in encoded
@@ -2287,6 +2314,35 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
     log_path.write_text("warning: 123 ETW events were lost.\n")
     lossy = measurements.collect(root, manifest, output, "evidence.json")
     assert lossy["runs"][1]["measurement"]["process_runs"][0]["presentation_telemetry_status"] == "unavailable"
+    log_path.write_text("Started recording.\nStopped recording.\n")
+    header = csv_bytes.splitlines()[0]
+    import csv
+    pid = measurements.load_json(csv_path.parent / "launch.json")["process_id"]
+    malformed_inputs = [
+        header + f"\n{pid},5200,0,abc,7.5,16\n".encode(),  # truncated DisplayLatency
+        header + f"\n{pid},5200,0,abc,7.5,16,25,".encode() + b"x" * (csv.field_size_limit() + 1),
+        header + f'\n{pid},5200,0,abc,7.5,16,"unterminated'.encode(),
+        header + f"\n{pid},nan,0,abc,7.5,16,25\n".encode(),
+    ]
+    for malformed in malformed_inputs:
+        csv_path.write_bytes(malformed)
+        launch = measurements.load_json(csv_path.parent / "launch.json")
+        native = measurements.load_json(csv_path.parent / "report.json")
+        protocol = contract.role_protocol(settings, "variant")
+        with pytest.raises(evidence.EvidenceError, match="PresentMon"):
+            measurements._warm_run(csv_path.parent, launch, native, protocol, optional_etw=False)
+        recovered = measurements.collect(root, manifest, output, "evidence.json")
+        assert recovered["raw_inputs"]["raw/variant/run-1/presentmon.csv"] == contract.sha256_file(csv_path)
+        assert recovered["runs"][1]["measurement"]["process_runs"][0]["presentation_telemetry_status"] == "unavailable"
+        put(output / "evidence.json", recovered)
+        assert verify.main([*arguments, "--require-accepted"]) == verify.EXIT_OK
+        recovered_device = measurements.load_json(output / "decisions.json")["devices"][0]
+        assert recovered_device["functional_status"] == "verified"
+        assert recovered_device["performance_status"] == "inconclusive"
+        assert recovered_device["primary"]["baseline"] is None
+        assert recovered_device["metrics"]["variant"]["process_runs"][0]["displayed_presents"] is None
+        assert csv_path.read_bytes() == malformed
+    csv_path.write_bytes(csv_bytes)
     log_path.unlink()
     if protocol_version == 4:
         return

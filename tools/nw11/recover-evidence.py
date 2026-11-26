@@ -54,7 +54,13 @@ def image_projection(image: dict) -> dict:
 
 
 def public_projection(raw: dict, manifest: dict, protocol_version: int) -> dict:
-    evidence.validate_decision_document(raw, published=True)
+    evidence.validate_decision_document(raw, published=True,
+                                        expected_experiment_id=manifest["experiment_id"])
+    for decision_key, manifest_key in (("commit", "commit"), ("bundle_id", "bundle_id"),
+                                       ("variant_profile_id", "profile_id"),
+                                       ("fallback_artifact_id", "fallback_artifact_id")):
+        if raw.get(decision_key) != manifest.get(manifest_key):
+            raise evidence.EvidenceError("public projection decision differs from the measured bundle")
     if raw["aggregate_status"] != "accepted" or not raw["satisfies_completion"]:
         raise evidence.EvidenceError("Public functional acceptance needs both verified devices")
     result = {key: raw[key] for key in (

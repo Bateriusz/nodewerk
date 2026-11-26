@@ -212,17 +212,40 @@ def _validate_launch(folder: Path, manifest: dict, decision: dict, relative: str
 def presentation_samples(path: Path, launch: dict, timing: dict, minimum: int) -> dict:
     begin, end = timing["measurement_start_qpc_ms"], timing["measurement_end_qpc_ms"]
     rows = []
-    with path.open(encoding="utf-8-sig", newline="") as stream:
-        for row in csv.DictReader(stream):
-            if row.get("ProcessID") != str(launch["process_id"]):
-                continue
-            stamp = float(row["CPUStartQPCTime"])
-            if begin <= stamp <= end:
-                if row.get("SyncInterval") != "0":
-                    raise evidence.EvidenceError("PresentMon observed a capped or overridden sync interval")
-                if "DisplayedTime" not in row or "DisplayLatency" not in row:
-                    raise evidence.EvidenceError("PresentMon display telemetry is missing")
-                rows.append(row)
+    required = {"ProcessID", "CPUStartQPCTime", "SyncInterval", "SwapChainAddress",
+                "DisplayedTime", "DisplayLatency"}
+    try:
+        with path.open(encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream, strict=True)
+            fields = reader.fieldnames or []
+            if (not required <= set(fields) or len(fields) != len(set(fields))
+                    or not {"GPUTime", "MsGPUTime"}.intersection(fields)):
+                raise evidence.EvidenceError("Malformed PresentMon CSV header")
+            for row in reader:
+                if None in row or any(not isinstance(value, str) for value in row.values()):
+                    raise evidence.EvidenceError("Malformed or truncated PresentMon CSV row")
+                if row["ProcessID"] != str(launch["process_id"]):
+                    continue
+                stamp = float(row["CPUStartQPCTime"])
+                if not math.isfinite(stamp):
+                    raise evidence.EvidenceError("Invalid PresentMon timestamp")
+                if begin <= stamp <= end:
+                    if row["SyncInterval"] != "0":
+                        raise evidence.EvidenceError("PresentMon observed a capped or overridden sync interval")
+                    if not row["SwapChainAddress"].strip():
+                        raise evidence.EvidenceError("PresentMon swap-chain identity is missing")
+                    latency = row["DisplayLatency"].strip()
+                    if latency.upper() not in {"NA", "N/A", "NAN", ""}:
+                        value = float(latency)
+                        if not math.isfinite(value) or value < 0:
+                            raise evidence.EvidenceError("Invalid PresentMon display latency")
+                    rows.append(row)
+    except csv.Error as exc:
+        raise evidence.EvidenceError("Malformed PresentMon CSV") from exc
+    except (ValueError, TypeError, AttributeError) as exc:
+        if isinstance(exc, evidence.EvidenceError):
+            raise
+        raise evidence.EvidenceError("Invalid PresentMon CSV field") from exc
     if len({row["SwapChainAddress"] for row in rows}) != 1:
         raise evidence.EvidenceError("Expected exactly one measured PresentMon swap chain")
     gpu, _, displayed = extract_samples(rows, process_id=launch["process_id"])

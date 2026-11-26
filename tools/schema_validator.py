@@ -1005,8 +1005,13 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
         except Exception as exc:  # pragma: no cover - import guard
             raise SchemaValidationError(f"{doc_path}: cannot load NW-11 evidence module: {exc}")
         try:
+            import nw11_contract
+            published = doc_path.parent.name == "decisions" and doc_path.parent.parent.name == "nw11"
+            expected_id = next((experiment_id for experiment_id, relative in
+                                nw11_contract.DECISION_PATH_BY_ID.items()
+                                if Path(relative).name == doc_path.name), None) if published else None
             nw11_evidence.validate_decision_document(
-                instance, published=doc_path.parent.name == "decisions" and doc_path.parent.parent.name == "nw11")
+                instance, published=published, expected_experiment_id=expected_id)
         except nw11_evidence.EvidenceError as exc:
             raise SchemaValidationError(f"{doc_path}: {exc}") from exc
         if instance.get("aggregate_status") == "pending" and instance.get(
