@@ -2184,7 +2184,7 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
             "process_id": 1000 + index, "tick": tick, "start_filetime": 2000 + index,
             "adapter_luid": common["adapter"]["adapter_luid"],
             "end_filetime": 3000 + index, "player_exit_code": 0, "capture_exit_code": 0,
-            "command": ["canonical_release.exe", "--tick", str(tick), "--frames", "1"],
+            "command": ["canonical_release.exe", "--tick", str(tick), "--frames", "1", "--borderless"],
         })
 
     windowed_report = output / "raw/baseline/run-1/report.json"
