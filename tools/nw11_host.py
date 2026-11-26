@@ -178,6 +178,33 @@ def _observed_number(value: str, suffix: str) -> float:
     return float(match[1])
 
 
+def _gpu_ceiling_power_limit(gpu: ET.Element) -> float:
+    """Read the GPU ceiling limit across old and new nvidia-smi XML layouts."""
+    containers = [
+        gpu.find("gpu_power_readings"),
+        gpu.find("power_readings"),
+    ]
+    preferred_tags = (
+        "enforced_power_limit",
+        "current_power_limit",
+        "requested_power_limit",
+        "power_limit",
+        "default_power_limit",
+    )
+    for container in containers:
+        if container is None:
+            continue
+        descendants = list(container.iter())
+        for tag in preferred_tags:
+            for node in descendants:
+                if node.tag == tag and node.text:
+                    try:
+                        return _observed_number(node.text, "W")
+                    except ValueError:
+                        continue
+    raise ValueError("GPU ceiling power limit is unavailable")
+
+
 def qualify(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[str, Any] | None:
     """Return stable bound provenance only when the physical host is identified."""
     try:
@@ -240,9 +267,7 @@ def qualify(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[str, Any
         wddm = {_text(row["DriverModel"]) for row in displays}
         if len(wddm) != 1 or not re.fullmatch(r"WDDM \d+\.\d+", next(iter(wddm))):
             return None
-        limit = gpu.findtext("gpu_power_readings/enforced_power_limit") or gpu.findtext("power_readings/enforced_power_limit")
-        if not limit:
-            limit = gpu.findtext("gpu_power_readings/current_power_limit") or gpu.findtext("power_readings/power_limit")
+        enforced_limit_w = _gpu_ceiling_power_limit(gpu)
         clocks = {}
         for kind in ("graphics_clock", "mem_clock"):
             clocks[kind] = {"observed_mhz": _observed_number(gpu.findtext(f"clocks/{kind}"), "MHz"),
@@ -274,7 +299,7 @@ def qualify(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[str, Any
                 "wddm_driver_version": next(iter(wddm)), "windows_power_plan": plan[0].lower(),
                 "nvidia_power_management_mode": modes,
                 "gpu_power_state": {"pstate": _text(gpu.findtext("performance_state")),
-                                    "enforced_limit_w": _observed_number(limit, "W")},
+                                    "enforced_limit_w": enforced_limit_w},
                 "pcie_power_management": {"ac": pcie[-2].lower(), "dc": pcie[-1].lower()},
                 "gpu_clocks": clocks, "temperature_c": _observed_number(gpu.findtext("temperature/gpu_temp"), "C"),
                 "nvidia_driver_reported_version": _text(root.findtext("driver_version")),
