@@ -2194,6 +2194,17 @@ def test_nw11_regenerates_decisions_from_bound_raw_files(tmp_path: Path, monkeyp
         measurements.collect(root, manifest, output, "evidence.json")
     put(windowed_report, report)
 
+    wrong_adapter_log = release / "0.log"
+    correct_log = wrong_adapter_log.read_bytes()
+    wrong_adapter_log.write_bytes(correct_log.replace(common["adapter"]["adapter_luid"].encode(), b"00000000:00001234"))
+    execution_path = release / "0-execution.json"
+    original_execution = measurements.load_json(execution_path)
+    put(execution_path, dict(original_execution, player_log_sha256=contract.sha256_file(wrong_adapter_log)))
+    with pytest.raises(evidence.EvidenceError, match="did not select the measured adapter"):
+        measurements.collect(root, manifest, output, "evidence.json")
+    wrong_adapter_log.write_bytes(correct_log)
+    put(execution_path, original_execution)
+
     record = measurements.collect(root, manifest, output, "evidence.json")
     assert [len(run["measurement"]["process_runs"]) for run in record["runs"]] == [3, 3, 3]
     assert record["runs"][0]["measurement"]["process_runs"][0]["dropped_presents"] == 1
@@ -2378,6 +2389,12 @@ def test_dxdiag_pci_identifiers_use_numeric_identity() -> None:
 def test_canonical_adapter_override_accepts_valid_mixed_gpu_host() -> None:
     observation = _observation()
     observation["release_default_adapter_luid"] = "00000000:00001234"
+    observation["enumerated_adapters"] = [
+        {"index": 0, "software": False, "vendor_id": 0x8086, "device_id": 0x1234,
+         "dedicated_video_memory_bytes": 128 * 1024**2},
+        {"index": 1, "software": False, "vendor_id": 0x10DE, "device_id": 0x2803,
+         "dedicated_video_memory_bytes": 8 * 1024**3},
+    ]
     measurements.validate_release_adapter(observation)
     observation["adapter"]["adapter_luid"] = "malformed"
     with pytest.raises(evidence.EvidenceError, match="LUID"):
