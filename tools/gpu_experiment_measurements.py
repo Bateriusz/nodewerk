@@ -64,6 +64,48 @@ def role_paths(manifest: dict, optional: dict) -> dict[str, str]:
             for role in ROLE_ORDER if role != "variant" or optional["status"] == "eligible"}
 
 
+def warm_run_schedule(settings: dict, roles: dict) -> list[tuple[str, int]]:
+    """One predeclared order, used by the launcher and by evidence reconstruction."""
+    if settings.get("version") == 2:
+        order = settings["validation_policy"]["physical"]["warm_run_order"]
+        return [(role, index) for index, row in enumerate(order, 1)
+                for role in row if role in roles]
+    return [(role, index) for role in roles
+            for index in range(1, settings["protocol"]["runs"] + 1)]
+
+
+def validate_warm_run_order(settings: dict, roles: dict, observed: list[tuple[str, int, dict]]) -> None:
+    ordered = sorted(observed, key=lambda item: item[2]["start_filetime"])
+    if [(role, index) for role, index, _ in ordered] != warm_run_schedule(settings, roles):
+        raise evidence.EvidenceError("Warm process sequence differs from the declared matched-run schedule")
+    if any(left[2]["end_filetime"] > right[2]["start_filetime"]
+           for left, right in zip(ordered, ordered[1:])):
+        raise evidence.EvidenceError("Warm processes overlap across experiment roles")
+
+
+def matched_start_conditions(settings: dict, baseline: dict, variant: dict) -> list[str]:
+    """Compare only pre-launch samples, not workload-induced operating differences."""
+    if settings.get("version") != 2:
+        return []
+    policy = settings["validation_policy"]["physical"]
+    try:
+        left = baseline["samples"][0]["environment"]
+        right = variant["samples"][0]["environment"]
+        if baseline["status"] != "matched" or variant["status"] != "matched":
+            return ["starting conditions unavailable or not qualified"]
+        reasons = []
+        if abs(left["temperature_c"] - right["temperature_c"]) > policy["max_start_temperature_delta_c"]:
+            reasons.append("matched run starting GPU temperatures differ beyond tolerance")
+        for name in ("graphics_clock", "mem_clock"):
+            first, second = left["gpu_clocks"][name], right["gpu_clocks"][name]
+            if abs(first["observed_mhz"] - second["observed_mhz"]) > (
+                    first["maximum_mhz"] * policy["max_start_clock_delta_fraction_of_max"]):
+                reasons.append(f"matched run starting {name} differs beyond tolerance")
+        return reasons
+    except (KeyError, TypeError, IndexError):
+        return ["starting temperature or clocks unavailable"]
+
+
 def _equal(observed: Any, expected: Any, label: str) -> None:
     if observed != expected:
         raise evidence.EvidenceError(f"{label} disagrees with the bound execution")
@@ -444,6 +486,7 @@ def collect(root: Path, manifest: dict, directory: Path, evidence_file: str) -> 
     launch_ids: set = set()
     runs = {}
     captures = {}
+    warm_launches = []
     audit = load_json(directory / "reboot-audit.json")
     for key in ("commit", "bundle_id"):
         _equal(audit.get(key), manifest[key], f"reboot audit {key}")
@@ -469,6 +512,7 @@ def collect(root: Path, manifest: dict, directory: Path, evidence_file: str) -> 
             if launch["start_filetime"] < previous_end:
                 raise evidence.EvidenceError("Warm run started before the preceding process exited")
             previous_end = launch["end_filetime"]
+            warm_launches.append((role, index, launch))
             processes.append({
                 **_warm_run(folder, launch, report, protocol),
                 "operating_conditions": operating_conditions(folder, launch, report,
@@ -492,6 +536,21 @@ def collect(root: Path, manifest: dict, directory: Path, evidence_file: str) -> 
         runs[role] = {**{key: report[key] for key in ("role", "device_tier", "device_key", "environment_key",
                                                       "status", "artifact_path", "adapter", "capability_decision")},
                       "measurement": metrics}
+    validate_warm_run_order(settings, roles, warm_launches)
+    if "variant" in roles:
+        baseline_runs = runs["baseline"]["measurement"]["process_runs"]
+        variant_runs = runs["variant"]["measurement"]["process_runs"]
+        for index, (left, right) in enumerate(zip(baseline_runs, variant_runs), 1):
+            reasons = matched_start_conditions(settings, left["operating_conditions"],
+                                               right["operating_conditions"])
+            if reasons:
+                for run in (left, right):
+                    conditions = run["operating_conditions"]
+                    conditions["status"] = "pending"
+                    conditions["reasons"] = sorted(set(conditions["reasons"] + [
+                        f"matched run {index}: {reason}" for reason in reasons]))
+                for role in ("baseline", "variant"):
+                    runs[role]["measurement"]["operating_conditions_matched"] = False
     compare = _comparison_tool()
     canonical = _canonical_capture(root, directory, manifest, common, launch_ids, compare, protocol)
     fallback = compare(baseline_manifest=captures["baseline"], variant_manifest=captures["fallback"],
