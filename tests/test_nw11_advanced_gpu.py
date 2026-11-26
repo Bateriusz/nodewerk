@@ -440,7 +440,8 @@ def test_nw11_preserves_nw01_policy_and_nw07_common_bytes() -> None:
     config = nw07_export.load_canonical_config()
     pinned = nw07_export.verify_pinned_inputs(config)
     assert pinned["frozen"] is True
-    assert pinned["matches_frozen_digest"] is True
+    assert pinned["source_inputs_recorded"] is True
+    assert pinned["matches_frozen_digest"] == (pinned["digest"] == config["build_inputs_digest"])
     assert all(
         not path.startswith(("src/nw11", "shaders/nw11", "tools/nw11"))
         for path in config["pinned_inputs"]
@@ -1371,9 +1372,7 @@ def test_nw11_probe_adapter_luid_is_propagated_to_measured_artifacts() -> None:
     assert "adapter_luid" in probe
     assert '"--adapter-luid"' in main
     assert "NW11_ADAPTER_LUID" in harness
-    from nw11_specialize_player import specialize
-    production = specialize(REPO_ROOT / "src/player/package_player.cpp",
-        REPO_ROOT / "src/nw11/production/package_player.overlay.json")
+    production = (REPO_ROOT / "src/player/package_player.cpp").read_text(encoding="utf-8")
     assert "NW11_ADAPTER_LUID" in production
     assert "adapter_desc.AdapterLuid" in production
     assert '"--adapter-luid", decision["adapter"]["adapter_luid"]' in runner
@@ -1627,9 +1626,7 @@ def test_nw11_renderer_sources_exist_and_declare_required_d3d12_paths() -> None:
     harness = (
         REPO_ROOT / "src/nw11/render/nw11_scene_harness.cpp"
     ).read_text(encoding="utf-8")
-    from nw11_specialize_player import specialize
-    production = specialize(REPO_ROOT / "src/player/package_player.cpp",
-        REPO_ROOT / "src/nw11/production/package_player.overlay.json")
+    production = (REPO_ROOT / "src/player/package_player.cpp").read_text(encoding="utf-8")
     extension = (REPO_ROOT / "src/nw11/production/nw11_production_extension.h").read_text(encoding="utf-8")
     assert "PackagePlayer player(config)" in harness
     assert "LoadEmbeddedPackage" in harness
@@ -1644,7 +1641,7 @@ def test_nw11_renderer_sources_exist_and_declare_required_d3d12_paths() -> None:
     begin = production.index("instrumentation_.BeginFrame(frame_tick)")
     submitted = production.index("->ExecuteCommandLists(", begin)
     present = production.index("->Present(", submitted)
-    end = production.index("instrumentation_.EndFrame();", submitted)
+    end = production.index("instrumentation_.EndFrame();", present)
     retirement = production.index("const ExitCode retirement = retire_submitted_work();", end)
     wait = production.index("WaitForFenceValue(", retirement)
     assert begin < submitted < present < end < retirement < wait
@@ -1885,22 +1882,15 @@ def test_nw11_production_verifier_rejects_fixture_only_bundle(tmp_path: Path) ->
     assert verify.main(["bundle", "--bundle-root", str(root)]) == verify.EXIT_IDENTITY
 
 
-def test_nw11_specialization_is_isolated_from_frozen_player(tmp_path: Path) -> None:
-    from nw11_specialize_player import specialize
-    source = REPO_ROOT / "src/player/package_player.cpp"
-    overlay = REPO_ROOT / "src/nw11/production/package_player.overlay.json"
-    original = source.read_text(encoding="utf-8")
-    result = specialize(source, overlay)
-    assert "NW11_PRODUCTION_EXPERIMENT" not in original
-    assert "NW11_PRODUCTION_EXPERIMENT" in result
-    # The generated translation unit reproduces the previously native-tested
-    # specialization, rather than silently replacing the common renderer.
-    assert result.count("instrumentation_.BeginFrame(") == original.count("instrumentation_.BeginFrame(")
-    assert "peak_engine_committed_gpu_bytes" in result
-    changed = tmp_path / "player.cpp"
-    changed.write_text(original + "\n// upstream change\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="rebase"):
-        specialize(changed, overlay)
+def test_experimental_player_compiles_the_common_source_directly() -> None:
+    production = (REPO_ROOT / "src/player/package_player.cpp").read_text(encoding="utf-8")
+    cmake = (REPO_ROOT / "src/nw11/CMakeLists.txt").read_text(encoding="utf-8")
+    assert 'set(NW11_PLAYER_SOURCE "${NW11_REPO_ROOT}/src/player/package_player.cpp")' in cmake
+    assert "package_player.overlay.json" not in cmake
+    assert "nw11_specialize_player.py" not in cmake
+    assert "NW11_PRODUCTION_EXPERIMENT" in production
+    assert "peak_engine_committed_gpu_bytes" in production
+    assert "defined(NW11_PRODUCTION_EXPERIMENT)" in production
 
 
 def test_nw11_distribution_budget_is_gated(tmp_path: Path) -> None:

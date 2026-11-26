@@ -207,22 +207,9 @@ if(MSVC)
     target_compile_options(nw11_production_runtime PRIVATE /W4 /permissive- /EHsc /Gy /Gw /Zc:inline /guard:cf /Brepro /O1 /Os /GL)
 endif()
 
-# Isolate NW-11's experimental graphics seams from the frozen NW-07/NW-10
-# inputs without duplicating the production implementation. The generated
-# translation unit is the canonical player plus the verified bounded overlay.
-set(NW11_PLAYER_SOURCE "${NW11_GENERATED_DIR}/nw11_package_player.cpp")
-set(NW11_PLAYER_OVERLAY "${CMAKE_CURRENT_SOURCE_DIR}/production/package_player.overlay.json")
-set(NW11_PLAYER_GENERATOR "${NW11_REPO_ROOT}/tools/nw11_specialize_player.py")
-add_custom_command(
-    OUTPUT "${NW11_PLAYER_SOURCE}"
-    COMMAND "${Python3_EXECUTABLE}" "${NW11_PLAYER_GENERATOR}"
-        --source "${NW11_REPO_ROOT}/src/player/package_player.cpp"
-        --overlay "${NW11_PLAYER_OVERLAY}"
-        --output "${NW11_PLAYER_SOURCE}"
-    DEPENDS "${NW11_PLAYER_GENERATOR}" "${NW11_PLAYER_OVERLAY}"
-        "${NW11_REPO_ROOT}/src/player/package_player.cpp"
-    VERBATIM)
-add_custom_target(nw11_specialized_player_source DEPENDS "${NW11_PLAYER_SOURCE}")
+# Compile the same production player in every target. Optional GPU code is
+# selected by compile definitions and remains absent from ordinary builds.
+set(NW11_PLAYER_SOURCE "${NW11_REPO_ROOT}/src/player/package_player.cpp")
 
 function(nw11_add_renderer target_name variant baseline_kind)
     add_executable(${target_name}
@@ -250,7 +237,7 @@ function(nw11_add_renderer target_name variant baseline_kind)
         target_compile_definitions(${target_name} PRIVATE
             NW11_VARIANT_MESH=0 NW11_VARIANT_RAY=0 NW11_BASELINE_ANALYTIC=0)
     endif()
-    add_dependencies(${target_name} nw11_all_shaders nw11_scene_generated nw11_specialized_player_source)
+    add_dependencies(${target_name} nw11_all_shaders nw11_scene_generated)
     if(MSVC)
         target_compile_options(${target_name} PRIVATE /W4 /permissive- /EHsc /Gy /Gw /Zc:inline /guard:cf /Brepro /O1 /Os /GL)
         target_link_options(${target_name} PRIVATE /OPT:REF /OPT:ICF /Brepro /INCREMENTAL:NO /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /guard:cf /LTCG)

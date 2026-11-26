@@ -10,7 +10,7 @@ from pathlib import Path
 
 import nw05_export
 import nw11_contract as contract
-from nw11_common_regression import FILES, identity
+from canonical_export_reproducibility import FILES, identity
 import nw11_production_binding as binding
 
 VARIANTS = {
@@ -29,13 +29,15 @@ def sha(data: bytes) -> str:
 
 def embed(proof_dir: Path, executable_dir: Path, commit: str) -> None:
     proof = json.loads((proof_dir / "common-regression.json").read_text(encoding="utf-8"))
-    if (proof.get("status") != "verified" or proof.get("differences") != []
-            or proof.get("base_commit") != contract.IMPLEMENTATION_BASE
-            or proof.get("candidate_commit") != commit):
-        raise ValueError("common production comparison is missing or stale")
+    binding.verify_proof(proof, commit)
+    if proof.get("format") != "canonical-export-reproducibility.v2":
+        raise ValueError("current production requires a same-revision reproducibility proof")
     for arm in ("base", "candidate"):
         folder = proof_dir / arm
         report = json.loads((folder / "export-report.json").read_text(encoding="utf-8"))
+        provenance = report.get("build_inputs", {}).get("source_revision", {})
+        if provenance.get("commit") != commit or provenance.get("tracked_files_clean") is not True:
+            raise ValueError("export provenance does not match the clean candidate revision")
         if identity(report, folder) != proof[arm]:
             raise ValueError("actual production export does not match regression proof")
     candidate = proof_dir / "candidate"

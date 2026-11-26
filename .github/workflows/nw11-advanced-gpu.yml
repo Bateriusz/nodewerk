@@ -246,7 +246,7 @@ jobs:
           if-no-files-found: error
 
   common-production-regression:
-    name: NW-07 common export before/after NW-11 (native byte identity)
+    name: Canonical release export (independent same-revision builds)
     needs: ci-impact
     if: needs.ci-impact.outputs.nw11 == 'true' || needs.ci-impact.outputs.full_regression == 'true'
     runs-on: windows-2022
@@ -288,7 +288,7 @@ jobs:
         run: |
           $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
           $candidate = (git rev-parse HEAD).Trim()
-          python tools/nw11_common_regression.py --candidate $candidate --dxc $dxc --out build/nw11-common-proof
+          python tools/canonical_export_reproducibility.py --candidate $candidate --dxc $dxc --out build/nw11-common-proof
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain common artifact comparison and actual exports
         if: always()

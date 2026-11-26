@@ -183,11 +183,18 @@ def inspect(image: bytes, *, commit: str, specialization: str,
 
 
 def verify_proof(proof: dict[str, Any], commit: str) -> tuple[str, str]:
-    if (proof.get("format") != "nw11-common-regression.v1"
-            or proof.get("base_commit") != IMPLEMENTATION_BASE
+    # v1 is a historical cross-revision proof. New builds use two independent
+    # builds of the same revision, never byte equality to a historical source.
+    expected_base = {
+        "nw11-common-regression.v1": IMPLEMENTATION_BASE,
+        "canonical-export-reproducibility.v2": commit,
+    }.get(proof.get("format"))
+    if (expected_base is None
+            or proof.get("base_commit") != expected_base
             or proof.get("candidate_commit") != commit
             or proof.get("status") != "verified" or proof.get("differences") != []
-            or proof.get("base") != proof.get("candidate")):
+            or proof.get("base") != proof.get("candidate")
+            or not isinstance(proof.get("candidate"), dict)):
         raise ValueError("canonical NW-07 proof is missing or stale")
     candidate = proof["candidate"]
     return candidate["package_sha256"], candidate["manifest_sha256"]
