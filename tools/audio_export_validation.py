@@ -128,6 +128,23 @@ def validate(template: Path, dxc: str, root: Path) -> dict:
     source_commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
     ).strip()
+    # Publish the exact production player from the matched PE measurements,
+    # not the headless diagnostic fixture or nonshipping synthesis probe.
+    physical_inputs = root / "physical-inputs"
+    physical_inputs.mkdir()
+    shutil.copy2(audio_exe, physical_inputs / "player.exe")
+    shutil.copy2(audio_package, physical_inputs / "audio.nwp")
+    (physical_inputs / "song.nwas").write_bytes(audio.package.audio_song)
+    source_tree = subprocess.check_output(
+        ["git", "rev-parse", "HEAD^{tree}"], cwd=ROOT, text=True
+    ).strip()
+    (physical_inputs / "identity.json").write_text(json.dumps({
+        "format": "nodewerk-audio-physical-inputs", "version": 1,
+        "source_commit": source_commit, "source_tree": source_tree,
+        "artifact": {"executable_sha256": _hash(audio_exe.read_bytes()),
+                     "package_sha256": _hash(audio.package_bytes),
+                     "song_sha256": _hash(audio.package.audio_song)},
+    }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     physical = evidence_reference(
         "physical WASAPI/display observation is not part of the Windows CI build gate",
         verified=load_verified_evidence(

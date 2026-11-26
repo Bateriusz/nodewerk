@@ -593,3 +593,20 @@ def test_physical_capture_binds_one_run_and_raw_files(tmp_path):
     video.write_bytes(b"different recording")
     with pytest.raises(ValueError, match="video capture SHA-256 mismatch"):
         validate_capture_binding(run, observation, audio, video)
+
+
+def test_ci_physical_inputs_bind_artifact_and_source():
+    from audio_physical_validation import validate_physical_inputs
+    artifact = {"executable_sha256": "a" * 64, "package_sha256": "b" * 64,
+                "song_sha256": "c" * 64}
+    provenance = {"source_revision": "d" * 40, "source_tree": "e" * 40}
+    identity = {"format": "nodewerk-audio-physical-inputs", "version": 1,
+                "source_commit": provenance["source_revision"],
+                "source_tree": provenance["source_tree"], "artifact": artifact}
+    validate_physical_inputs(identity, artifact, provenance)
+    with pytest.raises(ValueError, match="artifact SHA-256"):
+        validate_physical_inputs(identity, dict(artifact, executable_sha256="f" * 64), provenance)
+    with pytest.raises(ValueError, match="source_commit"):
+        validate_physical_inputs(identity, artifact, dict(provenance, source_revision="f" * 40))
+    with pytest.raises(ValueError, match="source_tree"):
+        validate_physical_inputs(identity, artifact, dict(provenance, source_tree="f" * 40))

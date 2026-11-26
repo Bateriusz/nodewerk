@@ -67,6 +67,17 @@ session with a real WASAPI endpoint and binds the observation to:
 - the protocol (48 kHz timebase, 60 fps fixture, one-frame tolerance
   `48000 / refresh_hz` ticks) and the same-run `AUDIO_*` telemetry.
 
+The existing Windows build gate uploads a separate
+`audio-physical-inputs-<github.sha>` artifact containing the exact production
+`player.exe`, `audio.nwp`, `song.nwas`, `identity.json` and matched
+`audio-closure.json` report. No desktop rebuild is required. Extract it outside
+the tracked source tree and check out the recorded `source_commit` (which may
+be the CI PR merge commit). Pass `--identity <bundle>/identity.json` to the
+`run` command along with the three files from that bundle; the harness rejects
+different source commits, source trees or artifact hashes. Keep the original
+CI artifact and raw capture with the evidence. The upload is not itself a
+physical observation.
+
 Start a simultaneous external A/V capture, then run the player once using
 the harness (the run ID is printed before playback):
 ```sh

@@ -367,4 +367,7 @@ def test_nw12_real_audio_and_silent_export_closure(tmp_path):
         destination.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n",
                                encoding="utf-8")
         shutil.copytree(tmp_path / "audio-link/headless-runtime", Path(output) / "audio-headless-runtime")
+        physical_inputs = Path(output) / "audio-physical-inputs"
+        shutil.copytree(tmp_path / "audio-link/physical-inputs", physical_inputs)
+        shutil.copy2(destination, physical_inputs / "audio-closure.json")
     assert report["independent_rebuilds"] == {"silent": True, "audio": True}

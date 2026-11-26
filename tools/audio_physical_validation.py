@@ -655,8 +655,23 @@ def _artifact_identity(player: Path, package: Path, song: Path) -> dict[str, str
             "package_sha256": sha256_file(package), "song_sha256": sha256_file(song)}
 
 
+def validate_physical_inputs(identity: Mapping[str, Any], artifact: Mapping[str, str],
+                             provenance: Mapping[str, Any]) -> None:
+    """Bind downloaded CI artifacts to their actual build checkout and bytes."""
+    if identity.get("format") != "nodewerk-audio-physical-inputs" or identity.get("version") != 1:
+        raise ValueError("invalid physical input manifest")
+    if identity.get("artifact") != artifact:
+        raise ValueError("physical input artifact SHA-256 mismatch")
+    for field, key in (("source_commit", "source_revision"), ("source_tree", "source_tree")):
+        value = identity.get(field)
+        if (not isinstance(value, str) or len(value) != 40
+                or any(c not in "0123456789abcdef" for c in value)
+                or value != provenance.get(key)):
+            raise ValueError(f"physical input {field} does not match the checked-out source")
+
+
 def run_playback(*, player: Path, package: Path, song: Path, output: Path,
-                 timeout: int = 120) -> dict[str, Any]:
+                 timeout: int = 120, identity_path: Path | None = None) -> dict[str, Any]:
     """Launch once while the operator records a simultaneous external A/V capture."""
     if os.name != "nt":
         raise RuntimeError("physical WASAPI/display evidence requires Windows")
@@ -674,6 +689,9 @@ def run_playback(*, player: Path, package: Path, song: Path, output: Path,
     provenance = provenance_snapshot()
     if not provenance.get("tracked_files_clean") or not provenance.get("source_revision"):
         raise ValueError("physical playback requires a clean tracked source checkout")
+    if identity_path is not None:
+        validate_physical_inputs(json.loads(identity_path.read_text(encoding="utf-8")),
+                                 artifact, provenance)
     environment = probe_environment()
     run_id = uuid.uuid4().hex
     print(f"Audio capture run ID: {run_id}", flush=True)
@@ -756,6 +774,7 @@ def _parser() -> argparse.ArgumentParser:
     for name in ("player", "package", "song", "output"):
         run_parser.add_argument("--" + name, type=Path, required=True)
     run_parser.add_argument("--timeout", type=int, default=120)
+    run_parser.add_argument("--identity", type=Path, help="identity.json from the CI physical inputs artifact")
     verify_parser = sub.add_parser("verify", help="verify a recorded observation profile")
     verify_parser.add_argument("--evidence", type=Path, required=True)
     verify_parser.add_argument("--package", type=Path)
@@ -778,7 +797,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "run":
         result = run_playback(player=args.player, package=args.package, song=args.song,
-                              output=args.output, timeout=args.timeout)
+                              output=args.output, timeout=args.timeout, identity_path=args.identity)
         return 0 if result["returncode"] == 0 else 1
     if args.command == "record":
         evidence = record(
