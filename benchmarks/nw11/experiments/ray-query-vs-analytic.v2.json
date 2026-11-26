@@ -65,7 +65,7 @@
       "--warmup-seconds",
       "5",
       "--runs",
-      "3",
+      "1",
       "--run-seconds",
       "60",
       "--fixed-quality",
