@@ -2545,17 +2545,28 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
     }
 
     ID3D12Device* device = nullptr;
-#if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT
+    // Explicit adapter selection is shared by ordinary and experimental players.
+    // Unset means the ordinary first-compatible-adapter policy.
     char adapter_luid[32]{};
-    const DWORD luid_length = GetEnvironmentVariableA("NW11_ADAPTER_LUID", adapter_luid, sizeof(adapter_luid));
+    const DWORD luid_length = GetEnvironmentVariableA("NODEWERK_ADAPTER_LUID", adapter_luid, sizeof(adapter_luid));
     unsigned long luid_high = 0, luid_low = 0;
-    char trailing = 0;
-    if (luid_length >= sizeof(adapter_luid) ||
-        (luid_length != 0 && std::sscanf(adapter_luid, "%8lx:%8lx%c", &luid_high, &luid_low, &trailing) != 2)) {
-        return Fail(ExitCode::InvalidArguments, "device", "nw11_invalid_adapter_luid",
+    const auto parse_hex8 = [](const char* text, unsigned long& result) {
+        for (int i = 0; i < 8; ++i) {
+            const char c = text[i];
+            unsigned long digit;
+            if (c >= '0' && c <= '9') digit = c - '0';
+            else if (c >= 'a' && c <= 'f') digit = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') digit = c - 'A' + 10;
+            else return false;
+            result = (result << 4) | digit;
+        }
+        return true;
+    };
+    if (luid_length != 0 && (luid_length != 17 || adapter_luid[8] != ':' ||
+        !parse_hex8(adapter_luid, luid_high) || !parse_hex8(adapter_luid + 9, luid_low))) {
+        return Fail(ExitCode::InvalidArguments, "device", "invalid_adapter_luid",
                     "adapter_luid", "high:low", "invalid", "adapter", "Malformed selected LUID");
     }
-#endif
     for (UINT index = 0u;; ++index) {
         IDXGIAdapter1* candidate = nullptr;
         const HRESULT enum_hr =
@@ -2575,14 +2586,12 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
             candidate->Release();
             continue;
         }
-#if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT
         if (luid_length != 0 &&
             (static_cast<unsigned long>(adapter_desc.AdapterLuid.HighPart) != luid_high ||
              adapter_desc.AdapterLuid.LowPart != luid_low)) {
             candidate->Release();
             continue;
         }
-#endif
         if ((adapter_desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0u &&
             !config_.allow_software_adapter) {
             candidate->Release();
@@ -2598,6 +2607,13 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
         }
         device = created;
         platform_->adapter = candidate;
+        if (luid_length != 0) {
+            // Emit the actual DXGI selection, not the requested string.
+            std::fprintf(stderr, "NODEWERK_SELECTED_ADAPTER_LUID=%08lX:%08lX\n",
+                         static_cast<unsigned long>(adapter_desc.AdapterLuid.HighPart),
+                         static_cast<unsigned long>(adapter_desc.AdapterLuid.LowPart));
+            std::fflush(stderr);
+        }
         capabilities_.adapter_description.clear();
         if (adapter_desc.Description[0] != L'\0') {
             char narrow[256]{};
@@ -2841,16 +2857,16 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
             const UINT flags2 = support_masks[1];
             format.supported = flags1 != 0u;
             format.buffer =
-                (flags1 & D3D12_FORMAT_SUPPORT1_BUFFER) != 0u;
+                (flags1 & D3D12_FORMAT_SUPPORT1_BUFFER) != 0u &&
+                (support.Format != DXGI_FORMAT_R32_UINT ||
+                 (flags1 & D3D12_FORMAT_SUPPORT1_IA_INDEX_BUFFER) != 0u);
             format.texture2d =
                 (flags1 & D3D12_FORMAT_SUPPORT1_TEXTURE2D) != 0u;
             format.shader_resource =
-                (flags1 & (D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE |
-                           D3D12_FORMAT_SUPPORT1_SHADER_LOAD |
-                           D3D12_FORMAT_SUPPORT1_SHADER_GATHER)) != 0u;
+                (flags1 & D3D12_FORMAT_SUPPORT1_SHADER_LOAD) != 0u;
             format.unordered_access =
                 (flags1 & D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW) !=
-                    0u ||
+                    0u &&
                 (flags2 & D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE) != 0u;
             format.render_target =
                 (flags1 & D3D12_FORMAT_SUPPORT1_RENDER_TARGET) != 0u;
