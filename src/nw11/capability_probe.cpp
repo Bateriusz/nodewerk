@@ -368,8 +368,8 @@ int main(int argc, char** argv) {
             return fail("GetDesc1", hr);
         }
         const bool software = (candidate_desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0;
-        // The byte-frozen NW-07 release selects the first hardware adapter
-        // that can create its FL12.0 device. Prove its use before capture.
+        // Record the default first-compatible hardware adapter for diagnostics.
+        // Physical validation explicitly selects the measured LUID instead.
         if (!software && release_default_luid.empty() &&
             SUCCEEDED(D3D12CreateDevice(candidate.Get(), D3D_FEATURE_LEVEL_12_0,
                                        __uuidof(ID3D12Device), nullptr))) {
