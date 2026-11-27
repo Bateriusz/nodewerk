@@ -58,13 +58,16 @@ PlaybackDisplay GetPlaybackDisplay(HWND window) noexcept {
     // clones and indirect/virtual targets instead of choosing a plausible mode.
     constexpr UINT32 flags = QDC_ONLY_ACTIVE_PATHS | 0x40u;
     constexpr UINT32 dynamic_refresh = 0x10u; // DISPLAYCONFIG_PATH_BOOST_REFRESH_RATE
-    UINT32 path_count = 0, mode_count = 0;
     std::array<DISPLAYCONFIG_PATH_INFO, 64> paths{};
     std::array<DISPLAYCONFIG_MODE_INFO, 192> modes{};
-    if (GetDisplayConfigBufferSizes(flags, &path_count, &mode_count) != ERROR_SUCCESS ||
-        path_count == 0 || path_count > paths.size() || mode_count > modes.size() ||
-        QueryDisplayConfig(flags, &path_count, paths.data(), &mode_count, modes.data(),
-                           nullptr) != ERROR_SUCCESS) return {};
+    UINT32 path_count = static_cast<UINT32>(paths.size());
+    UINT32 mode_count = static_cast<UINT32>(modes.size());
+    // QueryDisplayConfig accepts the refresh-awareness modifier and the input
+    // capacities. Do not pass that modifier to GetDisplayConfigBufferSizes.
+    const LONG query = QueryDisplayConfig(flags, &path_count, paths.data(),
+                                          &mode_count, modes.data(), nullptr);
+    if (query == ERROR_INSUFFICIENT_BUFFER) return {}; // report unavailable, not a partial path
+    if (query != ERROR_SUCCESS || path_count == 0) return {};
     const DISPLAYCONFIG_PATH_INFO* selected = nullptr;
     for (UINT32 i = 0; i < path_count; ++i) {
         const auto& path = paths[i];

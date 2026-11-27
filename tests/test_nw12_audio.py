@@ -452,7 +452,6 @@ def _test_physical_roundtrip_args(*, rate="60,1"):
                      "song_sha256": physical.sha256_bytes(song)},
     }
     observation = _observation()
-    observation["capture"].update(run_id="a" * 32, run_sha256="b" * 64)
     output = (
         "AUDIO_SYNTHESIS_CPU_100NS=700\nAUDIO_SYNTHESIS_CPU_AVAILABLE=1\n"
         "AUDIO_WORKER_CPU_100NS=900\nAUDIO_WORKER_CPU_AVAILABLE=1\n"
@@ -467,21 +466,26 @@ def _test_physical_roundtrip_args(*, rate="60,1"):
                              "display": None, "os": {"version": "10.0.26200",
                                                       "build": "26200", "product_type": 1}},
                 provenance=provenance, build_identity=build_identity,
-                run_id="a" * 32, run_sha256="b" * 64, player_returncode=0)
+                run_id="a" * 32, player_returncode=0)
 
 
-def test_physical_evidence_verified_requires_all_observations():
-    from audio_physical_validation import build_evidence, verify_evidence
+def test_physical_evidence_verified_requires_all_observations(tmp_path):
+    from audio_physical_validation import verify_evidence
     args = _test_physical_roundtrip_args()
     package_bytes, song = args["package_bytes"], args["song_bytes"]
-    evidence = build_evidence(**args)
+    evidence, path, archive = _record_test_capture(tmp_path, args)
     assert evidence["verification_status"] == "verified_physical"
     assert evidence["alignment"]["within_one_displayed_frame"] is True
     assert evidence["unavailable"] == []
     assert {item["field"] for item in evidence["unavailable_telemetry"]} == {
         "measurements.physical_underruns"
     }
-    verify_evidence(evidence, package_bytes=package_bytes, song_bytes=song)
+    assert verify_evidence(evidence, package_bytes=package_bytes, song_bytes=song,
+                           evidence_path=path)["verification_status"] == "verified_physical"
+    detached = verify_evidence(evidence)
+    assert detached["verification_status"] == "pending_physical"
+    assert detached["satisfies_completion"] is False
+    assert detached["source_head_sha"] is None
     # A forged verified record without the required observations must fail.
     forged = dict(evidence)
     forged["verification_status"] = "verified_physical"
@@ -561,9 +565,7 @@ def test_verified_physical_evidence_merges_only_for_matching_artifact(tmp_path, 
     import audio_physical_validation as physical
     args = _test_physical_roundtrip_args()
     package_bytes, song = args["package_bytes"], args["song_bytes"]
-    evidence = physical.build_evidence(**args)
-    path = tmp_path / "verified.json"
-    path.write_text(json.dumps(evidence), encoding="utf-8")
+    evidence, path, archive = _record_test_capture(tmp_path, args)
     monkeypatch.setenv("NW12_PHYSICAL_EVIDENCE", str(path))
     assert physical.load_verified_evidence(
         package_bytes=package_bytes, song_bytes=song
@@ -614,29 +616,31 @@ def test_ci_physical_inputs_bind_artifact_and_source():
         validate_physical_inputs(identity, artifact, dict(provenance, source_tree="f" * 40))
 
 
-def test_runtime_refresh_not_other_monitor_determines_acceptance():
+def test_runtime_refresh_not_other_monitor_determines_acceptance(tmp_path):
     from audio_physical_validation import build_evidence
     args = _test_physical_roundtrip_args(rate="144,1")
     args["environment"]["display"] = [{"refresh_hz": 60}]
     args["observation"]["impulses"][2]["display_tick"] -= 300
     args["observation"]["impulses"][3]["display_tick"] += 800
-    record = build_evidence(**args)
+    record, _, _ = _record_test_capture(tmp_path / "outside", args)
     assert record["verification_status"] == "pending_physical"
     assert record["alignment"]["max_abs_delta_ticks"] == 500
     assert record["alignment"]["display_refresh_hz"] == 144
     args["observation"]["impulses"][2]["display_tick"] -= 167
-    assert build_evidence(**args)["verification_status"] == "verified_physical"
+    record, _, _ = _record_test_capture(tmp_path / "within", args)
+    assert record["verification_status"] == "verified_physical"
     args["observation"]["impulses"][2]["display_tick"] += 1
-    assert build_evidence(**args)["verification_status"] == "pending_physical"
+    record, _, _ = _record_test_capture(tmp_path / "boundary", args)
+    assert record["verification_status"] == "pending_physical"
 
     args["telemetry_text"] = args["telemetry_text"].split("AUDIO_PLAYBACK_EVIDENCE_V1")[0]
     assert build_evidence(**args)["environment"]["status"] == "unavailable"
 
 
-def test_complete_observation_without_build_identity_stays_pending():
+def test_complete_observation_without_build_identity_stays_pending(tmp_path):
     from audio_physical_validation import build_evidence
     args = _test_physical_roundtrip_args()
-    pending = build_evidence(**dict(args, build_identity=None))
+    pending, _, _ = _record_test_capture(tmp_path, dict(args, build_identity=None))
     assert pending["verification_status"] == "pending_physical"
     assert pending["source_head_sha"] is None
     assert any(item["field"] == "build_identity" for item in pending["unavailable"])
@@ -649,8 +653,7 @@ def test_shared_verification_recomputes_observations_and_bindings(tmp_path):
     import audio_physical_validation as physical
     from schema_validator import SchemaValidationError, validate_file_against_schema
 
-    good = physical.build_evidence(**_test_physical_roundtrip_args())
-    path = tmp_path / "test-observation.json"
+    good, path, archive = _record_test_capture(tmp_path, _test_physical_roundtrip_args())
     schema = ROOT / "schemas/nw12-audio-physical-evidence.schema.json"
     path.write_text(json.dumps(good))
     validate_file_against_schema(path, schema)
@@ -677,37 +680,115 @@ def test_shared_verification_recomputes_observations_and_bindings(tmp_path):
             validate_file_against_schema(path, schema)
 
 
-def test_recorder_verified_evidence_archive_rechecks_actual_files(tmp_path):
+def _record_test_capture(tmp_path, args):
+    """Synthetic bytes for contract tests only, never hardware evidence."""
+    from copy import deepcopy
     import audio_physical_validation as physical
 
-    args = _test_physical_roundtrip_args()
+    tmp_path.mkdir(parents=True, exist_ok=True)
     run_path, obs_path, audio, video, package, song, player, output = [
         tmp_path / name for name in ("run.json", "obs.json", "audio.wav", "video.mp4",
                                      "audio.nwp", "song.nwas", "player.exe", "report.json")
     ]
-    audio.write_bytes(b"test audio")
-    video.write_bytes(b"test video")
+    audio.write_bytes(b"synthetic audio for test")
+    video.write_bytes(b"synthetic video for test")
     package.write_bytes(args["package_bytes"])
     song.write_bytes(args["song_bytes"])
     player.write_bytes(args["executable_bytes"])
     run = dict(format="nodewerk-audio-physical-run", version=1, run_id=args["run_id"],
                returncode=args["player_returncode"], stdout=args["telemetry_text"],
-               artifact=args["build_identity"]["artifact"], build_identity=args["build_identity"],
-               environment=args["environment"], provenance=args["provenance"])
-    run_path.write_text(json.dumps(run))
-    observation = args["observation"]
+               artifact={"package_sha256": physical.sha256_file(package),
+                         "song_sha256": physical.sha256_file(song),
+                         "executable_sha256": physical.sha256_file(player)},
+               build_identity=args["build_identity"], environment=args["environment"],
+               provenance=args["provenance"])
+    run_path.write_text(json.dumps(run), encoding="utf-8")
+    observation = deepcopy(args["observation"])
     observation["run_id"] = run["run_id"]
     observation["capture"].update(audio_sha256=physical.sha256_file(audio),
                                   video_sha256=physical.sha256_file(video))
-    obs_path.write_text(json.dumps(observation))
+    obs_path.write_text(json.dumps(observation), encoding="utf-8")
     recorded = physical.record(player=player, package=package, song=song, output=output,
                                run_path=run_path, observation_path=obs_path,
                                audio_capture=audio, video_capture=video)
+    return recorded, output, physical.ArchiveFiles(run_path, obs_path, audio, video)
+
+
+def test_recorder_verified_evidence_archive_rechecks_original_measurements(tmp_path, capsys):
+    from copy import deepcopy
+    import audio_physical_validation as physical
+    from schema_validator import SchemaValidationError, validate_file_against_schema
+
+    recorded, output, archive = _record_test_capture(tmp_path, _test_physical_roundtrip_args())
     assert recorded["verification_status"] == "verified_physical"
-    physical.verify_run_files(recorded, run_path, audio, video)
-    audio.write_bytes(b"changed media")
+    assert recorded["observation_sha256"] == physical.sha256_file(archive.observation)
+    assert physical.verify_evidence(recorded, archive_files=archive) == recorded
+
+    # An older report without an observation-byte digest cannot be promoted.
+    unbound = deepcopy(recorded)
+    unbound.pop("observation_sha256")
+    unbound["alignment"]["capture"].pop("observation_sha256")
+    assert physical.verify_evidence(unbound, archive_files=archive)["verification_status"] == "pending_physical"
+
+    # Shift both onsets while preserving every report-local delta and count.
+    changed = deepcopy(recorded)
+    changed["alignment"]["impulses"][1]["audio_tick"] += 100
+    changed["alignment"]["impulses"][1]["display_tick"] += 100
+    output.write_text(json.dumps(changed), encoding="utf-8")
+    with pytest.raises(ValueError, match="original measured onsets"):
+        physical.load_verified_evidence(output)
+    schema = ROOT / "schemas/nw12-audio-physical-evidence.schema.json"
+    with pytest.raises(SchemaValidationError, match="original measured onsets"):
+        validate_file_against_schema(output, schema)
+    output.write_text(json.dumps(recorded), encoding="utf-8")
+
+    # Even identical observations reserialized to different bytes aren't original.
+    original = archive.observation.read_bytes()
+    archive.observation.write_bytes(original + b"\n")
+    with pytest.raises(ValueError, match="original observation JSON SHA-256"):
+        physical.load_verified_evidence(output)
+    archive.observation.write_bytes(original)
+
+    archive.observation.unlink()
+    assert physical.load_verified_evidence(output) is None
+    assert physical.main(["verify", "--evidence", str(output)]) == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "valid": True, "verification_status": "pending_physical", "archive_rechecked": False,
+    }
+    with pytest.raises(SchemaValidationError, match="original capture archive"):
+        validate_file_against_schema(output, schema)
+    archive.observation.write_bytes(original)
+
+    command = ["verify", "--evidence", str(output), "--run", str(archive.run),
+               "--observation", str(archive.observation), "--capture-audio", str(archive.audio),
+               "--capture-video", str(archive.video)]
+    assert physical.main(command) == 0
+    assert json.loads(capsys.readouterr().out)["archive_rechecked"] is True
+    archive.audio.write_bytes(b"changed media")
     with pytest.raises(ValueError, match="audio capture SHA-256"):
-        physical.verify_run_files(recorded, run_path, audio, video)
+        physical.verify_evidence(recorded, archive_files=archive)
+
+
+def test_physical_archive_discovery_cannot_escape_report_directory(tmp_path):
+    from audio_physical_validation import ArchiveFiles
+
+    root = tmp_path / "archive"
+    root.mkdir()
+    external = tmp_path / "external"
+    external.write_text("unrelated")
+    invalid = ["../external", str(external), "C:external"]
+    try:
+        (root / "link").symlink_to(external)
+    except OSError:  # Windows may restrict symlink creation for test users.
+        pass
+    else:
+        invalid.append("link")
+    for bad in invalid:
+        with pytest.raises(ValueError, match="must remain relative"):
+            ArchiveFiles.from_report(root / "report.json", {
+                "archive_files": {"run": bad, "observation": "obs.json",
+                                  "audio": "recording.mp4", "video": "recording.mp4"},
+            })
 
 
 def test_studio_same_path_song_edit_replaces_prepared_payload(tmp_path, test_dxc):

@@ -111,9 +111,11 @@ impulse per song event, and actual capture file hashes
 (`capture.audio_sha256`, `capture.video_sha256`). The audio and display ticks
 are measured on the same capture timebase, not copied from the scheduled song
 tick. For a multiplexed recording both capture paths can be the same file.
-The harness checks the run and raw file hashes, computes the absolute delta,
-requires it within one displayed frame,
-and records synthesis/worker CPU (`GetThreadTimes`, 100 ns), starvation
+The harness checks the original observation JSON and raw capture SHA-256 hashes,
+then computes the exact delta from the measured onsets and requires it to be
+within one displayed frame. The archived observation bytes, not just the
+computed alignment in the report, bind the measurement. The harness
+records synthesis/worker CPU (`GetThreadTimes`, 100 ns), starvation
 observations, observed underruns, the missing-sample lower bound, underrun rate,
 and clock discontinuities from that exact run. Exact audible glitch counts have
 no OS source; they stay `unavailable` rather than being inferred from stream
@@ -122,12 +124,15 @@ coordinates.
 A record only becomes `verified_physical` after a successful full playback with
 bound build identity, an unambiguous environment, capture and required telemetry.
 Otherwise it stays `pending_physical` or records a failed playback, with explicit
-reasons. The recorder, importer and schema gate recompute alignment from the
-measured onsets and exact refresh ratio, and validate counts and provenance.
-To rehash the original archived files, pass `--run`, `--capture-audio` and
-`--capture-video` to `verify`; add `--executable`, `--package` and `--song`
-to recheck artifact bytes. `tools/audio_export_validation.py` and
-`tools/audio_capture.py` never fabricate this result: they report a structured
+reasons. Keep the original run JSON, observation JSON, and media in the report
+directory or its subdirectories. The report stores relative references so the entire
+archive can move together. Import and schema validation rehash those files and
+recompute alignment from the original onsets and the exact refresh ratio. A
+detached report is not verified on its own. The `verify` command finds the
+archived files from the report or accepts explicit replacements using `--run`,
+`--observation`, `--capture-audio` and `--capture-video` together. Add
+`--executable`, `--package` and `--song` to recheck artifact bytes.
+`tools/audio_export_validation.py` and `tools/audio_capture.py` never fabricate this result: they report a structured
 unavailable reference to the evidence record and can attach a verified
 production-player reference when `NW12_PHYSICAL_EVIDENCE` matches the package
 and song. Only the report that also matches the production executable can

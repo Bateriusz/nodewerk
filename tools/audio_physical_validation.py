@@ -31,7 +31,8 @@ import re
 import subprocess
 import sys
 import uuid
-from pathlib import Path
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 from fractions import Fraction
 from typing import Any, Mapping, Sequence
 
@@ -172,6 +173,72 @@ def evidence_reference(
     return reference
 
 
+@dataclass(frozen=True)
+class ArchiveFiles:
+    """Original inputs alongside the report, or explicitly selected by the operator."""
+    run: Path
+    observation: Path
+    audio: Path
+    video: Path
+
+    def _paths(self) -> dict[str, Path]:
+        return {"run": self.run, "observation": self.observation,
+                "audio": self.audio, "video": self.video}
+
+    def complete(self) -> bool:
+        return all(path.is_file() for path in self._paths().values())
+
+    def relative_to(self, report: Path) -> dict[str, str] | None:
+        root = report.parent.resolve()
+        try:
+            return {name: path.resolve().relative_to(root).as_posix()
+                    for name, path in self._paths().items()}
+        except ValueError:
+            return None
+
+    @classmethod
+    def from_report(cls, report: Path, evidence: Mapping[str, Any]) -> "ArchiveFiles | None":
+        files = evidence.get("archive_files")
+        if files is None:
+            return None
+        if not isinstance(files, Mapping) or set(files) != {"run", "observation", "audio", "video"}:
+            raise ValueError("physical evidence requires four archive file references")
+        root = report.parent.resolve()
+        paths = {}
+        for name, relative in files.items():
+            if not isinstance(relative, str) or not relative or "\\" in relative or ":" in relative:
+                raise ValueError("archive file references must remain relative to the report")
+            path = PurePosixPath(relative)
+            if path.is_absolute() or not path.parts or ".." in path.parts:
+                raise ValueError("archive file references must remain relative to the report")
+            resolved = (root / Path(*path.parts)).resolve()
+            if not resolved.is_relative_to(root):
+                raise ValueError("archive file references must remain relative to the report")
+            paths[name] = resolved
+        return cls(**paths)
+
+
+@dataclass(frozen=True)
+class _CaptureArchive:
+    run: Mapping[str, Any]
+    run_sha256: str
+    observation: Mapping[str, Any]
+    observation_sha256: str
+
+    def bound_observation(self) -> dict[str, Any]:
+        capture = dict(self.observation["capture"], run_id=self.run["run_id"],
+                       run_sha256=self.run_sha256, observation_sha256=self.observation_sha256)
+        return dict(self.observation, capture=capture)
+
+
+def _read_capture_archive(files: ArchiveFiles) -> _CaptureArchive:
+    raw_run = files.run.read_bytes()
+    raw_observation = files.observation.read_bytes()
+    run, observation = json.loads(raw_run), json.loads(raw_observation)
+    validate_capture_binding(run, observation, files.audio, files.video)
+    return _CaptureArchive(run, sha256_bytes(raw_run), observation, sha256_bytes(raw_observation))
+
+
 def load_verified_evidence(
     path: str | os.PathLike[str] | None = None,
     *,
@@ -188,9 +255,9 @@ def load_verified_evidence(
     if not evidence_path.is_file():
         return None
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    verify_evidence(
+    evidence = verify_evidence(
         evidence, package_bytes=package_bytes, song_bytes=song_bytes,
-        executable_bytes=executable_bytes,
+        executable_bytes=executable_bytes, evidence_path=evidence_path,
     )
     if (evidence.get("verification_status") != "verified_physical"
             or (source_head_sha is not None and evidence["source_head_sha"] != source_head_sha)):
@@ -415,8 +482,13 @@ def build_evidence(
     run_id: str | None = None,
     run_sha256: str | None = None,
     player_returncode: int | None = None,
+    _archive: _CaptureArchive | None = None,
+    _archive_paths: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Build a physical evidence record without inventing any observation."""
+    """Build a physical record; unarchived findings remain diagnostic only."""
+    if _archive is not None:
+        observation = _archive.bound_observation()
+        run_id, run_sha256 = _archive.run["run_id"], _archive.run_sha256
     package = nwp.decode_package(package_bytes)
     payload = package.audio_song
     if payload is None or payload != song_bytes:
@@ -438,6 +510,9 @@ def build_evidence(
                             "reason": "no independently recorded artifact build identity was supplied"})
     else:
         validate_physical_inputs(build_identity, _identity_hashes(artifact), provenance)
+    if _archive is None or _archive_paths is None:
+        unavailable.append({"field": "archive_files",
+                            "reason": "the original run, observation JSON and both media must be retained beside the report"})
     if environment.get("status") != "available":
         unavailable.append(
             {
@@ -538,6 +613,8 @@ def build_evidence(
         "build_identity": build_identity,
         "run_id": run_id,
         "run_sha256": run_sha256,
+        "archive_files": _archive_paths,
+        "observation_sha256": _archive.observation_sha256 if _archive else None,
         "song": song,
         "verification_status": "verified_physical" if verified else "pending_physical",
         "physical_evidence": "verified" if verified else "pending",
@@ -561,7 +638,9 @@ def build_evidence(
 
     if player_returncode is not None:
         mark_player_result(evidence, player_returncode)
-    verify_evidence(evidence)
+    _validate_report(evidence)
+    if verified:
+        _verify_archive(evidence, _archive)
     return evidence
 
 
@@ -627,10 +706,14 @@ def _verify_measured_evidence(evidence: Mapping[str, Any]) -> None:
         raise ValueError("verified evidence requires measured alignment")
     capture = alignment.get("capture")
     run_id, run_sha256 = evidence.get("run_id"), evidence.get("run_sha256")
+    observation_sha256 = evidence.get("observation_sha256")
     if (not _valid_hash(run_id, 32) or not _valid_hash(run_sha256)
-            or not isinstance(capture, Mapping) or capture.get("run_id") != run_id or capture.get("run_sha256") != run_sha256
+            or (observation_sha256 is not None and not _valid_hash(observation_sha256))
+            or not isinstance(capture, Mapping)
+            or capture.get("run_id") != run_id or capture.get("run_sha256") != run_sha256
+            or capture.get("observation_sha256") != observation_sha256
             or not all(_valid_hash(capture.get(f"{kind}_sha256")) for kind in ("audio", "video"))):
-        raise ValueError("verified evidence requires the same playback run and both raw capture hashes")
+        raise ValueError("verified evidence requires the same run, original observation and both raw capture hashes")
     recomputed = evaluate_alignment(
         {"format": OBSERVATION_FORMAT, "version": 1, **alignment}, song, _refresh(display)
     )
@@ -655,14 +738,14 @@ def _verify_measured_evidence(evidence: Mapping[str, Any]) -> None:
         raise ValueError("reported CPU or underrun summary contradicts run telemetry")
 
 
-def verify_evidence(
+def _validate_report(
     evidence: Mapping[str, Any],
     *,
     package_bytes: bytes | None = None,
     song_bytes: bytes | None = None,
     executable_bytes: bytes | None = None,
 ) -> dict[str, Any]:
-    """Validate evidence structure and artifact binding without hardware."""
+    """Validate the persisted report, but do not certify its external inputs."""
     if (not isinstance(evidence, Mapping) or evidence.get("format") != FORMAT
             or type(evidence.get("version")) is not int or evidence["version"] != VERSION):
         raise ValueError("unexpected NW-12 physical evidence format")
@@ -704,6 +787,35 @@ def verify_evidence(
         if artifact.get("executable_sha256") != sha256_bytes(executable_bytes):
             raise ValueError("executable bytes do not match the evidence binding")
     return dict(evidence)
+
+
+def verify_evidence(
+    evidence: Mapping[str, Any], *,
+    package_bytes: bytes | None = None, song_bytes: bytes | None = None,
+    executable_bytes: bytes | None = None, evidence_path: Path | None = None,
+    archive_files: ArchiveFiles | None = None,
+) -> dict[str, Any]:
+    """Validate stored facts and certify only an independently rechecked archive."""
+    result = _validate_report(evidence, package_bytes=package_bytes, song_bytes=song_bytes,
+                              executable_bytes=executable_bytes)
+    if result["verification_status"] != "verified_physical":
+        return result
+    if archive_files is None and evidence_path is not None:
+        archive_files = ArchiveFiles.from_report(evidence_path, result)
+    if result.get("observation_sha256") is not None and archive_files is not None and archive_files.complete():
+        try:
+            snapshot = _read_capture_archive(archive_files)
+        except FileNotFoundError:
+            pass  # The archive became unavailable between discovery and reading.
+        else:
+            _verify_archive(result, snapshot)
+            return result
+    # Do not mutate the historical file or let a detached report certify itself.
+    return dict(result, verification_status="pending_physical", physical_evidence="pending",
+                satisfies_completion=False, source_head_sha=None, unavailable=[
+                    {"field": "archive_files",
+                     "reason": "original run, observation JSON or capture media are unavailable"},
+                ])
 
 
 def mark_player_result(evidence: dict[str, Any], returncode: int) -> dict[str, Any]:
@@ -799,15 +911,20 @@ def run_playback(*, player: Path, package: Path, song: Path, output: Path,
 
 def validate_capture_binding(run: Mapping[str, Any], observation: Mapping[str, Any],
                              audio_capture: Path, video_capture: Path) -> None:
-    if run.get("format") != "nodewerk-audio-physical-run" or run.get("version") != 1:
+    if (not isinstance(run, Mapping) or run.get("format") != "nodewerk-audio-physical-run"
+            or type(run.get("version")) is not int or run["version"] != 1):
         raise ValueError("invalid physical run format")
     run_id = run.get("run_id")
-    if not _valid_hash(run_id, 32) or observation.get("run_id") != run_id:
+    if not _valid_hash(run_id, 32) or not isinstance(observation, Mapping) or observation.get("run_id") != run_id:
         raise ValueError("observation does not identify the recorded playback run")
-    capture = observation.get("capture") or {}
-    if capture.get("audio_sha256") != sha256_file(audio_capture):
+    capture = observation.get("capture")
+    if not isinstance(capture, Mapping):
+        raise ValueError("observation is missing raw capture hashes")
+    audio_hash = sha256_file(audio_capture)
+    if capture.get("audio_sha256") != audio_hash:
         raise ValueError("audio capture SHA-256 mismatch")
-    if capture.get("video_sha256") != sha256_file(video_capture):
+    video_hash = audio_hash if audio_capture.resolve() == video_capture.resolve() else sha256_file(video_capture)
+    if capture.get("video_sha256") != video_hash:
         raise ValueError("video capture SHA-256 mismatch")
 
 
@@ -816,25 +933,24 @@ def record(*, player: Path, package: Path, song: Path, output: Path,
            video_capture: Path
            ) -> dict[str, Any]:
     """Bind a capture to the saved telemetry; never launch a second playback."""
-    raw_run = run_path.read_bytes()
-    run = json.loads(raw_run)
-    observation = json.loads(observation_path.read_text(encoding="utf-8"))
-    validate_capture_binding(run, observation, audio_capture, video_capture)
+    files = ArchiveFiles(run_path, observation_path, audio_capture, video_capture)
+    archive = _read_capture_archive(files)
+    run = archive.run
     if run.get("artifact") != _artifact_identity(player, package, song):
         raise ValueError("physical run artifact identity mismatch")
     provenance = run["provenance"]
     if not provenance.get("tracked_files_clean"):
         raise ValueError("physical run source checkout was not clean")
-    run_sha256 = sha256_bytes(raw_run)
-    observation["capture"] = dict(observation["capture"], run_id=run["run_id"],
-                                  run_sha256=run_sha256)
+    relative_paths = files.relative_to(output)
+    if relative_paths is not None:
+        ArchiveFiles.from_report(output, {"archive_files": relative_paths})
     evidence = build_evidence(
         package_bytes=package.read_bytes(), song_bytes=song.read_bytes(),
         source_head_sha=provenance.get("source_revision"),
         executable_bytes=player.read_bytes(), telemetry_text=run["stdout"],
-        observation=observation, environment=run["environment"], provenance=provenance,
-        build_identity=run.get("build_identity"), run_id=run["run_id"],
-        run_sha256=run_sha256, player_returncode=run["returncode"],
+        environment=run["environment"], provenance=provenance,
+        build_identity=run.get("build_identity"), player_returncode=run["returncode"],
+        _archive=archive, _archive_paths=relative_paths,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("x", encoding="utf-8") as stream:
@@ -843,23 +959,23 @@ def record(*, player: Path, package: Path, song: Path, output: Path,
     return evidence
 
 
-def verify_run_files(evidence: Mapping[str, Any], run_path: Path,
-                     audio_capture: Path, video_capture: Path) -> None:
-    """Optionally recheck the archived run and original media against the record."""
-    data = run_path.read_bytes()
-    run = json.loads(data)
-    if (evidence.get("verification_status") != "verified_physical"
-            or evidence.get("run_sha256") != sha256_bytes(data)
+def _verify_archive(evidence: Mapping[str, Any], archive: _CaptureArchive) -> None:
+    run = archive.run
+    if (evidence.get("run_sha256") != archive.run_sha256
             or evidence.get("run_id") != run.get("run_id")
             or evidence.get("build_identity") != run.get("build_identity")
             or evidence.get("provenance") != run.get("provenance")
             or _identity_hashes(evidence["artifact"]) != run.get("artifact")):
         raise ValueError("archived run does not match the verified evidence")
-    validate_capture_binding(run, {"run_id": evidence["run_id"],
-                                   "capture": evidence["alignment"]["capture"]},
-                             audio_capture, video_capture)
-    if playback_environment(run["environment"], run["stdout"], run["returncode"]) != evidence["environment"]:
+    if evidence.get("observation_sha256") != archive.observation_sha256:
+        raise ValueError("original observation JSON SHA-256 mismatch")
+    environment = playback_environment(run["environment"], run["stdout"], run["returncode"])
+    if environment != evidence["environment"]:
         raise ValueError("archived run does not match the active playback environment")
+    measured = evaluate_alignment(archive.bound_observation(), evidence["song"],
+                                  _refresh(environment["display"]))
+    if measured != evidence["alignment"]:
+        raise ValueError("recorded alignment does not match the original measured onsets")
     telemetry = parse_player_telemetry(run["stdout"])
     if any(telemetry[key] != evidence["measurements"][key] for key in _INT_TELEMETRY.values()):
         raise ValueError("archived run does not match the measured audio telemetry")
@@ -887,7 +1003,7 @@ def _parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("--package", type=Path)
     verify_parser.add_argument("--song", type=Path)
     verify_parser.add_argument("--executable", type=Path)
-    for name in ("run", "capture-audio", "capture-video"):
+    for name in ("run", "observation", "capture-audio", "capture-video"):
         verify_parser.add_argument("--" + name, type=Path)
     probe_parser = sub.add_parser("environment", help="print the detected environment")
     probe_parser.add_argument("--output", type=Path)
@@ -919,20 +1035,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps({"verification_status": evidence["verification_status"]}))
         return 0
-    evidence = json.loads(args.evidence.read_text(encoding="utf-8"))
+    archive = (args.run, args.observation, args.capture_audio, args.capture_video)
+    if any(archive) and not all(archive):
+        raise ValueError("verify requires --run, --observation, --capture-audio and --capture-video together")
+    evidence = json.loads(args.evidence.read_bytes())
     verified = verify_evidence(
         evidence,
         package_bytes=args.package.read_bytes() if args.package else None,
         song_bytes=args.song.read_bytes() if args.song else None,
         executable_bytes=args.executable.read_bytes() if args.executable else None,
+        evidence_path=args.evidence, archive_files=ArchiveFiles(*archive) if all(archive) else None,
     )
-    run_files = (args.run, args.capture_audio, args.capture_video)
-    if any(run_files):
-        if not all(run_files):
-            raise ValueError("verify requires --run, --capture-audio and --capture-video together")
-        verify_run_files(verified, *run_files)
     print(json.dumps({"valid": True, "verification_status": verified["verification_status"],
-                      "archive_rechecked": all(run_files)}))
+                      "archive_rechecked": verified["verification_status"] == "verified_physical"}))
     return 0
 
 

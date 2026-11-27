@@ -1054,8 +1054,10 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
         from audio_physical_validation import verify_evidence
 
         try:
-            verify_evidence(instance)
-        except (TypeError, ValueError) as exc:
+            checked = verify_evidence(instance, evidence_path=doc_path)
+            if checked["verification_status"] != instance["verification_status"]:
+                raise ValueError("a verified physical record requires its original capture archive")
+        except (OSError, TypeError, ValueError) as exc:
             raise SchemaValidationError(f"{doc_path}: {exc}") from exc
 
 

@@ -99,6 +99,18 @@
     "build_identity": { "type": ["object", "null"] },
     "run_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{32}$" },
     "run_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+    "observation_sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+    "archive_files": {
+      "type": ["object", "null"],
+      "required": ["run", "observation", "audio", "video"],
+      "properties": {
+        "run": { "type": "string", "minLength": 1 },
+        "observation": { "type": "string", "minLength": 1 },
+        "audio": { "type": "string", "minLength": 1 },
+        "video": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
     "song": { "type": "object" },
     "environment": {
       "type": "object",
