@@ -1050,6 +1050,15 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                     f"{doc_path}: verified physical evidence field disagrees"
                 )
 
+    elif schema_name == "nw12-audio-physical-public-summary.schema.json":
+        environment, alignment = instance["environment"], instance["alignment"]
+        numerator = environment["display_refresh_numerator"]
+        denominator = environment["display_refresh_denominator"]
+        if (not denominator <= numerator <= 480 * denominator
+                or alignment["max_abs_delta_ticks"] * numerator > 48000 * denominator
+                or instance["artifact"]["song_bytes"] != 20 + 20 * alignment["impulse_count"]):
+            raise SchemaValidationError(f"{doc_path}: inconsistent reported audio alignment")
+
     elif schema_name == "nw12-audio-physical-evidence.schema.json":
         from audio_physical_validation import verify_evidence
 
@@ -1101,14 +1110,34 @@ ARTIFACT_SCHEMA_MAPPINGS: list[tuple[str, str]] = [
 ]
 
 
-def validate_file_against_schema(doc_path: Path, schema_path: Path) -> None:
+def validate_file_against_schema(
+    doc_path: Path, schema_path: Path, *, public_nw12_slot: bool = False,
+) -> None:
     doc = json.loads(doc_path.read_text(encoding="utf-8"))
+    if schema_path.name == "nw12-audio-physical-evidence.schema.json" and isinstance(doc, dict):
+        from audio_physical_validation import PUBLIC_SUMMARY_FORMAT, PUBLIC_SUMMARY_SCHEMA
+        if doc.get("format") == PUBLIC_SUMMARY_FORMAT:
+            # The benchmark slot can contain a sanitized historical report.
+            # The distinct format cannot reach the private archive verifier.
+            schema_path = schema_path.with_name(PUBLIC_SUMMARY_SCHEMA)
+        elif public_nw12_slot and (
+            doc.get("verification_status") != "pending_physical"
+            or any(doc.get(key) is not None for key in (
+                "archive_files", "run_id", "run_sha256", "observation_sha256", "alignment",
+            ))
+        ):
+            raise SchemaValidationError(
+                f"{doc_path}: keep the private capture archive off the public repository; "
+                "publish the sanitized historical summary instead"
+            )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     validate_instance(doc, schema, schema, path=str(doc_path.name))
     validate_semantic_invariants(doc, schema_path.name, doc_path)
 
 
 def validate_all_repository_artifacts(repo_root: Path) -> dict[str, Any]:
+    from audio_physical_validation import EVIDENCE_RECORD
+
     results = []
     for rel_doc, rel_schema in ARTIFACT_SCHEMA_MAPPINGS:
         doc_path = repo_root / rel_doc
@@ -1117,7 +1146,7 @@ def validate_all_repository_artifacts(repo_root: Path) -> dict[str, Any]:
             raise SchemaValidationError(f"Missing required artifact: {rel_doc}")
         if not schema_path.exists():
             raise SchemaValidationError(f"Missing required schema: {rel_schema}")
-        validate_file_against_schema(doc_path, schema_path)
+        validate_file_against_schema(doc_path, schema_path, public_nw12_slot=rel_doc == EVIDENCE_RECORD)
         results.append({"artifact": rel_doc, "schema": rel_schema, "valid": True})
     return {"validated_count": len(results), "results": results}
 

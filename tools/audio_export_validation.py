@@ -129,8 +129,8 @@ def validate(template: Path, dxc: str, root: Path) -> dict:
     # do not misrepresent these as additive per-symbol sizes.
     # The physical WASAPI/display observation is deliberately not performed by
     # this build-only Windows gate. Recorded CPU/underrun/alignment evidence is
-    # merged only when a verified physical record for this exact package/song is
-    # supplied through NW12_PHYSICAL_EVIDENCE; otherwise the gap is explicit.
+    # reported only as a sanitized historical summary after rechecking the
+    # private archive for this exact build; otherwise the gap is explicit.
     source_commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
     ).strip()

@@ -45,6 +45,9 @@ import nwp_package as nwp  # noqa: E402
 from audio_song import compile_song, decode_song  # noqa: E402
 
 FORMAT = "nodewerk-nw12-audio-physical-evidence"
+PUBLIC_SUMMARY_FORMAT = "nodewerk-nw12-audio-physical-public-summary"
+PUBLIC_SUMMARY_SCHEMA = "nw12-audio-physical-public-summary.schema.json"
+PUBLIC_LIMITATION = "The private capture archive is not included; this summary cannot certify acceptance."
 VERSION = 1
 TICKS_PER_SECOND = 48_000
 DEFAULT_DISPLAY_FRAME_RATE = 60
@@ -167,9 +170,10 @@ def evidence_reference(
         "alignment_definition": PROTOCOL["alignment_definition"],
     }
     if verified is not None:
-        reference["status"] = ("verified" if playback_artifact_matches
-                               else "verified_production_reference")
-        reference["evidence"] = dict(verified)
+        reference["status"] = "reported_historical"
+        reference["artifact_match"] = ("executable_package_song" if playback_artifact_matches
+                                       else "package_and_song_only")
+        reference["summary"] = _project_verified_report(verified)
     return reference
 
 
@@ -255,6 +259,8 @@ def load_verified_evidence(
     if not evidence_path.is_file():
         return None
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    if isinstance(evidence, Mapping) and evidence.get("format") == PUBLIC_SUMMARY_FORMAT:
+        return None  # Publication has no authority in a private acceptance workflow.
     evidence = verify_evidence(
         evidence, package_bytes=package_bytes, song_bytes=song_bytes,
         executable_bytes=executable_bytes, evidence_path=evidence_path,
@@ -981,6 +987,51 @@ def _verify_archive(evidence: Mapping[str, Any], archive: _CaptureArchive) -> No
         raise ValueError("archived run does not match the measured audio telemetry")
 
 
+def _project_verified_report(evidence: Mapping[str, Any]) -> dict[str, Any]:
+    """Allowlist a historical decision; never expose private archive contents."""
+    _validate_report(evidence)
+    if evidence["verification_status"] != "verified_physical" or evidence.get("observation_sha256") is None:
+        raise ValueError("a public summary requires a verified private decision bound to the original observation")
+    artifact, alignment = evidence["artifact"], evidence["alignment"]
+    environment = evidence["environment"]
+    display, capture = environment["display"], alignment["capture"]
+    return {
+        "format": PUBLIC_SUMMARY_FORMAT,
+        "version": 1,
+        "task": "NW-12",
+        "implementation_base": IMPLEMENTATION_BASE,
+        "implementation_base_tree": IMPLEMENTATION_BASE_TREE,
+        "verification_status": "reported_historical",
+        "reported_decision": "verified_physical",
+        "archive_rechecked": False,
+        "satisfies_completion": False,
+        "measured_source_commit": evidence["source_head_sha"],
+        "measured_source_tree": evidence["provenance"]["source_tree"],
+        "artifact": {**_identity_hashes(artifact), "song_bytes": artifact["song_bytes"],
+                     "duration_ticks": artifact["duration_ticks"]},
+        "archive_digests": {"run_sha256": evidence["run_sha256"],
+                            "observation_sha256": evidence["observation_sha256"],
+                            "audio_sha256": capture["audio_sha256"],
+                            "video_sha256": capture["video_sha256"]},
+        "environment": {"os_build": int(environment["os"]["build"]),
+                        "display_refresh_numerator": display["refresh_numerator"],
+                        "display_refresh_denominator": display["refresh_denominator"]},
+        "protocol": {"clock": "wasapi_endpoint", "sample_rate": TICKS_PER_SECOND},
+        "alignment": {"impulse_count": alignment["impulse_count"],
+                      "max_abs_delta_ticks": alignment["max_abs_delta_ticks"],
+                      "within_one_displayed_frame": alignment["within_one_displayed_frame"]},
+        "measurements": {key: evidence["measurements"][key] for key in _INT_TELEMETRY.values()},
+        "limitation": PUBLIC_LIMITATION,
+    }
+
+
+def summarize_private_evidence(path: Path, *, archive_files: ArchiveFiles | None = None) -> dict[str, Any]:
+    """Recheck the original private archive before producing a public projection."""
+    evidence = verify_evidence(json.loads(path.read_bytes()), evidence_path=path,
+                               archive_files=archive_files)
+    return _project_verified_report(evidence)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1003,8 +1054,12 @@ def _parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("--package", type=Path)
     verify_parser.add_argument("--song", type=Path)
     verify_parser.add_argument("--executable", type=Path)
-    for name in ("run", "observation", "capture-audio", "capture-video"):
-        verify_parser.add_argument("--" + name, type=Path)
+    summary_parser = sub.add_parser("summarize", help="write a sanitized historical report from a verified private archive")
+    summary_parser.add_argument("--evidence", type=Path, required=True)
+    summary_parser.add_argument("--output", type=Path, required=True)
+    for read_parser in (verify_parser, summary_parser):
+        for name in ("run", "observation", "capture-audio", "capture-video"):
+            read_parser.add_argument("--" + name, type=Path)
     probe_parser = sub.add_parser("environment", help="print the detected environment")
     probe_parser.add_argument("--output", type=Path)
     return parser
@@ -1037,14 +1092,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     archive = (args.run, args.observation, args.capture_audio, args.capture_video)
     if any(archive) and not all(archive):
-        raise ValueError("verify requires --run, --observation, --capture-audio and --capture-video together")
+        raise ValueError("supply --run, --observation, --capture-audio and --capture-video together")
+    archive_files = ArchiveFiles(*archive) if all(archive) else None
+    if args.command == "summarize":
+        summary = summarize_private_evidence(args.evidence, archive_files=archive_files)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        with args.output.open("x", encoding="utf-8") as stream:
+            json.dump(summary, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+        return 0
     evidence = json.loads(args.evidence.read_bytes())
     verified = verify_evidence(
         evidence,
         package_bytes=args.package.read_bytes() if args.package else None,
         song_bytes=args.song.read_bytes() if args.song else None,
         executable_bytes=args.executable.read_bytes() if args.executable else None,
-        evidence_path=args.evidence, archive_files=ArchiveFiles(*archive) if all(archive) else None,
+        evidence_path=args.evidence, archive_files=archive_files,
     )
     print(json.dumps({"valid": True, "verification_status": verified["verification_status"],
                       "archive_rechecked": verified["verification_status"] == "verified_physical"}))

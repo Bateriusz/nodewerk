@@ -507,11 +507,17 @@ def test_physical_evidence_verified_requires_all_observations(tmp_path):
 
 def test_published_physical_evidence_binds_base_and_stays_honest():
     import audio_physical_validation as physical
-    record = json.loads(
-        (ROOT / "benchmarks/nw12/audio-physical-evidence.v1.json").read_text(
-            encoding="utf-8"
-        )
-    )
+    path = ROOT / "benchmarks/nw12/audio-physical-evidence.v1.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    from schema_validator import validate_file_against_schema
+    validate_file_against_schema(path, ROOT / "schemas/nw12-audio-physical-evidence.schema.json")
+    if record["format"] == physical.PUBLIC_SUMMARY_FORMAT:
+        assert record["verification_status"] == "reported_historical"
+        assert record["archive_rechecked"] is False
+        assert record["satisfies_completion"] is False
+        assert physical.load_verified_evidence(path) is None
+        return
+
     physical.verify_evidence(record)
     assert record["implementation_base"] == "8ade0b74c78113c18c977afbde0f3e2b98c4fcf2"
     assert record["nw11_incorporated"] is True
@@ -534,11 +540,6 @@ def test_published_physical_evidence_binds_base_and_stays_honest():
         assert {item["field"] for item in record["unavailable_telemetry"]} >= {
             "measurements.physical_underruns"
         }
-    from schema_validator import validate_file_against_schema
-    validate_file_against_schema(
-        ROOT / "benchmarks/nw12/audio-physical-evidence.v1.json",
-        ROOT / "schemas/nw12-audio-physical-evidence.schema.json",
-    )
 
 
 def test_recorded_implementation_base_includes_nw11():
@@ -554,7 +555,10 @@ def test_recorded_implementation_base_includes_nw11():
     ).returncode == 0
     assert subprocess.check_output(
         ["git", "rev-parse", f"{base}^{{tree}}"], cwd=ROOT, text=True
-    ).strip() == record["provenance"]["implementation_base_tree"]
+    ).strip() == (
+        record["implementation_base_tree"] if "implementation_base_tree" in record
+        else record["provenance"]["implementation_base_tree"]
+    )
     message = subprocess.check_output(
         ["git", "log", "-1", "--format=%s", base], cwd=ROOT, text=True
     )
@@ -843,3 +847,97 @@ def test_package_rejects_unsupported_header_flags_generically():
     bad[-32:] = sha256(bad[:-32]).digest()
     with pytest.raises(nwp.PackageValidationError, match="unsupported package header flags"):
         nwp.decode_package(bytes(bad))
+
+
+def test_public_projection_is_allowlisted_historical_and_has_no_acceptance_authority(tmp_path):
+    from copy import deepcopy
+    import audio_physical_validation as physical
+    from schema_validator import SchemaValidationError, validate_file_against_schema
+
+    args = _test_physical_roundtrip_args()
+    private_detail = "/home/private-user/machine-serial/session"
+    args["observation"]["capture"]["operator_note"] = private_detail
+    private, original, archive = _record_test_capture(tmp_path / "private", args)
+    assert private_detail in original.read_text(encoding="utf-8")
+    public = tmp_path / "summary.json"
+    assert physical.main(["summarize", "--evidence", str(original), "--output", str(public)]) == 0
+    summary = json.loads(public.read_text(encoding="utf-8"))
+    assert summary["verification_status"] == "reported_historical"
+    assert summary["reported_decision"] == "verified_physical"
+    assert summary["archive_rechecked"] is False and summary["satisfies_completion"] is False
+    assert summary["artifact"] == private["artifact"]
+    assert summary["measured_source_commit"] == private["source_head_sha"]
+    assert summary["measured_source_tree"] == private["provenance"]["source_tree"]
+    assert summary["archive_digests"]["observation_sha256"] == private["observation_sha256"]
+    assert summary["archive_digests"]["run_sha256"] == private["run_sha256"]
+    public_text = public.read_text(encoding="utf-8")
+    for secret in (private_detail, archive.observation.name, archive.run.name, archive.audio.name,
+                   private["run_id"], "audio_endpoint", "operator_note"):
+        assert secret not in public_text
+    public_schema = ROOT / "schemas" / physical.PUBLIC_SUMMARY_SCHEMA
+    repo_slot_schema = ROOT / "schemas/nw12-audio-physical-evidence.schema.json"
+    validate_file_against_schema(public, public_schema)
+    validate_file_against_schema(public, repo_slot_schema)
+    assert physical.load_verified_evidence(public) is None
+    with pytest.raises(ValueError, match="unexpected NW-12 physical evidence format"):
+        physical.verify_evidence(summary, archive_files=archive)
+
+    ref = physical.evidence_reference("not a physical measurement", verified=private,
+                                      playback_artifact_matches=True)
+    assert ref["status"] == "reported_historical" and ref["summary"] == summary
+    assert "evidence" not in ref and ref["artifact_match"] == "executable_package_song"
+
+    # The public route cannot smuggle private details or claim verification.
+    for bad in (
+        {**summary, "archive_files": private["archive_files"]},
+        {**summary, "archive_rechecked": True},
+        {**summary, "satisfies_completion": True},
+        {**summary, "verification_status": "verified_physical"},
+        {**summary, "environment": {**summary["environment"], "host": private_detail}},
+    ):
+        public.write_text(json.dumps(bad), encoding="utf-8")
+        with pytest.raises(SchemaValidationError):
+            validate_file_against_schema(public, repo_slot_schema)
+
+    detached = tmp_path / "detached.json"
+    detached.write_text(json.dumps(private), encoding="utf-8")
+    with pytest.raises(ValueError, match="requires a verified private decision"):
+        physical.summarize_private_evidence(detached)
+    assert physical.load_verified_evidence(detached) is None
+
+    original_observation = archive.observation.read_bytes()
+    archive.observation.write_bytes(original_observation + b"\n")
+    with pytest.raises(ValueError, match="original observation JSON SHA-256"):
+        physical.summarize_private_evidence(original)
+
+
+def test_public_benchmark_registry_refuses_private_archive_even_when_complete(tmp_path, monkeypatch):
+    from shutil import copyfile
+    import audio_physical_validation as physical
+    import schema_validator
+
+    private_schema = "schemas/nw12-audio-physical-evidence.schema.json"
+    for relative in (private_schema, f"schemas/{physical.PUBLIC_SUMMARY_SCHEMA}"):
+        dst = tmp_path / relative
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        copyfile(ROOT / relative, dst)
+    slot = tmp_path / physical.EVIDENCE_RECORD
+    args = _test_physical_roundtrip_args()
+    args["observation"]["capture"]["operator_note"] = "/home/synthetic-test/private-audit"
+    private, record, _ = _record_test_capture(slot.parent, args)
+    record.replace(slot)
+    monkeypatch.setattr(schema_validator, "ARTIFACT_SCHEMA_MAPPINGS", [
+        (physical.EVIDENCE_RECORD, private_schema),
+    ])
+
+    assert physical.verify_evidence(private, evidence_path=slot) == private
+    schema_validator.validate_file_against_schema(slot, tmp_path / private_schema)
+    with pytest.raises(schema_validator.SchemaValidationError, match="sanitized historical summary"):
+        schema_validator.validate_all_repository_artifacts(tmp_path)
+
+    summary = physical.summarize_private_evidence(slot)
+    slot.write_text(json.dumps(summary), encoding="utf-8")
+    assert schema_validator.validate_all_repository_artifacts(tmp_path)["validated_count"] == 1
+
+    copyfile(ROOT / physical.EVIDENCE_RECORD, slot)
+    assert schema_validator.validate_all_repository_artifacts(tmp_path)["validated_count"] == 1

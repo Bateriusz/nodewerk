@@ -132,12 +132,33 @@ detached report is not verified on its own. The `verify` command finds the
 archived files from the report or accepts explicit replacements using `--run`,
 `--observation`, `--capture-audio` and `--capture-video` together. Add
 `--executable`, `--package` and `--song` to recheck artifact bytes.
-`tools/audio_export_validation.py` and `tools/audio_capture.py` never fabricate this result: they report a structured
-unavailable reference to the evidence record and can attach a verified
-production-player reference when `NW12_PHYSICAL_EVIDENCE` matches the package
-and song. Only the report that also matches the production executable can
-verify the current playback artifact. The aggregate status lives in
+`tools/audio_export_validation.py` and `tools/audio_capture.py` never make a
+physical observation. With `NW12_PHYSICAL_EVIDENCE` set to a matching private
+report, they can attach a sanitized historical summary only after rechecking
+the private archive. The byte report matches the exact executable and source
+as well as the package/song; offline results match only the package/song.
+
+Keep the original archive private per [ADR 0009](architecture/0009-validation-and-evidence-lifecycle.md).
+Generate the allowlisted public projection separately:
+
+```sh
+python tools/audio_physical_validation.py summarize \
+  --evidence private/evidence.json --output public-summary.json
+```
+
+The public summary preserves the measured commit/tree, exact artifact and
+archive digests, aggregate alignment and telemetry, and the original reported
+decision. It omits the private archive paths, device identifiers, raw telemetry
+and individual measured onsets. Its status is `reported_historical`, with
+`archive_rechecked: false` and `satisfies_completion: false`: readers cannot
+recheck the original capture from the summary or use it as physical acceptance.
+
+The aggregate slot
 [`benchmarks/nw12/audio-physical-evidence.v1.json`](../benchmarks/nw12/audio-physical-evidence.v1.json)
-and is validated by `schemas/nw12-audio-physical-evidence.schema.json`.
+currently holds the pending [private-format status](../schemas/nw12-audio-physical-evidence.schema.json).
+The repository slot accepts only the unmeasured pending placeholder or the separate
+[public summary format](../schemas/nw12-audio-physical-public-summary.schema.json).
+It rejects a private measurement even when the raw files are available locally.
+The summary is never accepted by the private verifier.
 Hosted CI exercises the deterministic binding/alignment logic only and does not
 require an audio endpoint, real windowed Present, or GPU qualification.
