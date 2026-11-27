@@ -48,10 +48,11 @@ def test_motion_reconstruction_is_continuous_and_effects_use_the_absolute_clock(
     assert len({row["sample"] for row in cues}) == len(cues)
     cue_times = {cue["id"]: cue["tick"] for cue in cues}
     assert cue_times["escape"] < cue_times["exit"] < cue_times["disruptor"] < cue_times["stun"] < cue_times["finale"]
-    shader = demo.story_shader(story).hlsl
+    shader = demo.story_sources(story)[6]
     for row in cues:
         assert f"CUE_{row['id'].upper()} = {row['sample']}u;" in shader
-    assert "NeonBreach(uv, uint(g_time), nw_texture2d(uv).r)" in shader
+    assert "StoryMotionTick" in shader
+    assert "SceneVS" in shader
 
 
 def test_score_override_accepts_notes_but_never_recordings(tmp_path):
@@ -113,16 +114,16 @@ def test_actual_exports_contain_live_main_audio_and_reachable_operator_chapters(
     song = demo.song_payload(demo.SCORE, demo.load_story())
     assert nwp.decode_package(main.package_bytes).audio_song == song
     assert main.manifest["audio"]["clock"] == "wasapi_endpoint"
-    assert main.manifest["image_oracle_status"] == "unavailable"
-    assert main.manifest["image_oracle_sha256"] == ""
+    # Raster output is validated with native captures, not the fullscreen CPU oracle.
+    assert not main.manifest.get("image_oracle_sha256")
     source_files = list((tmp_path / "export" / "neon-breach").glob("*.player.cpp"))
     assert len(source_files) == 1
     source = source_files[0].read_text(encoding="utf-8")
-    assert "config.width = 640u" in source and "config.height = 360u" in source
+    assert "config.width = 1920u" in source and "config.height = 1080u" in source
     assert "audio_output.now_ticks()" in source
     assert "NW05_FIRST_PIXEL=" in source and "--headless" in source
-    orbit_graph = compiler.load_graph(demo.ASSETS / "orbit_atlas.nwgraph")
-    optimized = optimizer.optimize_graph(orbit_graph)
+    main_graph = compiler.load_graph(demo.GRAPH)
+    optimized = optimizer.optimize_graph(main_graph)
     operators = {
         "nw.texture.noise2d", "nw.residency.generate_texture", "nw.mesh.torus",
         "nw.residency.generate_mesh", "nw.scene.instances", "nw.residency.generate_instances",
@@ -130,7 +131,14 @@ def test_actual_exports_contain_live_main_audio_and_reachable_operator_chapters(
         "nw.render.instanced", "nw.post.bloom", "nw.post.tonemap",
     }
     assert operators <= {node.operator_id for node in optimized.nodes}
-    assert len(artifacts["orbit-atlas"].package.shaders) >= 9
+    assert {node.operator_id for node in optimized.nodes} == demo.STORY_OPERATORS
+    assert len(main.package.shaders) == 9
+    assert any(ins.opcode == "frame.execute_indirect" for ins in main.package.frame)
+    assert any(res.format == "DXGI_FORMAT_D32_FLOAT" for res in main.package.resources)
+    assert any(res.usage == "rtv_srv" and res.width == demo.WIDTH and res.height == demo.HEIGHT
+               for res in main.package.resources)
+    assert not main.package.history
+    assert not main.manifest.get("feature_requirements", {}).get("raytracing_tier")
     for name, state in (("portal-particles", "nw.particles.v1"), ("hotel-echo", "nw.feedback.image.v1")):
         package = nwp.decode_package(artifacts[name].package_bytes)
         assert len(package.history) == 1 and package.history[0].state_type == state
@@ -172,12 +180,30 @@ def test_transfer_smoke_refuses_corrupt_or_extra_distribution_files(tmp_path):
 
 def test_finale_text_replacement_is_bounded_and_does_not_change_audio(tmp_path):
     story = demo.load_story()
-    default = demo.story_shader(story).hlsl
+    default = demo.story_sources(story)
     song = demo.song_payload(demo.SCORE, story)
     finale = tmp_path / "my-local-finale.txt"
     finale.write_text("THE SIGNAL IS LOST.\nTHE AGENT IS GONE.\nROOM 07 IS CLOSED.\nEND OF FILE.\n", encoding="ascii")
-    assert demo.story_shader(story, finale).hlsl != default
+    assert demo.story_sources(story, finale) != default
     assert demo.song_payload(demo.SCORE, story) == song
     finale.write_text("ONLY ONE LINE\n", encoding="ascii")
     with pytest.raises(ValueError, match="four uppercase"):
-        demo.story_shader(story, finale)
+        demo.story_sources(story, finale)
+
+
+def test_scene_specialization_is_scoped_and_restored_after_failure(tmp_path):
+    original = demo.export.nw06_export.FIXED_SHADERS
+    paths = []
+    with pytest.raises(RuntimeError, match="intentional export failure"):
+        with demo._story_specialization(demo.load_story()):
+            changed = demo.export.nw06_export.FIXED_SHADERS
+            assert {old.shader_id for old, new in zip(original, changed) if old != new} == {2, 6, 7, 9}
+            for fixed in changed:
+                if fixed.shader_id in demo.STORY_SHADER_FILES:
+                    path = Path(fixed.source)
+                    paths.append(path)
+                    assert path.is_file()
+                    assert "#include" not in path.read_text(encoding="ascii")
+            raise RuntimeError("intentional export failure")
+    assert demo.export.nw06_export.FIXED_SHADERS is original
+    assert all(not path.exists() for path in paths)

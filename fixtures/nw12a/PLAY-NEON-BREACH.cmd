@@ -3,10 +3,10 @@ setlocal
 cd /d "%~dp0"
 echo.
 echo   NEON BREACH  /  ROOM 07
-echo   1   Play the continuous story with original procedural music
-echo   2   Orbit atlas: inspect the mothership approach geometry
-echo   3   Portal tracker: inspect the seeded particle history
-echo   4   Hotel echo: inspect the room's feedback image history
+echo   1   Play the 3D film with original procedural music
+echo   2   Orbit atlas: optional 3D ring scene
+echo   3   Portal tracker: optional 2D particle-history view
+echo   4   Hotel echo: optional 2D image-feedback view
 echo.
 choice /C 1234 /N /T 5 /D 1 /M "Choose 1-4 [story plays after five seconds]: "
 if errorlevel 255 exit /b 10

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from dataclasses import replace
 from hashlib import sha256
 import json
@@ -27,7 +28,8 @@ GRAPH = ASSETS / "neon_breach.nwgraph"
 SCORE = ASSETS / "development-score.json"
 STORY = ASSETS / "story.json"
 FINALE = ASSETS / "finale.txt"
-WIDTH, HEIGHT = 640, 360
+WIDTH, HEIGHT = 1920, 1080
+INSTANCE_COUNT = 1024
 TICKS_PER_SECOND = 48000
 FRAME_TICKS = 800
 CUE_TAIL = 3200
@@ -67,6 +69,18 @@ CHAPTERS = {
     "portal-particles": ("portal_particles.nwgraph", 3200),
     "hotel-echo": ("hotel_echo.nwgraph", 3200),
 }
+STORY_SHADER_FILES = {
+    2: "neon_breach_instances.hlsl",
+    6: "neon_breach_scene_vs.hlsl",
+    7: "neon_breach_scene_ps.hlsl",
+    9: "neon_breach_tonemap.hlsl",
+}
+STORY_OPERATORS = frozenset({
+    "nw.texture.noise2d", "nw.residency.generate_texture", "nw.mesh.torus",
+    "nw.residency.generate_mesh", "nw.scene.instances", "nw.residency.generate_instances",
+    "nw.material.standard", "nw.camera.curve", "nw.light.directional", "nw.animation.twist",
+    "nw.render.instanced", "nw.post.bloom", "nw.post.tonemap", "nw.render.present",
+})
 
 
 def load_story(path: Path = STORY) -> dict[str, Any]:
@@ -195,28 +209,58 @@ def _generated_header(story: dict[str, Any], finale: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
-def story_shader(story: dict[str, Any], finale: Path = FINALE) -> compiler.GeneratedShader:
+def story_sources(story: dict[str, Any], finale: Path = FINALE) -> dict[int, str]:
+    """Author shader content using the existing Orbital Vortex specialization path.
+
+    Every scene object uses the existing torus-generated vertex/index buffers,
+    instance layout, indexed draw and depth buffer. No new runtime/operator ABI
+    is introduced. Keep the generated cue constants inside the hashed sources.
+    """
     doc = compiler.load_graph(GRAPH)
-    if export._graph_render_dimensions(doc, optimizer.optimize_graph(doc)) != (WIDTH, HEIGHT):
-        raise ValueError("story presentation dimensions do not match the shader dispatch")
-    result, diagnostics = compiler.lower_to_selective_hlsl(
-        doc, fused_roots=(), texture_sample_roots={"story"}, thread_group=(WIDTH, 1, 1),
-        dispatch_groups=(1, HEIGHT, 1), image_width=WIDTH, image_height=HEIGHT,
-    )
-    if diagnostics or len(result) != 1 or result[0].execution_root != "story":
-        raise ValueError("story must still lower to a single ordinary fullscreen kernel")
-    shader = result[0]
-    hlsl = _generated_header(story, finale) + (ASSETS / "neon_breach.hlsl").read_text(encoding="ascii") + "\n"
-    body, count = re.subn(r"    float4 nw_value = [^\n]+;", "    float4 nw_value = NeonBreach(uv, uint(g_time), nw_texture2d(uv).r);", shader.hlsl)
-    if count != 1:
-        raise ValueError("generated fullscreen shader ABI changed")
-    hlsl += body
-    return replace(shader, hlsl=hlsl, source_map=(), root_expression="neon-breach:" + sha256(hlsl.encode()).hexdigest())
+    optimized = optimizer.optimize_graph(doc)
+    if {node.operator_id for node in optimized.nodes} != STORY_OPERATORS:
+        raise ValueError("the 3D film must use the existing procedural scene operators")
+    if export._graph_render_dimensions(doc, optimized) != (WIDTH, HEIGHT):
+        raise ValueError("story presentation dimensions do not match the production")
+    if float(optimized.node_map()["instances"].params["count"][0]) != INSTANCE_COUNT:
+        raise ValueError("scene instance budget does not match the production")
+    header = _generated_header(story, finale)
+    common = (ASSETS / "neon_breach_scene.hlsli").read_text(encoding="ascii")
+    result = {}
+    for shader_id, filename in STORY_SHADER_FILES.items():
+        content = (ASSETS / filename).read_text(encoding="ascii")
+        content = content.replace('#include "neon_breach_scene.hlsli"', common)
+        if "#include" in content:
+            raise ValueError("scene shader has an unresolved source dependency")
+        result[shader_id] = header + content
+    return result
+
+
+@contextmanager
+def _story_specialization(story: dict[str, Any], finale: Path = FINALE):
+    """Restore shared shader definitions even if compilation/export fails."""
+    sources = story_sources(story, finale)
+    module = export.nw06_export
+    original = module.FIXED_SHADERS
+    with tempfile.TemporaryDirectory(prefix="neon-breach-shaders-") as folder:
+        paths = {}
+        for shader_id, source in sources.items():
+            path = Path(folder) / STORY_SHADER_FILES[shader_id]
+            path.write_text(source, encoding="ascii", newline="\n")
+            paths[shader_id] = path
+        try:
+            module.FIXED_SHADERS = tuple(
+                replace(fixed, name=paths[fixed.shader_id].stem, source=str(paths[fixed.shader_id]))
+                if fixed.shader_id in paths else fixed for fixed in original
+            )
+            yield
+        finally:
+            module.FIXED_SHADERS = original
 
 
 def _settings(template: Path | None, *, song: bool = False) -> export.ExportSettings:
     return export.ExportSettings(
-        byte_ceiling=64 * 1024 * 1024, memory_budget=256 * 1024 * 1024,
+        byte_ceiling=64 * 1024 * 1024, memory_budget=512 * 1024 * 1024,
         player_template=str(template) if template else "", include_optional_artifacts=False,
         **({"audio_song_path": str(SCORE)} if song else {}),
     )
@@ -228,10 +272,11 @@ def _export_outputs(output: Path, *, score: Path, template: Path | None,
         raise ValueError("release export needs the pinned Windows template and DXC; contract exports never stage EXEs")
     story = load_story()
     settings = _settings(template, song=True)
-    result = export.export_graph(
-        GRAPH, output / "neon-breach", settings=settings, dxc_executable=dxc, allow_test_payloads=test,
-        generated_shaders_override=[story_shader(story, finale)], audio_song_payload=song_payload(score, story),
-    )
+    with _story_specialization(story, finale):
+        result = export.export_graph(
+            GRAPH, output / "neon-breach", settings=settings, dxc_executable=dxc, allow_test_payloads=test,
+            audio_song_payload=song_payload(score, story),
+        )
     artifacts = {"neon-breach": result.artifacts[nwp.COMMON_PROFILE_ID]}
     for chapter, (name, _) in CHAPTERS.items():
         result = export.export_graph(ASSETS / name, output / chapter, settings=_settings(template),
@@ -323,6 +368,10 @@ def build_bundle(output: Path, *, template: Path, dxc: str, score: Path, smoke: 
                         "baseline": BASELINE, "baseline_tree": BASELINE_TREE,
                         "duration_ticks": story["duration_ticks"], "sample_rate": TICKS_PER_SECOND,
                         "frame_ticks": FRAME_TICKS, "score_kind": score_metadata["kind"],
+                        "presentation": {"width": WIDTH, "height": HEIGHT, "instances": INSTANCE_COUNT,
+                                         "renderer": "existing_indexed_instanced_3d", "rtx": False},
+                        "scene_source_sha256": {str(key): sha256(value.encode("ascii")).hexdigest()
+                                                for key, value in story_sources(story, finale_snapshot).items()},
                         "finale_sha256": sha256(finale_bytes).hexdigest(),
                         "nwas_sha256": sha256(artifacts["neon-breach"].package.audio_song).hexdigest(),
                         "cues": cue_frames(story)}
