@@ -1,3 +1,8 @@
 *.hlsl text eol=lf
 *.nwgraph text eol=lf
 *.txt text eol=lf
+
+# Generated planning inventories; review extractors and curated mappings separately.
+references/operator_catalog/werkkzeug3.json linguist-generated=true
+references/operator_catalog/werkkzeug4.json linguist-generated=true
+references/operator_catalog/overview.md linguist-generated=true
