@@ -113,7 +113,7 @@ VSOutput SceneVS(VSInput input) {
         uint cue=group==0u?CUE_DOOR_IMPACT:(group==1u?CUE_IMPACT_ONE:(group==2u?CUE_IMPACT_TWO:CUE_STUN));
         float start=StorySeconds(StoryMotionTick(cue));
         float dt=motion-start; visibility=(Tick>=cue?1.0:0.0)*step(0.0,dt)*(1.0-step(1.5,dt));
-        float3 center=group==0u?float3(0,.9,-2.9):(group==1u?float3(1.35,.7,2):(group==2u?float3(2,.7,4.5):float3(-.9,.7,-.1)));
+        float3 center=group==0u?float3(0,.9,-2.9):(group==1u?float3(1.35,.7,2):(group==2u?float3(2,.7,4.5):NbActorRoot(0u,StorySeconds(CUE_STUN),StorySeconds(StoryMotionTick(CUE_STUN)))+float3(0,.7,0)));
         float3 velocity=origin*float3(3.2,3.8,3.2);
         p=(p-origin)+center+velocity*dt+float3(0,-2.0*dt*dt,0);
     } else if(role==8u) {
