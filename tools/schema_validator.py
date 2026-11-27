@@ -1110,26 +1110,45 @@ ARTIFACT_SCHEMA_MAPPINGS: list[tuple[str, str]] = [
 ]
 
 
+# The original legacy placeholder is the sole public exception to the strict
+# summary schema. Pin its canonical JSON, not artifact bytes or formatting.
+# Its reviewed content contains no observed device/profile, build identity,
+# measurement, raw path or operator note. Do not expand this into a pending
+# status allowlist: an unverified diagnostic can still contain private data.
+_NW12_PUBLIC_PENDING_PLACEHOLDER_SHA256 = (
+    "b156a547a70d92f1e161f6905fdcb52400a841ef181e043bebe6b05942003a90"
+)
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    obj: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in obj:
+            # Don't echo a private duplicate key in hosted validation logs.
+            raise SchemaValidationError("public evidence contains a duplicate JSON key")
+        obj[key] = value
+    return obj
+
+
 def validate_file_against_schema(
     doc_path: Path, schema_path: Path, *, public_nw12_slot: bool = False,
 ) -> None:
-    doc = json.loads(doc_path.read_text(encoding="utf-8"))
+    text = doc_path.read_text(encoding="utf-8")
+    doc = json.loads(text, object_pairs_hook=_unique_json_object if public_nw12_slot else None)
     if schema_path.name == "nw12-audio-physical-evidence.schema.json" and isinstance(doc, dict):
         from audio_physical_validation import PUBLIC_SUMMARY_FORMAT, PUBLIC_SUMMARY_SCHEMA
         if doc.get("format") == PUBLIC_SUMMARY_FORMAT:
             # The benchmark slot can contain a sanitized historical report.
             # The distinct format cannot reach the private archive verifier.
             schema_path = schema_path.with_name(PUBLIC_SUMMARY_SCHEMA)
-        elif public_nw12_slot and (
-            doc.get("verification_status") != "pending_physical"
-            or any(doc.get(key) is not None for key in (
-                "archive_files", "run_id", "run_sha256", "observation_sha256", "alignment",
-            ))
-        ):
-            raise SchemaValidationError(
-                f"{doc_path}: keep the private capture archive off the public repository; "
-                "publish the sanitized historical summary instead"
-            )
+        elif public_nw12_slot:
+            from nwp_package import canonical_json_bytes, sha256_hex
+
+            if sha256_hex(canonical_json_bytes(doc)) != _NW12_PUBLIC_PENDING_PLACEHOLDER_SHA256:
+                raise SchemaValidationError(
+                    f"{doc_path}: keep private capture and diagnostic data off the public repository; "
+                    "retain the original premeasurement placeholder or publish the sanitized historical summary"
+                )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     validate_instance(doc, schema, schema, path=str(doc_path.name))
     validate_semantic_invariants(doc, schema_path.name, doc_path)

@@ -941,3 +941,58 @@ def test_public_benchmark_registry_refuses_private_archive_even_when_complete(tm
 
     copyfile(ROOT / physical.EVIDENCE_RECORD, slot)
     assert schema_validator.validate_all_repository_artifacts(tmp_path)["validated_count"] == 1
+
+
+def test_public_benchmark_registry_accepts_only_the_known_premeasurement_placeholder(tmp_path, monkeypatch):
+    from copy import deepcopy
+    from shutil import copyfile
+    import audio_physical_validation as physical
+    import schema_validator
+
+    private_schema = "schemas/nw12-audio-physical-evidence.schema.json"
+    for relative in (private_schema, f"schemas/{physical.PUBLIC_SUMMARY_SCHEMA}"):
+        dst = tmp_path / relative
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        copyfile(ROOT / relative, dst)
+    slot = tmp_path / physical.EVIDENCE_RECORD
+    slot.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(schema_validator, "ARTIFACT_SCHEMA_MAPPINGS", [
+        (physical.EVIDENCE_RECORD, private_schema),
+    ])
+
+    # A private diagnostic still has device identity and measured telemetry
+    # even when it has no archive, original run ID or observed alignment.
+    args = _test_physical_roundtrip_args()
+    args["environment"]["os"]["caption"] = "/home/synthetic-private-user/session"
+    pending = physical.build_evidence(**dict(args, observation=None, run_id=None))
+    assert pending["verification_status"] == "pending_physical"
+    assert pending["environment"]["status"] == "available"
+    assert pending["measurements"] and pending["build_identity"]
+    assert all(pending[key] is None for key in
+               ("archive_files", "run_id", "run_sha256", "observation_sha256", "alignment"))
+    slot.write_text(json.dumps(pending), encoding="utf-8")
+    schema_validator.validate_file_against_schema(slot, tmp_path / private_schema)
+    with pytest.raises(schema_validator.SchemaValidationError, match="original premeasurement placeholder"):
+        schema_validator.validate_all_repository_artifacts(tmp_path)
+
+    trusted = json.loads((ROOT / physical.EVIDENCE_RECORD).read_text(encoding="utf-8"))
+    # json.loads normally keeps the last key. Reject hidden duplicate content
+    # before checking the legacy allowlist or the public schema.
+    slot.write_text('{"environment":{"note":"synthetic private text"},' + json.dumps(trusted)[1:],
+                    encoding="utf-8")
+    with pytest.raises(schema_validator.SchemaValidationError, match="duplicate JSON key"):
+        schema_validator.validate_all_repository_artifacts(tmp_path)
+
+    if trusted["format"] == physical.PUBLIC_SUMMARY_FORMAT:
+        # The placeholder is historical after publication. Its tests only
+        # require that arbitrary private claims continue to be rejected.
+        return
+    slot.write_text(json.dumps(trusted, sort_keys=True), encoding="utf-8")
+    assert schema_validator.validate_all_repository_artifacts(tmp_path)["validated_count"] == 1
+
+    # A diagnostics text field cannot be used to leak raw data either.
+    altered = deepcopy(trusted)
+    altered["unavailable"][0]["reason"] += " /home/synthetic-private-user/session"
+    slot.write_text(json.dumps(altered), encoding="utf-8")
+    with pytest.raises(schema_validator.SchemaValidationError, match="original premeasurement placeholder"):
+        schema_validator.validate_all_repository_artifacts(tmp_path)

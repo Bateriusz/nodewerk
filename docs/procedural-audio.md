@@ -156,9 +156,11 @@ recheck the original capture from the summary or use it as physical acceptance.
 The aggregate slot
 [`benchmarks/nw12/audio-physical-evidence.v1.json`](../benchmarks/nw12/audio-physical-evidence.v1.json)
 currently holds the pending [private-format status](../schemas/nw12-audio-physical-evidence.schema.json).
-The repository slot accepts only the unmeasured pending placeholder or the separate
+The repository slot accepts only the known premeasurement placeholder (JSON
+formatting may change) or the separate
 [public summary format](../schemas/nw12-audio-physical-public-summary.schema.json).
-It rejects a private measurement even when the raw files are available locally.
+It rejects private measurements and diagnostics, even if they are labelled
+pending or their raw files are available locally.
 The summary is never accepted by the private verifier.
 Hosted CI exercises the deterministic binding/alignment logic only and does not
 require an audio endpoint, real windowed Present, or GPU qualification.
