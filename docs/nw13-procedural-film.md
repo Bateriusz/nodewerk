@@ -262,6 +262,11 @@ zero release code, shader bytes, imports, package sections or dependencies only
 after a matched same-revision export pair is measured; otherwise those fields
 remain explicitly `null`.
 
+Measured distribution, shader and committed-memory observations are compared
+with the artifact's declared budgets (including the canonical 262144-byte
+distribution ceiling). `validate_bundle()` reports `nw13_budget_exceeded`
+instead of accepting an over-budget artifact as a passing measurement.
+
 `tools/nw13_evidence.py` also emits matched-arm ledgers. Distribution bytes,
 shader bytes, startup, committed memory/VRAM, CPU submission, GPU time and
 image error are recorded; unavailable observations stay explicit `null` with

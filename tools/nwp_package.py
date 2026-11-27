@@ -774,9 +774,11 @@ class NwpPackage:
         # are actually present.
         if self.audio_song is not None:
             import audio_song
+            song = audio_song.decode_song(self.audio_song)
             payload["audio_extension"] = {
-                "format": "NWAS", "version": 1, "clock": "wasapi_endpoint",
-                "duration_ticks": audio_song.decode_song(self.audio_song)["duration_ticks"],
+                "format": "NWAS", "version": int(song["version"]),
+                "clock": "wasapi_endpoint",
+                "duration_ticks": song["duration_ticks"],
                 "song_bytes": len(self.audio_song),
                 "song_sha256": hashlib.sha256(self.audio_song).hexdigest(),
             }

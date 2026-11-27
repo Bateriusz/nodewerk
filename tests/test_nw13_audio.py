@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -268,4 +269,110 @@ def test_shared_cpp_contract_selects_waveforms_pan_envelope_filter_and_automatio
     executable = _compile_native(tmp_path, "nw13_audio_contract.cpp", "nw13_audio_contract")
     completed = subprocess.run([str(executable)], capture_output=True, text=True, check=False)
     assert completed.returncode == 0, completed.stderr
+
+
+def test_nwas_v2_travels_through_the_shared_package_and_export_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import nw05_export as export
+    import nwp_package as nwp
+    from test_nw05_export import _make_dxc
+
+    monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
+    song_document = json.loads(SONG_PATH.read_text(encoding="utf-8"))
+    payload = audio.compile_to_nwas(song_document)
+    assert audio_song.decode_song(payload)["version"] == 2
+    assert export.read_audio_song(str(SONG_PATH)) == payload
+    dxc = _make_dxc(tmp_path / "toolchain")
+    result = export.export_graph(
+        REPO_ROOT / "fixtures" / "nw13" / "hotel_corridor.nwgraph",
+        tmp_path / "export",
+        allow_test_payloads=True,
+        dxc_executable=dxc,
+        audio_song_payload=payload,
+        settings=export.ExportSettings(byte_ceiling=64 * 1024 * 1024),
+    )
+    artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
+    decoded = nwp.decode_package(artifact.package_bytes)
+    assert decoded.audio_song == payload
+    assert audio_song.decode_song(decoded.audio_song)["version"] == 2
+    assert nwp.encode_package(decoded) == artifact.package_bytes
+
+
+def test_cpp_package_reader_accepts_nwas_v2_when_compiler_available(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    compiler = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
+    if compiler is None:
+        pytest.skip("cross-language NWAS v2 package parity requires a C++ compiler")
+    import nw05_export as export
+    import nwp_package as nwp
+    from test_nw05_export import _make_dxc
+
+    monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
+    payload = audio.compile_to_nwas(json.loads(SONG_PATH.read_text(encoding="utf-8")))
+    result = export.export_graph(
+        REPO_ROOT / "fixtures" / "nw13" / "hotel_corridor.nwgraph",
+        tmp_path / "export",
+        allow_test_payloads=True,
+        dxc_executable=_make_dxc(tmp_path / "toolchain"),
+        audio_song_payload=payload,
+        settings=export.ExportSettings(byte_ceiling=64 * 1024 * 1024),
+    )
+    package_bytes = result.artifacts[nwp.COMMON_PROFILE_ID].package_bytes
+    package_path = tmp_path / "video.nwp"
+    package_path.write_bytes(package_bytes)
+    harness = tmp_path / "harness.cpp"
+    harness.write_text(
+        '#include "nwp_format.h"\n'
+        "#include <cstdio>\n"
+        "#include <fstream>\n"
+        "#include <iterator>\n"
+        "#include <vector>\n"
+        "int main(int argc, char** argv) {\n"
+        "  if (argc < 3) return 2;\n"
+        "  std::ifstream in(argv[1], std::ios::binary);\n"
+        "  std::vector<std::uint8_t> data((std::istreambuf_iterator<char>(in)),\n"
+        "                                 std::istreambuf_iterator<char>());\n"
+        "  nw::package::Package package;\n"
+        "  std::vector<nw::package::Diagnostic> diagnostics;\n"
+        "  if (!nw::package::DecodePackage(data.data(), data.size(), package, diagnostics)) {\n"
+        "    for (const auto& d : diagnostics) std::fprintf(stderr, \"%s: %s\\n\", d.code.c_str(), d.message.c_str());\n"
+        "    return 3;\n"
+        "  }\n"
+        "  diagnostics.clear();\n"
+        "  auto encoded = nw::package::EncodePackage(package, diagnostics);\n"
+        "  if (encoded.empty()) return 4;\n"
+        "  std::ofstream out(argv[2], std::ios::binary);\n"
+        "  out.write(reinterpret_cast<const char*>(encoded.data()), static_cast<std::streamsize>(encoded.size()));\n"
+        "  return out.good() ? 0 : 5;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    executable = tmp_path / ("nwp_harness.exe" if os.name == "nt" else "nwp_harness")
+    subprocess.run(
+        [
+            compiler,
+            "-std=c++20",
+            "-O1",
+            "-I",
+            str(REPO_ROOT / "src" / "package"),
+            str(harness),
+            str(REPO_ROOT / "src" / "package" / "nwp_format.cpp"),
+            "-o",
+            str(executable),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    output_path = tmp_path / "cpp.nwp"
+    completed = subprocess.run(
+        [str(executable), str(package_path), str(output_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert output_path.read_bytes() == package_bytes
 

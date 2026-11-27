@@ -2977,9 +2977,9 @@ std::vector<std::uint8_t> MakeRootSignatureBlob(
 }
 
 #if NW_PACKAGE_AUDIO
-// Validate NWAS v1 before storing or submitting any package resources. Keep
-// this CPU capability independent of GPU predicates and synthesis linkage.
-static bool ValidAudioPayload(const std::uint8_t* bytes, std::size_t size) {
+// Validate NWAS v1 or v2 before storing or submitting any package resources.
+// Keep this CPU capability independent of GPU predicates and synthesis linkage.
+static bool ValidAudioPayloadV1(const std::uint8_t* bytes, std::size_t size) {
     if (size < 20u || ReadU32(bytes) != 0x5341574eu ||
         ReadU32(bytes + 4) != 1u) return false;
     const auto duration = ReadU64(bytes + 8);
@@ -2999,6 +2999,94 @@ static bool ValidAudioPayload(const std::uint8_t* bytes, std::size_t size) {
         previous = tick;
     }
     return true;
+}
+
+static bool ValidAudioPayloadV2(const std::uint8_t* bytes, std::size_t size) {
+    constexpr std::uint32_t kMaxInstruments = 64u;
+    constexpr std::uint32_t kMaxAutomationBuses = 8u;
+    constexpr std::uint32_t kMaxAutomationKeys = 64u;
+    constexpr std::uint64_t kMaxSongTicks = 48000ull * 3600u;
+    if (size < 28u || ReadU32(bytes) != 0x5341574eu ||
+        ReadU32(bytes + 4) != 2u) return false;
+    const auto duration = ReadU64(bytes + 8);
+    const auto count = ReadU32(bytes + 16);
+    const auto instruments = ReadU32(bytes + 20);
+    const auto automation = ReadU32(bytes + 24);
+    if (!duration || duration > kMaxSongTicks || !count || count > 64u ||
+        !instruments || instruments > kMaxInstruments ||
+        automation > kMaxAutomationBuses) return false;
+    std::size_t offset = 28u;
+    if (size < offset + 40u * instruments) return false;
+    for (std::uint32_t i = 0; i < instruments; ++i) {
+        const auto* instrument = bytes + offset + 40u * i;
+        const auto waveform = ReadU32(instrument);
+        const auto gain = ReadU32(instrument + 8);
+        const auto pan = static_cast<std::int32_t>(ReadU32(instrument + 12));
+        const auto attack = ReadU32(instrument + 16);
+        const auto decay = ReadU32(instrument + 20);
+        const auto sustain = ReadU32(instrument + 24);
+        const auto release = ReadU32(instrument + 28);
+        const auto cutoff = ReadU32(instrument + 32);
+        const auto filter = ReadU32(instrument + 36);
+        if (waveform > 4u || filter != 0u || gain > 1000u ||
+            pan < -1000 || pan > 1000 || sustain > 1000u ||
+            attack > kMaxSongTicks || decay > kMaxSongTicks ||
+            release > kMaxSongTicks || cutoff < 20u || cutoff > 96000u)
+            return false;
+    }
+    offset += 40u * instruments;
+    if (size < offset + 24u * count) return false;
+    std::uint64_t previous = 0;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        const auto* note = bytes + offset + 24u * i;
+        const auto tick = ReadU64(note);
+        const auto length = ReadU32(note + 8);
+        const auto frequency = ReadU32(note + 12);
+        const auto velocity = ReadU32(note + 16);
+        const auto instrument = ReadU16(note + 20);
+        const auto bus = note[22];
+        if (tick < previous || tick >= duration || !length ||
+            length > duration - tick || !frequency || frequency > 20000000u ||
+            velocity > 8000u ||
+            static_cast<std::uint32_t>(instrument) >= instruments || bus > 1 ||
+            note[23] != 0) return false;
+        previous = tick;
+    }
+    offset += 24u * count;
+    bool seen_music = false;
+    bool seen_effect = false;
+    for (std::uint32_t i = 0; i < automation; ++i) {
+        if (size < offset + 8u) return false;
+        const auto bus = bytes[offset];
+        const auto keys = ReadU32(bytes + offset + 4u);
+        if (bus > 1 || keys > kMaxAutomationKeys ||
+            bytes[offset + 1u] != 0 || bytes[offset + 2u] != 0 ||
+            bytes[offset + 3u] != 0) return false;
+        if ((bus == 0 && seen_music) || (bus == 1 && seen_effect)) return false;
+        seen_music = seen_music || bus == 0;
+        seen_effect = seen_effect || bus == 1;
+        offset += 8u;
+        if (size < offset + 16u * keys) return false;
+        std::uint64_t previous_key = 0;
+        for (std::uint32_t k = 0; k < keys; ++k) {
+            const auto* key = bytes + offset + 16u * k;
+            const auto tick = ReadU64(key);
+            const auto value = ReadU32(key + 8);
+            if (tick < previous_key || tick > duration || value > 8000u ||
+                ReadU32(key + 12u) != 0u) return false;
+            previous_key = tick;
+        }
+        offset += 16u * keys;
+    }
+    return offset == size;
+}
+
+static bool ValidAudioPayload(const std::uint8_t* bytes, std::size_t size) {
+    if (!bytes || size < 8u || ReadU32(bytes) != 0x5341574eu) return false;
+    const auto version = ReadU32(bytes + 4);
+    if (version == 1u) return ValidAudioPayloadV1(bytes, size);
+    if (version == 2u) return ValidAudioPayloadV2(bytes, size);
+    return false;
 }
 #endif
 

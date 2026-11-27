@@ -28,6 +28,7 @@
     ],
     "budgets": {
       "max_distribution_bytes": 262144,
+      "max_shader_bytes": 16384,
       "max_memory_bytes": 67108864
     },
     "fallback_artifact_id": null,
@@ -49,9 +50,28 @@
     "image_rmse": null,
     "executable_sha256": null,
     "package_sha256": null,
+    "audio_song_sha256": null,
     "manifest_sha256": null,
     "dependency_identities": null,
-    "measurement_status": "unavailable"
+    "measurement_status": "unavailable",
+    "budget_checks": {
+      "distribution_bytes": {
+        "limit": 262144,
+        "observed": null,
+        "status": "unavailable"
+      },
+      "shader_bytes": {
+        "limit": 16384,
+        "observed": null,
+        "status": "unavailable"
+      },
+      "committed_memory_bytes": {
+        "limit": 67108864,
+        "observed": null,
+        "status": "unavailable"
+      }
+    },
+    "within_budgets": null
   },
   "optional": [
     {
@@ -78,6 +98,9 @@
         "dxgi"
       ],
       "budgets": {
+        "max_distribution_bytes": 262144,
+        "max_shader_bytes": 20480,
+        "max_memory_bytes": 100663296,
         "max_ray_length": 64.0,
         "max_samples": 8,
         "max_bounces": 1,
@@ -102,9 +125,28 @@
       "image_rmse": null,
       "executable_sha256": null,
       "package_sha256": null,
+      "audio_song_sha256": null,
       "manifest_sha256": null,
       "dependency_identities": null,
-      "measurement_status": "unavailable"
+      "measurement_status": "unavailable",
+      "budget_checks": {
+        "distribution_bytes": {
+          "limit": 262144,
+          "observed": null,
+          "status": "unavailable"
+        },
+        "shader_bytes": {
+          "limit": 20480,
+          "observed": null,
+          "status": "unavailable"
+        },
+        "committed_memory_bytes": {
+          "limit": 100663296,
+          "observed": null,
+          "status": "unavailable"
+        }
+      },
+      "within_budgets": null
     }
   ],
   "fallback": {
@@ -132,6 +174,7 @@
     ],
     "budgets": {
       "max_distribution_bytes": 262144,
+      "max_shader_bytes": 16384,
       "max_memory_bytes": 67108864
     },
     "fallback_artifact_id": null,
@@ -153,9 +196,28 @@
     "image_rmse": null,
     "executable_sha256": null,
     "package_sha256": null,
+    "audio_song_sha256": null,
     "manifest_sha256": null,
     "dependency_identities": null,
-    "measurement_status": "unavailable"
+    "measurement_status": "unavailable",
+    "budget_checks": {
+      "distribution_bytes": {
+        "limit": 262144,
+        "observed": null,
+        "status": "unavailable"
+      },
+      "shader_bytes": {
+        "limit": 16384,
+        "observed": null,
+        "status": "unavailable"
+      },
+      "committed_memory_bytes": {
+        "limit": 67108864,
+        "observed": null,
+        "status": "unavailable"
+      }
+    },
+    "within_budgets": null
   },
   "diagnostics": [
     {
@@ -219,5 +281,5 @@
       }
     }
   },
-  "bundle_sha256": "sha256:afb7fe641d2370f520ad06c5e709fdc9d1cf897218d9d95f7017ec8bd2be4a29"
+  "bundle_sha256": "sha256:22c7e49f570024f551ff2fec0da6936ab60bf51f9469268feb7cfbbeb164407c"
 }

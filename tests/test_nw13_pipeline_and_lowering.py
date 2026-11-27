@@ -216,6 +216,13 @@ def test_export_artifacts_only_records_supplied_measurements_and_smoke() -> None
     unmeasured = evidence.export_artifacts(production, independent_builds=True)
     assert any("independent_builds" in item["message"] for item in evidence.validate_bundle(unmeasured))
 
+    oversized = evidence.export_artifacts(
+        production,
+        common_observation={**observation, "distribution_bytes": 262145},
+    )
+    assert oversized["common"]["within_budgets"] is False
+    assert any(item["code"] == "nw13_budget_exceeded" for item in evidence.validate_bundle(oversized))
+
 
 def test_smoke_observation_records_real_execution(tmp_path: Path) -> None:
     script = tmp_path / "smoke.py"
@@ -309,6 +316,8 @@ def test_recorded_lowering_and_artifact_evidence_is_internally_consistent() -> N
     assert bundle["common"]["shader_bytes"] is None
     assert bundle["common"]["smoke"]["executed"] is False
     assert bundle["common"]["smoke"]["status"] == "unavailable"
+    assert bundle["common"]["within_budgets"] is None
+    assert bundle["common"]["budget_checks"]["distribution_bytes"]["status"] == "unavailable"
     assert bundle["fallback"]["smoke"]["executed"] is False
     for artifact in bundle["optional"]:
         assert artifact["distribution_bytes"] is None

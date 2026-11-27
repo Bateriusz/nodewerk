@@ -23,7 +23,9 @@ one-pole low-pass, equal-power pan, music/effect buses and automation keys.
 NWAS v1 remains decode-only and byte-canonical; the 48 kHz tick/sample clock is
 unchanged. The offline writer and PackagePlayer both consume the v2 decoder, and
 arbitrary chunk partitions reconstruct the filter state so output is sample
-identical.
+identical. The shared `.nwp` AUDI validator and PackagePlayer package reader
+accept both NWAS v1 and v2; a v2 song is validated before package storage and
+again when the player decodes it.
 
 ## Use
 

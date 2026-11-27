@@ -28,6 +28,7 @@ RAY_FALLBACK_ID = "nw11.fallback.ray.analytic.d3d12.fl12_0.sm6_0.v1"
 
 WORK_GRAPH_PROFILE_ID = "nw13.optional.d3d12.work_graphs.experimental.v1"
 WORK_GRAPH_FALLBACK_ID = "nw13.fallback.work_graphs.conventional.v1"
+CANONICAL_DISTRIBUTION_CEILING_BYTES = 262144
 
 
 class EvidenceError(ValueError):
@@ -320,7 +321,12 @@ def export_artifacts(
     caps = dict(DEFAULT_CAPABILITIES)
     if capabilities:
         caps.update(capabilities)
-    common_obs = _artifact_observation(common_observation)
+    common_budgets = {
+        "max_distribution_bytes": CANONICAL_DISTRIBUTION_CEILING_BYTES,
+        "max_shader_bytes": 16 * 1024,
+        "max_memory_bytes": 64 * 1024 * 1024,
+    }
+    common_obs = _artifact_observation(common_observation, common_budgets)
     common = {
         "artifact_id": "nw13.common",
         "kind": "common",
@@ -333,7 +339,7 @@ def export_artifacts(
         "capabilities": caps,
         "capability_revision": capabilities_revision(caps),
         "runtime_dependencies": ["d3d12", "dxgi"],
-        "budgets": {"max_distribution_bytes": 262144, "max_memory_bytes": 64 * 1024 * 1024},
+        "budgets": common_budgets,
         "fallback_artifact_id": None,
         **common_obs,
     }
@@ -350,8 +356,15 @@ def export_artifacts(
                 continue
             if selection["profile_id"] == COMMON_PROFILE_ID:
                 continue
+            optional_budgets = {
+                "max_distribution_bytes": CANONICAL_DISTRIBUTION_CEILING_BYTES,
+                "max_shader_bytes": 20 * 1024,
+                "max_memory_bytes": 96 * 1024 * 1024,
+                **selection.get("budgets", {}),
+            }
             observation = _artifact_observation(
-                (optional_observations or {}).get(feature)
+                (optional_observations or {}).get(feature),
+                optional_budgets,
             )
             optional.append(
                 {
@@ -366,7 +379,7 @@ def export_artifacts(
                     "capabilities": selection["capabilities"],
                     "capability_revision": capabilities_revision(selection["capabilities"]),
                     "runtime_dependencies": ["d3d12", "dxgi"],
-                    "budgets": selection.get("budgets", {"max_distribution_bytes": 262144, "max_memory_bytes": 96 * 1024 * 1024}),
+                    "budgets": optional_budgets,
                     "fallback_artifact_id": selection.get("fallback_artifact_id"),
                     **observation,
                 }
@@ -447,7 +460,33 @@ def _normalise_smoke(value: Any) -> dict[str, Any]:
     return result
 
 
-def _artifact_observation(observation: Mapping[str, Any] | None) -> dict[str, Any]:
+def _budget_checks(
+    observation: Mapping[str, Any], budgets: Mapping[str, Any]
+) -> dict[str, Any]:
+    checks: dict[str, Any] = {}
+
+    def check(name: str, observed: Any, limit: Any) -> None:
+        if limit is None:
+            checks[name] = {"limit": None, "observed": observed, "status": "unavailable"}
+        elif observed is None:
+            checks[name] = {"limit": limit, "observed": None, "status": "unavailable"}
+        else:
+            checks[name] = {
+                "limit": limit,
+                "observed": observed,
+                "status": "passed" if observed <= limit else "exceeded",
+            }
+
+    check("distribution_bytes", observation.get("distribution_bytes"), budgets.get("max_distribution_bytes"))
+    check("shader_bytes", observation.get("shader_bytes"), budgets.get("max_shader_bytes"))
+    check("committed_memory_bytes", observation.get("committed_memory_bytes"), budgets.get("max_memory_bytes"))
+    return checks
+
+
+def _artifact_observation(
+    observation: Mapping[str, Any] | None,
+    budgets: Mapping[str, Any],
+) -> dict[str, Any]:
     observation = dict(observation or {})
     result: dict[str, Any] = {
         "distribution_bytes": _optional_nonnegative_int(observation.get("distribution_bytes"), "distribution_bytes"),
@@ -466,6 +505,7 @@ def _artifact_observation(observation: Mapping[str, Any] | None) -> dict[str, An
         "image_rmse",
         "executable_sha256",
         "package_sha256",
+        "audio_song_sha256",
         "manifest_sha256",
         "dependency_identities",
     ):
@@ -473,6 +513,12 @@ def _artifact_observation(observation: Mapping[str, Any] | None) -> dict[str, An
     measured = result["distribution_bytes"] is not None and result["shader_bytes"] is not None
     executed = bool(result["smoke"]["executed"])
     result["measurement_status"] = "measured" if measured and executed else ("partial" if measured or executed else "unavailable")
+    result["budget_checks"] = _budget_checks(result, budgets)
+    observed_checks = [check for check in result["budget_checks"].values() if check["status"] != "unavailable"]
+    if not observed_checks:
+        result["within_budgets"] = None
+    else:
+        result["within_budgets"] = all(check["status"] == "passed" for check in observed_checks)
     return result
 
 
@@ -541,6 +587,17 @@ def validate_bundle(bundle: Mapping[str, Any]) -> list[dict[str, Any]]:
                 diagnostics.append(_diagnostic("nw13_invalid_bundle", "measured artifact lacks an executed smoke"))
         elif not smoke.get("executed") and smoke.get("status") != "unavailable":
             diagnostics.append(_diagnostic("nw13_invalid_bundle", "unexecuted smoke must be marked unavailable"))
+        for name, check in (artifact.get("budget_checks") or {}).items():
+            if check.get("status") == "exceeded":
+                diagnostics.append(
+                    _diagnostic(
+                        "nw13_budget_exceeded",
+                        f"measured {name} exceeds its declared budget",
+                        artifact_id=artifact.get("artifact_id"),
+                        observed=check.get("observed"),
+                        limit=check.get("limit"),
+                    )
+                )
     if bundle.get("independent_builds") and common.get("measurement_status") != "measured":
         diagnostics.append(
             _diagnostic(

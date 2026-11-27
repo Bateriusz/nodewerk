@@ -8,8 +8,9 @@ envelope, filter, pan, bus and automation.  The preserved NWAS v1 decoder
 remains byte-canonical for older payloads.  The sample clock is the
 authoritative 48 kHz timeline.
 
-This module never changes NWAS v1: ``tools.audio_song.compile_song`` and
-``decode_song`` remain the normative v1 reader/writer.
+This module never changes NWAS v1: ``tools.audio_song.compile_song`` remains
+the normative v1 writer and ``decode_song`` preserves v1 while dispatching the
+v2 container.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import struct
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -28,19 +28,19 @@ FORMAT = "nw13.instrument-sequence"
 VERSION = 2
 TICK_RATE_HZ = 48_000
 MAX_NWAS_EVENTS = 64
-MAX_INSTRUMENTS = 64
-MAX_AUTOMATION_BUSES = 8
-MAX_AUTOMATION_KEYS = 64
-NWAS_V2_VERSION = 2
-WAVEFORM_CODES = {"sine": 0, "square": 1, "saw": 2, "triangle": 3, "noise": 4}
-WAVEFORM_NAMES = {value: key for key, value in WAVEFORM_CODES.items()}
-BUS_CODES = {"music": 0, "effect": 1}
-BUS_NAMES = {value: key for key, value in BUS_CODES.items()}
-NWAS_V2_HEADER = struct.Struct("<4sIQIII")
-NWAS_V2_INSTRUMENT = struct.Struct("<IIIiIIIIII")
-NWAS_V2_NOTE = struct.Struct("<QIIIHBB")
-NWAS_V2_AUTOMATION_HEADER = struct.Struct("<BBHI")
-NWAS_V2_AUTOMATION_KEY = struct.Struct("<QII")
+MAX_INSTRUMENTS = audio_song.MAX_NWAS_INSTRUMENTS
+MAX_AUTOMATION_BUSES = audio_song.MAX_NWAS_AUTOMATION_BUSES
+MAX_AUTOMATION_KEYS = audio_song.MAX_NWAS_AUTOMATION_KEYS
+NWAS_V2_VERSION = audio_song.NWAS_V2_VERSION
+WAVEFORM_CODES = audio_song.WAVEFORM_CODES
+WAVEFORM_NAMES = audio_song.WAVEFORM_NAMES
+BUS_CODES = audio_song.BUS_CODES
+BUS_NAMES = audio_song.BUS_NAMES
+NWAS_V2_HEADER = audio_song.NWAS_V2_HEADER
+NWAS_V2_INSTRUMENT = audio_song.NWAS_V2_INSTRUMENT
+NWAS_V2_NOTE = audio_song.NWAS_V2_NOTE
+NWAS_V2_AUTOMATION_HEADER = audio_song.NWAS_V2_AUTOMATION_HEADER
+NWAS_V2_AUTOMATION_KEY = audio_song.NWAS_V2_AUTOMATION_KEY
 
 
 class AudioError(ValueError):
@@ -393,90 +393,10 @@ def compile_to_nwas(sequence: Sequence | Mapping[str, Any]) -> bytes:
 
 def decode_nwas(payload: bytes) -> dict[str, Any]:
     """Decode NWAS v1 (preserved) or NWAS v2 (shared procedural audio)."""
-    if not isinstance(payload, bytes) or len(payload) < 8 or payload[:4] != b"NWAS":
-        raise AudioError("invalid NWAS payload")
-    version = struct.unpack_from("<I", payload, 4)[0]
-    if version == 1:
+    try:
         return audio_song.decode_song(payload)
-    if version != NWAS_V2_VERSION:
-        raise AudioError("unsupported NWAS version")
-    if len(payload) < NWAS_V2_HEADER.size:
-        raise AudioError("truncated NWAS v2 payload")
-    _, _, duration_ticks, note_count, instrument_count, automation_count = NWAS_V2_HEADER.unpack_from(payload)
-    if not 1 <= note_count <= MAX_NWAS_EVENTS or not 1 <= instrument_count <= MAX_INSTRUMENTS:
-        raise AudioError("invalid NWAS v2 counts")
-    if automation_count > MAX_AUTOMATION_BUSES:
-        raise AudioError("invalid NWAS v2 automation count")
-    offset = NWAS_V2_HEADER.size
-    instruments = []
-    for _ in range(instrument_count):
-        if offset + NWAS_V2_INSTRUMENT.size > len(payload):
-            raise AudioError("truncated NWAS v2 instrument")
-        waveform, seed, gain_milli, pan_milli, attack, decay, sustain, release, cutoff, filter_type = NWAS_V2_INSTRUMENT.unpack_from(payload, offset)
-        offset += NWAS_V2_INSTRUMENT.size
-        if waveform not in WAVEFORM_NAMES or filter_type != 0:
-            raise AudioError("invalid NWAS v2 instrument")
-        instruments.append(
-            {
-                "waveform": WAVEFORM_NAMES[waveform],
-                "seed": seed,
-                "gain_milli": gain_milli,
-                "pan_milli": pan_milli,
-                "attack_ticks": attack,
-                "decay_ticks": decay,
-                "sustain_milli": sustain,
-                "release_ticks": release,
-                "cutoff_hz": cutoff,
-                "filter_type": "one_pole_lowpass",
-            }
-        )
-    notes = []
-    for _ in range(note_count):
-        if offset + NWAS_V2_NOTE.size > len(payload):
-            raise AudioError("truncated NWAS v2 note")
-        tick, length, frequency, velocity_milli, instrument, bus, reserved = NWAS_V2_NOTE.unpack_from(payload, offset)
-        offset += NWAS_V2_NOTE.size
-        if instrument >= instrument_count or bus not in BUS_NAMES or reserved != 0:
-            raise AudioError("invalid NWAS v2 note")
-        if not 0 <= tick < duration_ticks or not 0 < length <= duration_ticks - tick:
-            raise AudioError("invalid NWAS v2 note range")
-        notes.append(
-            {
-                "tick": tick,
-                "duration": length,
-                "frequency_millihz": frequency,
-                "velocity_milli": velocity_milli,
-                "instrument": instrument,
-                "bus": BUS_NAMES[bus],
-            }
-        )
-    automation = []
-    for _ in range(automation_count):
-        if offset + NWAS_V2_AUTOMATION_HEADER.size > len(payload):
-            raise AudioError("truncated NWAS v2 automation")
-        bus, reserved_a, reserved_b, key_count = NWAS_V2_AUTOMATION_HEADER.unpack_from(payload, offset)
-        offset += NWAS_V2_AUTOMATION_HEADER.size
-        if bus not in BUS_NAMES or reserved_a or reserved_b or key_count > MAX_AUTOMATION_KEYS:
-            raise AudioError("invalid NWAS v2 automation")
-        keys = []
-        for _ in range(key_count):
-            if offset + NWAS_V2_AUTOMATION_KEY.size > len(payload):
-                raise AudioError("truncated NWAS v2 automation key")
-            key_tick, value_milli, key_reserved = NWAS_V2_AUTOMATION_KEY.unpack_from(payload, offset)
-            offset += NWAS_V2_AUTOMATION_KEY.size
-            if key_reserved != 0 or key_tick > duration_ticks:
-                raise AudioError("invalid NWAS v2 automation key")
-            keys.append({"tick": key_tick, "value_milli": value_milli})
-        automation.append({"bus": BUS_NAMES[bus], "keys": keys})
-    if offset != len(payload):
-        raise AudioError("NWAS v2 payload has trailing bytes")
-    return {
-        "version": NWAS_V2_VERSION,
-        "duration_ticks": duration_ticks,
-        "instruments": instruments,
-        "notes": notes,
-        "automation": automation,
-    }
+    except ValueError as exc:
+        raise AudioError(str(exc)) from exc
 
 
 def _waveform(instrument: Instrument, phase: float, sample_index: int) -> float:

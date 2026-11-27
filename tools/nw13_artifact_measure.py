@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import nw13_evidence as evidence
+import nw13_audio
 import nw13_production as production
 import nw05_export
 import nwp_package as nwp
@@ -60,6 +61,9 @@ def _measure_export(result: nw05_export.ExportResult, directory: Path) -> dict[s
     if not executable.is_file() or not package.is_file():
         raise evidence.EvidenceError("common export is missing its executable or package")
     package_bytes = package.read_bytes()
+    decoded_package = nwp.decode_package(package_bytes)
+    if decoded_package.audio_song is None:
+        raise evidence.EvidenceError("common export did not embed the NW-13 song")
     size_report = artifact.size_report
     distribution = size_report["distribution"]
     observation = {
@@ -75,6 +79,7 @@ def _measure_export(result: nw05_export.ExportResult, directory: Path) -> dict[s
         ),
         "executable_sha256": _sha256_bytes(executable.read_bytes()),
         "package_sha256": _sha256_bytes(package_bytes),
+        "audio_song_sha256": _sha256_bytes(decoded_package.audio_song),
         "manifest_sha256": artifact.manifest.get("manifest_sha256"),
         "dependency_identities": _dependency_identities(size_report),
         "startup_ms": None,
@@ -92,10 +97,12 @@ def _measure_export(result: nw05_export.ExportResult, directory: Path) -> dict[s
     return observation
 
 
-def _export(graph: Path, directory: Path, template: Path, dxc: Path) -> nw05_export.ExportResult:
+def _export(
+    graph: Path, directory: Path, template: Path, dxc: Path, audio_payload: bytes
+) -> nw05_export.ExportResult:
     settings = nw05_export.ExportSettings(
-        byte_ceiling=64 * 1024 * 1024,
-        memory_budget=512 * 1024 * 1024,
+        byte_ceiling=evidence.CANONICAL_DISTRIBUTION_CEILING_BYTES,
+        memory_budget=64 * 1024 * 1024,
         player_template=str(template),
     )
     return nw05_export.export_graph(
@@ -103,16 +110,17 @@ def _export(graph: Path, directory: Path, template: Path, dxc: Path) -> nw05_exp
         directory,
         settings=settings,
         dxc_executable=str(dxc),
+        audio_song_payload=audio_payload,
     )
 
 
 def _independent_observations(
-    *, graph: Path, output_dir: Path, template: Path, dxc: Path
+    *, graph: Path, output_dir: Path, template: Path, dxc: Path, audio_payload: bytes
 ) -> tuple[dict[str, Any], bool]:
     first_dir = output_dir / "independent-a"
     second_dir = output_dir / "independent-b"
-    first = _export(graph, first_dir, template, dxc)
-    second = _export(graph, second_dir, template, dxc)
+    first = _export(graph, first_dir, template, dxc, audio_payload)
+    second = _export(graph, second_dir, template, dxc, audio_payload)
     first_artifact = first.artifacts[nwp.COMMON_PROFILE_ID]
     second_artifact = second.artifacts[nwp.COMMON_PROFILE_ID]
     identical = (
@@ -140,11 +148,16 @@ def write_evidence(
     if template is not None and dxc is not None:
         if os.name != "nt":
             raise evidence.EvidenceError("native artifact measurement requires Windows")
+        song_document = json.loads(
+            (repo_root / document["song"]).read_text(encoding="utf-8")
+        )
+        audio_payload = nw13_audio.compile_to_nwas(song_document)
         common_observation, independent_builds = _independent_observations(
             graph=repo_root / document["graph"],
             output_dir=output_dir,
             template=template,
             dxc=dxc,
+            audio_payload=audio_payload,
         )
     bundle = evidence.export_artifacts(
         document,

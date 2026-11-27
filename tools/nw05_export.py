@@ -742,14 +742,16 @@ def _attach_audio_manifest(manifest: dict[str, Any], song: bytes) -> None:
     """Explicit opt-in CPU/audio capability; the GPU profile is unchanged."""
     if not song:
         return
-    _, _, duration, _ = struct.unpack_from("<4sIQI", song)
+    decoded = audio_song.decode_song(song)
+    duration = int(decoded["duration_ticks"])
     timeline = manifest.get("timeline", {})
     if int(timeline.get("ticks_per_second", 48000)) != 48000:
         raise ExportError("audio requires a 48000 Hz absolute timeline")
     if int(timeline.get("duration_ticks", 0)) not in (0, duration):
         raise ExportError("song duration must match the visual timeline")
     manifest["audio"] = {
-        "format": "NWAS", "version": 1, "duration_ticks": duration,
+        "format": "NWAS", "version": int(decoded["version"]),
+        "duration_ticks": duration,
         "sample_rate": 48000, "channels": 1, "bits_per_sample": 16,
         "clock": "wasapi_endpoint", "initialization_failure": "fail",
         "song_sha256": hashlib.sha256(song).hexdigest(),
@@ -3056,7 +3058,12 @@ def _finalize_size_accounting(
 
 
 def read_audio_song(path: str) -> bytes:
-    return audio_song.compile_song(json.loads(Path(path).read_text(encoding="utf-8")))
+    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    if document.get("format") == "nw13.instrument-sequence":
+        import nw13_audio
+
+        return nw13_audio.compile_to_nwas(document)
+    return audio_song.compile_song(document)
 
 
 def export_graph(
