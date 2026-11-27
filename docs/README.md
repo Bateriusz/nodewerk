@@ -33,6 +33,8 @@ graph semantics and `.nwgraph` schema.
 24. [NW-11 Advanced GPU Feature Experiments](nw11-advanced-gpu-experiments.md)
 25. [NW-11 Bounded Follow-Up Matrix](nw11-follow-up-matrix.md)
 26. [NW-12 Optional Procedural Audio](procedural-audio.md)
+27. [Operator Coverage and NW-13 Implementation Roadmap](operator-roadmap.md)
+28. [Reference Operator Inventory and Capability Overview](../references/operator_catalog/overview.md)
 
 ## Schemas & Recorded Baseline Artifacts
 
@@ -76,3 +78,4 @@ graph semantics and `.nwgraph` schema.
 - NW-11 Bundle and Evidence Schemas: [`schemas/nw11-bundle-manifest.schema.json`](../schemas/nw11-bundle-manifest.schema.json), [`schemas/nw11-evidence.schema.json`](../schemas/nw11-evidence.schema.json)
 
 - [ADR 0009 — Validation and evidence lifecycle](architecture/0009-validation-and-evidence-lifecycle.md)
+
