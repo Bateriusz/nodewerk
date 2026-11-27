@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "duration_ticks": 2304000,
+  "visual_segments": [
+    {"start": 0, "end": 1056000, "rate_numerator": 1, "rate_denominator": 1},
+    {"start": 1056000, "end": 1200000, "rate_numerator": 1, "rate_denominator": 4},
+    {"start": 1200000, "end": 1296000, "rate_numerator": 0, "rate_denominator": 1},
+    {"start": 1296000, "end": 1392000, "rate_numerator": -1, "rate_denominator": 2},
+    {"start": 1392000, "end": 2304000, "rate_numerator": 1, "rate_denominator": 1}
+  ],
+  "cues": [
+    {"id": "teleport", "tick": 384000},
+    {"id": "door_impact", "tick": 720000},
+    {"id": "shot_one", "tick": 1008000},
+    {"id": "impact_one", "tick": 1032000},
+    {"id": "shot_two", "tick": 1401600},
+    {"id": "impact_two", "tick": 1425600},
+    {"id": "escape", "tick": 1512000},
+    {"id": "exit", "tick": 1872000},
+    {"id": "disruptor", "tick": 1920000},
+    {"id": "stun", "tick": 1944000},
+    {"id": "finale", "tick": 2064000}
+  ]
+}
