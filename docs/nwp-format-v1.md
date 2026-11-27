@@ -26,7 +26,7 @@ offset  size  field
 8       2     version_major = 1
 10      2     version_minor = 0
 12      4     header_size = 64
-16      4     flags (bit 0: release package)
+16      4     flags (bit 0: release package; other bits only as defined by extensions)
 20      4     reserved = 0
 24      8     section_directory_offset = 64
 32      8     total_size
@@ -81,7 +81,8 @@ History-free exports continue to emit exactly `.nwp` version `1.0` with the
 seven baseline sections and no new bytes. A document that declares NW-09
 History selects the explicit, additive stateful extension:
 
-* header minor version becomes `1`;
+* header minor version becomes `1` (or `2` when the optional audio extension
+  is also present, since the audio minor takes precedence);
 * package `flags` bit 1 (`STATEFUL_EXTENSION_FLAG`) is set;
 * `HIST` is emitted when History records exist;
 * `CKPT` is emitted only when the caller explicitly requests packaged release
@@ -321,3 +322,7 @@ Reproducing an archived demo requires the source graph, pinned DXC/toolchain
 identity, build report, development sidecar (source maps/reflection), and the
 recorded package hash. Release blobs alone are sufficient to execute, not to
 re-author.
+
+## Optional audio extension (1.2)
+
+Minor 2 and header flag 0x4 require exactly one `AUDI` directory record containing the canonical NWAS v1 synthesis/song payload. `HIST` and `CKPT` may coexist with audio when the stateful flag 0x2 is also set. Without audio, 1.0 and 1.1 retain their existing layout. The section encodes mono PCM16 procedural synthesis with an authoritative 48 kHz tick timeline; it declares a CPU/audio playback capability, not a GPU feature. The whole NWP checksum covers the section, and the export manifest binds its SHA-256 without duplicating song bytes. The reader rejects unsupported versions, incorrect counts, bounds and flag/section mismatches. Silent generated player builds disable the audio reader and synthesis/output linkage. Audio currently requires the full package reader, not the historical frozen specialization.

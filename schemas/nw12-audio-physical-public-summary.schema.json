@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw12-audio-physical-public-summary.schema.json",
+  "title": "Nodewerk NW-12 public historical audio/display summary (not physical acceptance)",
+  "type": "object",
+  "required": [
+    "format", "version", "task", "implementation_base", "implementation_base_tree",
+    "verification_status", "reported_decision",
+    "archive_rechecked", "satisfies_completion", "measured_source_commit",
+    "measured_source_tree", "artifact", "archive_digests", "environment",
+    "protocol", "alignment", "measurements", "limitation"
+  ],
+  "properties": {
+    "format": { "const": "nodewerk-nw12-audio-physical-public-summary" },
+    "version": { "const": 1 },
+    "task": { "const": "NW-12" },
+    "implementation_base": { "const": "8ade0b74c78113c18c977afbde0f3e2b98c4fcf2" },
+    "implementation_base_tree": { "const": "6bf077705a406e2e1cea83cf27723b0c51c5ed9d" },
+    "verification_status": { "const": "reported_historical" },
+    "reported_decision": { "const": "verified_physical" },
+    "archive_rechecked": { "const": false },
+    "satisfies_completion": { "const": false },
+    "measured_source_commit": { "$ref": "#/$defs/git_identity" },
+    "measured_source_tree": { "$ref": "#/$defs/git_identity" },
+    "artifact": {
+      "type": "object",
+      "required": ["executable_sha256", "package_sha256", "song_sha256", "song_bytes", "duration_ticks"],
+      "properties": {
+        "executable_sha256": { "$ref": "#/$defs/sha256" },
+        "package_sha256": { "$ref": "#/$defs/sha256" },
+        "song_sha256": { "$ref": "#/$defs/sha256" },
+        "song_bytes": { "type": "integer", "minimum": 40, "maximum": 1300 },
+        "duration_ticks": { "type": "integer", "minimum": 1, "maximum": 172800000 }
+      },
+      "additionalProperties": false
+    },
+    "archive_digests": {
+      "type": "object",
+      "required": ["run_sha256", "observation_sha256", "audio_sha256", "video_sha256"],
+      "properties": {
+        "run_sha256": { "$ref": "#/$defs/sha256" },
+        "observation_sha256": { "$ref": "#/$defs/sha256" },
+        "audio_sha256": { "$ref": "#/$defs/sha256" },
+        "video_sha256": { "$ref": "#/$defs/sha256" }
+      },
+      "additionalProperties": false
+    },
+    "environment": {
+      "type": "object",
+      "required": ["os_build", "display_refresh_numerator", "display_refresh_denominator"],
+      "properties": {
+        "os_build": { "type": "integer", "minimum": 22000, "maximum": 9999999 },
+        "display_refresh_numerator": { "$ref": "#/$defs/refresh_component" },
+        "display_refresh_denominator": { "$ref": "#/$defs/refresh_component" }
+      },
+      "additionalProperties": false
+    },
+    "protocol": {
+      "type": "object",
+      "required": ["clock", "sample_rate"],
+      "properties": {
+        "clock": { "const": "wasapi_endpoint" },
+        "sample_rate": { "const": 48000 }
+      },
+      "additionalProperties": false
+    },
+    "alignment": {
+      "type": "object",
+      "required": ["impulse_count", "max_abs_delta_ticks", "within_one_displayed_frame"],
+      "properties": {
+        "impulse_count": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "max_abs_delta_ticks": { "type": "integer", "minimum": 0, "maximum": 48000 },
+        "within_one_displayed_frame": { "const": true }
+      },
+      "additionalProperties": false
+    },
+    "measurements": {
+      "type": "object",
+      "required": ["synthesis_cpu_100ns", "worker_cpu_100ns", "starvation_observations",
+                   "observed_underruns", "missing_samples_lower_bound", "clock_discontinuities"],
+      "properties": {
+        "synthesis_cpu_100ns": { "$ref": "#/$defs/counter" },
+        "worker_cpu_100ns": { "$ref": "#/$defs/counter" },
+        "starvation_observations": { "$ref": "#/$defs/counter" },
+        "observed_underruns": { "$ref": "#/$defs/counter" },
+        "missing_samples_lower_bound": { "$ref": "#/$defs/counter" },
+        "clock_discontinuities": { "$ref": "#/$defs/counter" }
+      },
+      "additionalProperties": false
+    },
+    "limitation": { "const": "The private capture archive is not included; this summary cannot certify acceptance." }
+  },
+  "$defs": {
+    "git_identity": { "type": "string", "minLength": 40, "maxLength": 40, "pattern": "^[0-9a-f]{40}$" },
+    "sha256": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
+    "refresh_component": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+    "counter": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 }
+  },
+  "additionalProperties": false
+}

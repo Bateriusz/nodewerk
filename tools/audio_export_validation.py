@@ -1,0 +1,220 @@
+"""Matched same-revision Windows PE builds; no endpoint or GPU is needed."""
+from __future__ import annotations
+import hashlib
+import json
+import subprocess
+import shutil
+import re
+import struct
+from dataclasses import replace
+from pathlib import Path
+import dependency_check
+import nwp_package as nwp
+import nw05_export as export
+from nw10_pe_ledger import pe_summary, section_deltas
+from audio_physical_validation import evidence_reference, load_verified_evidence
+
+ROOT = Path(__file__).resolve().parents[1]
+GRAPH = ROOT / "fixtures/audio/sync_flash.nwgraph"
+SONG = ROOT / "fixtures/audio/sync_song.json"
+
+def _hash(data):
+    return hashlib.sha256(data).hexdigest()
+
+def _link_commands(root: Path) -> str:
+    return subprocess.run(["ninja", "-C", str(root), "-t", "commands", "nw05_generated_player"],
+                          check=True, capture_output=True, text=True).stdout.lower().replace("\\", "/")
+
+def validate(template: Path, dxc: str, root: Path) -> dict:
+    root.mkdir(parents=True, exist_ok=True)
+    settings = export.ExportSettings(player_template=str(template), byte_ceiling=64 * 1024 * 1024)
+    results = {}
+    for variant in ("silent", "audio"):
+        outputs = []
+        for repetition in ("a", "b"):
+            name = variant + "-" + repetition
+            build = root / (name + "-build")
+            output = root / name
+            assert not build.exists() and not output.exists()
+            current = replace(settings, specialized_build_root=str(build),
+                              audio_song_path=str(SONG) if variant == "audio" else "")
+            result = export.export_graph(GRAPH, output, settings=current, dxc_executable=dxc)
+            artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
+            executable = output / artifact.executable_name
+            payload, manifest = export.extract_embedded_package(executable.read_bytes())
+            assert payload == artifact.package_bytes
+            assert json.loads(manifest) == artifact.manifest
+            model = nwp.decode_package(payload)
+            assert model.audio_song is not None if variant == "audio" else model.audio_song is None
+            commands = _link_commands(build)
+            if variant == "silent":
+                assert "src/audio/" not in commands
+                assert "nw_wasapi_output" not in commands and "nw_procedural_audio" not in commands
+                assert "nw_package_audio=0" in commands
+                binary = executable.read_bytes()
+                for marker in (
+                    b"NWAS", b"package_audio_invalid", b"package_audio_unsupported",
+                    b"audio capability not linked", b"audio_transport_required",
+                    b"AUDIO_PLAYBACK_EVIDENCE_V1", b"NW_AUDIO_INITIALIZATION_FAILED",
+                ):
+                    assert marker not in binary, f"audio marker in silent player: {marker!r}"
+            else:
+                assert "src/audio/procedural_audio.cpp" in commands
+                assert "src/audio/wasapi_output.cpp" in commands
+            outputs.append((artifact, executable, build))
+        first, second = outputs
+        assert first[1].read_bytes() == second[1].read_bytes()
+        assert first[0].package_bytes == second[0].package_bytes
+        assert first[0].manifest == second[0].manifest
+        results[variant] = first
+    silent, silent_exe, silent_build = results["silent"]
+    audio, audio_exe, audio_build = results["audio"]
+    # Stateless exports publish the profile-named package and generated source.
+    audio_package = audio_exe.with_suffix(".nwp")
+    assert audio.package.audio_song
+    assert export.section_sizes(audio.package_bytes)["AUDI"]["size_bytes"] == len(audio.package.audio_song)
+    assert "AUDI" not in export.section_sizes(silent.package_bytes)
+    assert audio.package_bytes != silent.package_bytes
+    # Exact visual package equality after removing only the new optional section.
+    assert nwp.encode_package(replace(nwp.decode_package(audio.package_bytes),
+            audio_song=None, flags=audio.package.flags & ~nwp.AUDIO_EXTENSION_FLAG)) == silent.package_bytes
+    silent_info = dependency_check.parse_pe64_sections_and_imports(silent_exe.read_bytes())
+    audio_info = dependency_check.parse_pe64_sections_and_imports(audio_exe.read_bytes())
+    def symbols(info):
+        return {str(s).lower() for key in ("imports_by_dll", "delay_imports_by_dll")
+                for values in info.get(key, {}).values() for s in values}
+    assert "cocreateinstance" in symbols(audio_info)
+    assert "cocreateinstance" not in symbols(silent_info)
+    # Build native Windows targets from the actual audio-enabled configuration.
+    subprocess.run(["cmake", "--build", str(audio_build), "--target",
+                    "nw_audio_contract", "nw_audio_offline", "nw_audio_player", "nodewerkc",
+                    "nw_package_player_fixture",
+                    "--parallel", "2"], check=True)
+    subprocess.run([str(audio_build / "nw_audio_contract.exe")], check=True)
+    native = subprocess.run([str(audio_build / "nodewerkc.exe"), "inspect",
+                             str(audio_package)],
+                            check=True, capture_output=True, text=True)
+    inspection = json.loads(native.stdout)
+    assert inspection["valid"] and inspection["version"]["minor"] == 2
+    assert inspection["audio_extension"]["song_sha256"] == _hash(audio.package.audio_song)
+    # Same source and build profile, with only output-layer linkage disabled.
+    probe_root = root / "synthesis-probe-build"
+    source = audio_exe.with_suffix(".player.cpp").read_text(encoding="utf-8")
+    probe = export._build_specialized_player(
+        template, source, audio.manifest, nwp.COMMON_PROFILE_ID,
+        build_root_override=probe_root, audio_measure_synthesis_only=True)
+    probe_path = root / "synthesis-probe.exe"
+    probe_path.write_bytes(probe)
+    commands = _link_commands(probe_root)
+    assert "src/audio/procedural_audio.cpp" in commands and "src/audio/wasapi_output.cpp" not in commands
+    s, a, p = pe_summary(silent_exe), pe_summary(audio_exe), pe_summary(probe_path)
+    song_bytes = len(audio.package.audio_song)
+    # Transfer only the current-head headless diagnostic inputs, via the
+    # existing build/runtime split and its SHA-bound transfer manifest.
+    runtime = root / "headless-runtime"
+    runtime.mkdir()
+    # nw_attach_dependency_check sets the fixture target output directory to
+    # staging/package_player, not the CMake build root (also used by NW-04 CI).
+    fixture = audio_build / "staging" / "package_player" / "nw_package_player_fixture.exe"
+    if not fixture.is_file():
+        raise FileNotFoundError(f"built audio-capable player fixture is missing: {fixture}")
+    shutil.copy2(fixture, runtime / "player.exe")
+    shutil.copy2(audio_package, runtime / "audio.nwp")
+    (runtime / "identity.json").write_text(json.dumps({
+        "package_sha256": _hash(audio.package_bytes),
+        "fixture_sha256": _hash((runtime / "player.exe").read_bytes()),
+        "width": 256, "height": 256,
+    }, sort_keys=True), encoding="utf-8")
+    # Raw file-size deltas include alignment and optimizer interactions;
+    # do not misrepresent these as additive per-symbol sizes.
+    # The physical WASAPI/display observation is deliberately not performed by
+    # this build-only Windows gate. Recorded CPU/underrun/alignment evidence is
+    # reported only as a sanitized historical summary after rechecking the
+    # private archive for this exact build; otherwise the gap is explicit.
+    source_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+    # Publish the exact production player from the matched PE measurements,
+    # not the headless diagnostic fixture or nonshipping synthesis probe.
+    physical_inputs = root / "physical-inputs"
+    physical_inputs.mkdir()
+    shutil.copy2(audio_exe, physical_inputs / "player.exe")
+    shutil.copy2(audio_package, physical_inputs / "audio.nwp")
+    (physical_inputs / "song.nwas").write_bytes(audio.package.audio_song)
+    source_tree = subprocess.check_output(
+        ["git", "rev-parse", "HEAD^{tree}"], cwd=ROOT, text=True
+    ).strip()
+    (physical_inputs / "identity.json").write_text(json.dumps({
+        "format": "nodewerk-audio-physical-inputs", "version": 1,
+        "source_commit": source_commit, "source_tree": source_tree,
+        "artifact": {"executable_sha256": _hash(audio_exe.read_bytes()),
+                     "package_sha256": _hash(audio.package_bytes),
+                     "song_sha256": _hash(audio.package.audio_song)},
+    }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    physical = evidence_reference(
+        "physical WASAPI/display observation is not part of the Windows CI build gate",
+        playback_artifact_matches=True,
+        verified=load_verified_evidence(
+            package_bytes=audio.package_bytes, song_bytes=audio.package.audio_song,
+            executable_bytes=audio_exe.read_bytes(), source_head_sha=source_commit,
+        ),
+    )
+    return {
+        "format": "nodewerk-audio-link-attribution", "version": 1,
+        "source_commit": source_commit,
+        "independent_rebuilds": {"silent": True, "audio": True},
+        "silent_closure": "verified_by_link_commands_package_and_pe_imports",
+        "song_payload_bytes": song_bytes,
+        "song_section_directory_bytes": nwp.SECTION_ENTRY_SIZE,
+        "manifest_overhead_bytes": a["overlay_bytes"] - s["overlay_bytes"] -
+                                    (len(audio.package_bytes) - len(silent.package_bytes)),
+        "synthesis_and_package_reader_marginal_pe_bytes": p["pe_image_file_bytes"] - s["pe_image_file_bytes"],
+        "wasapi_output_marginal_pe_bytes": a["pe_image_file_bytes"] - p["pe_image_file_bytes"],
+        "actual_distributed_exe_delta_bytes": a["total_bytes"] - s["total_bytes"],
+        "section_deltas_silent_to_synthesis": section_deltas(s, p),
+        "section_deltas_synthesis_to_audio": section_deltas(p, a),
+        "artifacts": {"silent": s, "audio": a, "nonshipping_synthesis_probe": p},
+        "physical_evidence": physical,
+        "attribution_method": "matched marginal PE raw sizes including linker padding and optimizer effects",
+    }
+
+def validate_runtime(root: Path) -> dict:
+    identity = json.loads((root / "identity.json").read_text(encoding="utf-8"))
+    package, player = root / "audio.nwp", root / "player.exe"
+    assert _hash(package.read_bytes()) == identity["package_sha256"]
+    assert _hash(player.read_bytes()) == identity["fixture_sha256"]
+    from audio_song import decode_song
+    song = decode_song(nwp.decode_package(package.read_bytes()).audio_song)
+    width, height = identity["width"], identity["height"]
+    def fnv(level):
+        value = 1469598103934665603
+        for byte in struct.pack("<4f", level, level, level, 1.0) * (width * height):
+            value = ((value ^ byte) * 1099511628211) & 0xffffffffffffffff
+        return f"{value:016x}"
+    white, black = fnv(1.0), fnv(0.0)
+    observations = []
+    base = [str(player), "--package", str(package), "--headless",
+            "--allow-software-adapter", "--width", str(width), "--height", str(height),
+            "--frames", "1", "--emit-image-hash"]
+    # Without explicit offline admission, reject the audio package before
+    # any adapter or window initialization.
+    rejected = subprocess.run(base, capture_output=True, text=True, timeout=120)
+    assert rejected.returncode == 70, rejected.stdout + rejected.stderr
+    for event in song["events"]:
+        for offset, expected in ((0, white), (3200, black)):
+            tick = event["tick"] + offset
+            run = subprocess.run(base + ["--audio-offline", "--tick-start", str(tick)],
+                                 capture_output=True, text=True, timeout=120, check=True)
+            match = re.search(r"NW_PLAYER_IMAGE_FNV64=([0-9a-f]{16})", run.stdout)
+            assert match and match.group(1) == expected, run.stdout + run.stderr
+            observations.append({"tick": tick, "fnv64": match.group(1)})
+    physical = evidence_reference(
+        "headless image readback maps fixed ticks but cannot observe a displayed frame",
+        verified=load_verified_evidence(
+            package_bytes=package.read_bytes(), song_bytes=nwp.decode_package(
+                package.read_bytes()
+            ).audio_song,
+        ),
+    )
+    return {"status": "verified_headless_image_mapping", "observations": observations,
+            "physical_alignment": physical}

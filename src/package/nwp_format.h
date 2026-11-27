@@ -27,6 +27,10 @@
 #define NW09_FORCE_STATEFUL_PACKAGE_MODEL 0
 #endif
 
+#ifndef NW_PACKAGE_AUDIO
+#define NW_PACKAGE_AUDIO (!NW05_FROZEN_EMBEDDED_SPECIALIZATION || NW09_FORCE_STATEFUL_PACKAGE_MODEL)
+#endif
+
 namespace nw::package {
 
 inline constexpr std::array<std::uint8_t, 8> kMagic = {
@@ -36,6 +40,9 @@ inline constexpr std::uint16_t kVersionMinor = 0;
 // NW-09 explicit stateful-content extension.  Stateless packages continue to
 // emit kVersionMinor bytes exactly.
 inline constexpr std::uint16_t kVersionMinorStateful = 1;
+inline constexpr std::uint16_t kVersionMinorAudio = 2;
+inline constexpr std::uint32_t kAudioExtensionFlag = 4u;
+inline constexpr std::string_view kSectionAudio = "AUDI";
 // HIST record layout version (the package minor remains 1).
 inline constexpr std::uint16_t kHistoryRecordVersion = 2;
 inline constexpr std::uint32_t kStatefulExtensionFlag = 2u;
@@ -297,6 +304,9 @@ struct Package {
     std::vector<ReleaseCheckpointRecord> release_checkpoints;
 #endif
     std::optional<std::vector<std::uint8_t>> dev_metadata;
+#if NW_PACKAGE_AUDIO
+    std::optional<std::vector<std::uint8_t>> audio_song;
+#endif
     std::uint32_t flags = 1u;
 };
 

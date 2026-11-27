@@ -156,6 +156,20 @@ Do not infer physical performance from another GPU generation or normalize by
 theoretical throughput unless a separately versioned contract explicitly
 defines and validates that method.
 
+### Audio impulse/flash evidence must measure the real playback path
+
+NW-12 audio evidence records real WASAPI playback and a real displayed
+impulse/flash observation. Use `tools/audio_physical_validation.py` on a Windows
+11 desktop session and bind the result to the exact package/player SHA-256, the
+NWAS song SHA-256, the build input identity, the actual player-selected audio
+endpoint and presentation display path/refresh, and the same run's `AUDIO_*`
+telemetry. The tolerance derives from that path's rational refresh, never
+from another desktop monitor or an operator-selected nominal rate. Offline WAV/frame-plan rendering and headless image
+readback prove deterministic PCM/event mapping only; they never establish
+displayed alignment or real audio CPU/underrun behavior. Exact audible glitch
+counts remain `unavailable` rather than being inferred from stream coordinates.
+Pending records stay pending and cannot satisfy completion.
+
 ### Clean-system and developer-runtime assumptions must be observed
 
 Do not infer a clean system from assumptions about a particular host. Record

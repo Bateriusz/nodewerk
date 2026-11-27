@@ -107,6 +107,8 @@ SHADER_OPERATIONS = {
         "vec4",
         "sin",
         "cos",
+        "frac",
+        "step",
         "mix",
         "texture2d",
         "uv",

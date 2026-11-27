@@ -32,6 +32,7 @@ import nw05_optimizer as optimizer
 import nw05_schedule as schedule
 import nw06_export
 import dependency_check
+import audio_song
 
 
 EXPORT_FORMAT = "nw05-export-report"
@@ -145,6 +146,7 @@ class ExportSettings:
     fusion_max_nodes: int = optimizer.DEFAULT_FUSION_MAX_NODES
     fusion_max_expression_bytes: int = optimizer.DEFAULT_FUSION_MAX_EXPRESSION_BYTES
     packaged_checkpoint_ticks: tuple[int, ...] = ()
+    audio_song_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -173,6 +175,8 @@ class ExportSettings:
             payload["packaged_checkpoint_ticks"] = list(
                 self.packaged_checkpoint_ticks
             )
+        if self.audio_song_path:
+            payload["audio_enabled"] = True
         return payload
 
 
@@ -273,7 +277,7 @@ def canonical_profile_identity(
 
 def emitted_requirements(package: nwp.NwpPackage) -> dict[str, Any]:
     capability = package.capability
-    return {
+    payload = {
         "profile_id": capability.profile_id,
         "requirements_digest": capability.requirements_digest,
         "optional_profile_id": capability.optional_profile_id,
@@ -310,6 +314,12 @@ def emitted_requirements(package: nwp.NwpPackage) -> dict[str, Any]:
         "toolchain_identity": capability.toolchain_identity,
         "toolchain_dxc_version": capability.toolchain_dxc_version,
     }
+    if package.audio_song is not None:
+        payload["audio_capability"] = {
+            "format": "NWAS", "version": 1, "clock": "wasapi_endpoint",
+            "song_sha256": hashlib.sha256(package.audio_song).hexdigest(),
+        }
+    return payload
 
 
 def artifact_key(profile_id: str, requirements_digest: str, requirements: Mapping[str, Any]) -> str:
@@ -728,6 +738,107 @@ def _specialized_implementation_mask(
         | (256 if flags["NW06_COMPILE_TONEMAP"] else 0)
     )
 
+def _attach_audio_manifest(manifest: dict[str, Any], song: bytes) -> None:
+    """Explicit opt-in CPU/audio capability; the GPU profile is unchanged."""
+    if not song:
+        return
+    _, _, duration, _ = struct.unpack_from("<4sIQI", song)
+    timeline = manifest.get("timeline", {})
+    if int(timeline.get("ticks_per_second", 48000)) != 48000:
+        raise ExportError("audio requires a 48000 Hz absolute timeline")
+    if int(timeline.get("duration_ticks", 0)) not in (0, duration):
+        raise ExportError("song duration must match the visual timeline")
+    manifest["audio"] = {
+        "format": "NWAS", "version": 1, "duration_ticks": duration,
+        "sample_rate": 48000, "channels": 1, "bits_per_sample": 16,
+        "clock": "wasapi_endpoint", "initialization_failure": "fail",
+        "song_sha256": hashlib.sha256(song).hexdigest(),
+        "song_bytes": len(song), "package_section": "AUDI",
+    }
+    retained = manifest["retained"]
+    for key, values in (
+        ("code", ["audio.procedural_pcm", "audio.wasapi_output"]),
+        ("data", ["audio.song.nwas"]),
+    ):
+        retained[key] = sorted(set(retained.get(key, [])) | set(values))
+
+
+def _audio_playback_source(audio: Mapping[str, Any]) -> str:
+    expected = audio["song_sha256"]
+    if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+        raise ExportError("invalid audio manifest digest")
+    return f"""    const auto& song_bytes = player.package().audio_song;
+    nw::audio::Song song{{}};
+    if (!song_bytes || song_bytes->size() != {int(audio["song_bytes"])}u ||
+        nw::package::Sha256Hex(*song_bytes) != "{expected}" ||
+        !nw::audio::DecodeSong(song_bytes->data(), song_bytes->size(), song)) return 70;
+#if NW_AUDIO_MEASURE_SYNTHESIS_ONLY
+    // Nonshipping attribution probe: retain the real decoder/synthesis path
+    // with the identical input, without linking the Windows output layer.
+    // The probe renders a fixed PCM block, not the normal frame loop.
+    (void)max_frames;
+    std::int16_t pcm[256]{{}};
+    if (!nw::audio::RenderPcm(song, {{}}, 0, pcm, 256)) return 70;
+    std::uint64_t checksum = 0;
+    for (const auto sample : pcm)
+        checksum = checksum * 1099511628211ULL + static_cast<std::uint16_t>(sample);
+    std::printf("AUDIO_SYNTHESIS_PROBE=%llu\\n", static_cast<unsigned long long>(checksum));
+#else
+    auto window = static_cast<HWND>(player.playback_window_handle());
+    const auto display = audio_evidence ? nw::audio::GetPlaybackDisplay(window)
+                                        : nw::audio::PlaybackDisplay{{}};
+    bool same_display = display.monitor != nullptr;
+    bool finished_song = false;
+    nw::audio::WasapiOutput audio_output;
+    if (!audio_output.start(song, 0, audio_evidence)) {{
+        std::fprintf(stderr, "NW_AUDIO_INITIALIZATION_FAILED\\n");
+        return 80;
+    }}
+    std::uint64_t frames = 0;
+    std::uint64_t previous = UINT64_MAX;
+    while (!player.window_closed() && !audio_output.failed()) {{
+        const auto tick = audio_output.now_ticks();
+        if (tick >= song.duration_ticks) {{ finished_song = true; break; }}
+        if (tick == previous) {{ ::Sleep(1); continue; }}
+        previous = tick;
+        const auto frame = player.renderAtTick(tick);
+        if (frame != nw::player::ExitCode::Success) return static_cast<int>(frame);
+        if (same_display && !nw::audio::IsWindowOnPlaybackMonitor(window, display.monitor))
+            same_display = false;
+        if (max_frames != 0 && ++frames >= max_frames) break;
+    }}
+    audio_output.stop();
+    const auto endpoint = audio_output.selected_endpoint_id();
+    const auto presents = player.allocation_stats().frames_presented;
+    if (audio_evidence && !audio_output.failed() && finished_song && presents != 0 &&
+        !endpoint.empty() && same_display && display == nw::audio::GetPlaybackDisplay(window)) {{
+        const auto digest = [](std::wstring_view value) {{
+            return nw::package::Sha256Hex(
+                reinterpret_cast<const std::uint8_t*>(value.data()),
+                value.size() * sizeof(wchar_t));
+        }};
+        std::printf("AUDIO_PLAYBACK_EVIDENCE_V1=%s,%s,%u,%u,%llu,%llu\\n",
+            digest(endpoint).c_str(), digest(display.device_path.data()).c_str(),
+            display.refresh_numerator, display.refresh_denominator,
+            static_cast<unsigned long long>(presents),
+            static_cast<unsigned long long>(audio_output.now_ticks()));
+    }}
+    std::printf("AUDIO_STARVATION_OBSERVATIONS=%llu\\nAUDIO_CLOCK_DISCONTINUITIES=%llu\\nAUDIO_SYNTHESIS_CPU_100NS=%llu\\n",
+        static_cast<unsigned long long>(audio_output.starvation_observations()),
+        static_cast<unsigned long long>(audio_output.clock_discontinuities()),
+        static_cast<unsigned long long>(audio_output.synthesis_cpu_100ns()));
+    std::printf("AUDIO_OBSERVED_UNDERRUNS=%llu\\nAUDIO_MISSING_SAMPLES_LOWER_BOUND=%llu\\nAUDIO_PHYSICAL_UNDERRUNS=unavailable\\nAUDIO_SYNTHESIS_CPU_AVAILABLE=%u\\n",
+        static_cast<unsigned long long>(audio_output.observed_underruns()),
+        static_cast<unsigned long long>(audio_output.missing_samples_lower_bound()),
+        audio_output.synthesis_cpu_available() ? 1u : 0u);
+    std::printf("AUDIO_WORKER_CPU_100NS=%llu\\nAUDIO_WORKER_CPU_AVAILABLE=%u\\n",
+        static_cast<unsigned long long>(audio_output.worker_cpu_100ns()),
+        audio_output.worker_cpu_available() ? 1u : 0u);
+    if (audio_output.failed()) return 81;
+#endif
+"""
+
+
 def generate_player_source(
     *,
     package_sha256: str,
@@ -783,7 +894,12 @@ def generate_player_source(
             "NW-06 generated playback requires the fixed 48,000 Hz rational "
             "timeline"
         )
-    if temporal_fixed_step:
+    if manifest.get("audio"):
+        clock_includes = ('#include "audio/procedural_audio.h"\n'
+                          '#if !NW_AUDIO_MEASURE_SYNTHESIS_ONLY\n'
+                          '#include "audio/wasapi_output.h"\n#endif\n')
+        playback_loop = _audio_playback_source(manifest["audio"])
+    elif temporal_fixed_step:
         if ticks_per_second != 48_000:
             raise ExportError(
                 "NW-09 generated playback requires the fixed 48,000 Hz "
@@ -985,6 +1101,7 @@ def generate_player_source(
         "    std::printf(\"NW05_LINK_MANIFEST_VERIFIED=1\\n\");\n"
         "    std::printf(\"NW05_RUNTIME_IMPLEMENTATION_MASK=%u\\n\", nw::player::PackagePlayer::specialized_implementation_mask());\n"
         "    nw::player::PlayerConfig config;\n"
+        + ("    config.allow_audio_package = true;\n" if manifest.get("audio") else "") +
         "    config.window_title = \"Nodewerk NW-05 Procedural Image\";\n"
         f"    config.width = {int(width)}u;\n"
         f"    config.height = {int(height)}u;\n"
@@ -996,6 +1113,8 @@ def generate_player_source(
         "    unsigned long long max_frames = 0;\n"
         "    unsigned long long explicit_tick = 0;\n"
         "    bool has_explicit_tick = false;\n"
+        + ("#if !NW_AUDIO_MEASURE_SYNTHESIS_ONLY\n"
+           "    bool audio_evidence = false;\n#endif\n" if manifest.get("audio") else "") +
         "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
         "    bool emit_image_hash = false;\n"
         "#if NW07_CAPTURE_CONTROLS\n"
@@ -1023,6 +1142,9 @@ def generate_player_source(
         "            config.enable_validation = true;\n"
         "        } else if (std::string(argv[index]) == \"--emit-image-hash\") {\n"
         "            emit_image_hash = true;\n"
+        + ("#if !NW_AUDIO_MEASURE_SYNTHESIS_ONLY\n"
+           "        } else if (std::strcmp(argv[index], \"--audio-evidence\") == 0) {\n"
+           "            audio_evidence = true;\n#endif\n" if manifest.get("audio") else "") +
         "#if NW07_CAPTURE_CONTROLS\n"
         "        } else if (std::string(argv[index]) == \"--capture-dir\" && index + 1 < argc) {\n"
         "            capture_directory = argv[++index];\n"
@@ -1381,7 +1503,10 @@ def _build_specialized_player(
     *,
     build_root_override: Path | None = None,
     frozen_embedded_specialization: bool = False,
+    audio_measure_synthesis_only: bool = False,
 ) -> bytes:
+    if audio_measure_synthesis_only and not manifest.get("audio"):
+        raise ExportError("synthesis-only measurement requires audio manifest")
     if os.name != "nt":
         raise ExportError(
             "production specialized-player linking requires the pinned Windows build",
@@ -1425,6 +1550,8 @@ def _build_specialized_player(
             "-B",
             str(build_root),
             f"-DNW05_GENERATED_PLAYER_SOURCE:FILEPATH={source_path}",
+            "-DNW_GENERATED_PLAYER_AUDIO:BOOL=" + ("ON" if manifest.get("audio") else "OFF"),
+            "-DNW_AUDIO_MEASURE_SYNTHESIS_ONLY:BOOL=" + ("ON" if audio_measure_synthesis_only else "OFF"),
             "-DNW05_FROZEN_EMBEDDED_SPECIALIZATION:BOOL="
             + ("ON" if frozen_embedded_specialization else "OFF"),
         ]
@@ -2928,6 +3055,10 @@ def _finalize_size_accounting(
             )
 
 
+def read_audio_song(path: str) -> bytes:
+    return audio_song.compile_song(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
 def export_graph(
     graph_path: str | os.PathLike[str],
     output_directory: str | os.PathLike[str],
@@ -2945,9 +3076,26 @@ def export_graph(
     adapter_identity: str = "unavailable-native-adapter",
     prepare_staging: Callable[[Path], None] | None = None,
     generated_shaders_override: Sequence[nw03.GeneratedShader] | None = None,
+    audio_song_payload: bytes | None = None,
 ) -> ExportResult:
     """Export one artifact per capability profile with transactional publication."""
     settings = settings or ExportSettings()
+    audio_payload = b""
+    if settings.audio_song_path or audio_song_payload is not None:
+        if settings.frozen_embedded_specialization:
+            raise ExportError("audio requires the full versioned package reader")
+        try:
+            if audio_song_payload is None:
+                audio_payload = read_audio_song(settings.audio_song_path)
+            else:
+                audio_song.decode_song(audio_song_payload)
+                audio_payload = audio_song_payload
+        except (ValueError, OSError) as exc:
+            raise ExportError(f"invalid audio song: {exc}") from exc
+        if not settings.player_template and not allow_test_payloads:
+            raise ExportError("audio export requires a configured Windows player template")
+        if settings.player_template and allow_test_payloads:
+            raise ExportError("audio executable cannot use a test player template")
     graph_path = Path(graph_path)
     output_directory = Path(output_directory)
     document = nw03.load_graph(graph_path)
@@ -3046,6 +3194,19 @@ def export_graph(
                 allow_unpinned_dxc=allow_unpinned_dxc,
                 cache_dir=str(cache_dir) if cache_dir is not None else None,
             )
+            # The stateful extension is orthogonal to the optional audio
+            # extension. Inject the compiled song before encoding so the
+            # embedded package (minor 2 with HIST/CKPT/AUDI) matches the
+            # manifest and the generated WASAPI playback path. Injecting
+            # after this block, as the stateless profile path does, would
+            # leave package.audio_song unset while the manifest advertises
+            # audio, and the generated player would reject its own package.
+            if audio_payload:
+                package = replace(
+                    package,
+                    audio_song=audio_payload,
+                    flags=package.flags | nwp.AUDIO_EXTENSION_FLAG,
+                )
             package_bytes = nwp.encode_package(package)
             valid, diagnostics = nwp.validate_package_bytes(package_bytes)
             if not valid:
@@ -3056,6 +3217,14 @@ def export_graph(
             raise ExportError(
                 str(exc), exc.diagnostics, dependency_path=["stateful_extension"]
             ) from exc
+        # build_stateful_package describes the stateful-only package it
+        # returned.  The audio extension is injected after that call, so the
+        # published report must follow the final combined package minor
+        # (2 for stateful + AUDI) instead of the stateful-only value.
+        stateful_report["package_version"] = {
+            "major": nwp.VERSION_MAJOR,
+            "minor": package.version_minor,
+        }
         package_path = output_directory / "common.nwp"
         logical_schedule = schedule.build_logical_schedule(
             package, frames_in_flight=settings.frames_in_flight
@@ -3138,7 +3307,10 @@ def export_graph(
         manifest["format"] = "nw09-stateful-link-manifest"
         manifest["version"] = 1
         manifest["stateful_extension"] = {
-            "package_minor": nwp.VERSION_MINOR_STATEFUL,
+            # The stateful sections are present at section version 1, while the
+            # package header minor reflects the combined extensions (2 when the
+            # optional audio payload is also embedded).
+            "package_minor": package.version_minor,
             "sections": [nwp.SECTION_HISTORY]
             + (
                 [nwp.SECTION_CHECKPOINTS]
@@ -3204,6 +3376,7 @@ def export_graph(
                 "memory_budget_bytes": int(settings.memory_budget),
             }
         )
+        _attach_audio_manifest(manifest, audio_payload)
         _refresh_manifest_sha256(manifest)
         manifest_data = optimizer.manifest_bytes(manifest)
         specialized_player_bytes: bytes | None = None
@@ -3326,6 +3499,9 @@ def export_graph(
                 "common.player.cpp": len(player_source),
             },
         )
+        if audio_payload:
+            size_report["audio"] = {"song_payload_bytes": len(audio_payload),
+                                    "synthesis_and_output_bytes": "pending_matched_measurement"}
         size_report["stateful"] = {
             "package_minor": package.version_minor,
             "history_bytes": sum(
@@ -3503,6 +3679,10 @@ def export_graph(
                 )
             except nw03.CompilerError:
                 raise
+            if audio_payload:
+                package = replace(package, audio_song=audio_payload, flags=package.flags | nwp.AUDIO_EXTENSION_FLAG)
+                package_bytes = nwp.encode_package(package)
+                package_path.write_bytes(package_bytes)
             compile_reports[profile_id] = compile_report
             logical_schedule = schedule.build_logical_schedule(
                 package, frames_in_flight=settings.frames_in_flight
@@ -3613,6 +3793,7 @@ def export_graph(
                 profile_id, requirements_digest, emitted_requirements(package)
             )
             manifest["optional_artifact"] = not is_common
+            _attach_audio_manifest(manifest, audio_payload)
             manifest["manifest_sha256"] = "sha256:v1:" + hashlib.sha256(
                 nwp.canonical_json_bytes(
                     {
@@ -3750,6 +3931,9 @@ def export_graph(
                 dependency_source=dependency_source,
                 artifact_files=aux_files,
             )
+            if audio_payload:
+                size_report["audio"] = {"song_payload_bytes": len(audio_payload),
+                                        "synthesis_and_output_bytes": "pending_matched_measurement"}
             size_report["content"]["reachable_node_ids"] = list(
                 optimized.reachable_node_ids
             )

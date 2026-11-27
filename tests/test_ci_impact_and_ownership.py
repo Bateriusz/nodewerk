@@ -77,7 +77,7 @@ def test_test_ownership_is_complete_and_unambiguous():
 
 def test_new_test_namespace_would_fail_ownership():
     data = json.loads((ROOT / "ci" / "test-ownership.v1.json").read_text(encoding="utf-8"))
-    rel = "tests/test_nw12_new_feature.py"
+    rel = "tests/test_nw99_new_feature.py"
     matches = [
         family
         for family in data["families"]

@@ -1522,7 +1522,7 @@ def build_stateful_package(
         "stateful": True,
         "package_version": {
             "major": nwp.VERSION_MAJOR,
-            "minor": nwp.VERSION_MINOR_STATEFUL,
+            "minor": stateful.version_minor,
         },
         "capability_profile_id": document.profile_id,
         "capability_requirements_digest": document.requirements_digest,

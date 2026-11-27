@@ -252,6 +252,12 @@ class StudioApplication:
     def scrub(self, tick: int) -> EditResult:
         return self.session.set_timeline_tick(tick)
 
+    def audio_command(self, command: str) -> dict[str, Any]:
+        backend = self.pipeline.backend
+        if not isinstance(backend, WindowsRuntimePreviewBackend):
+            raise EditorError("audio playback requires the native Windows preview host")
+        return backend.audio_command(command)
+
     def undo(self) -> EditResult:
         return self.pipeline.apply_edit(self.session.undo())
 
@@ -547,6 +553,8 @@ def command_export(args: argparse.Namespace) -> int:
             "frames_in_flight": args.frames_in_flight,
             "fusion_enabled": not args.no_fusion,
         }
+        if getattr(args, "audio_song", None):
+            settings["audio_song_path"] = args.audio_song
         if args.capture_controls:
             settings["frozen_embedded_specialization"] = False
         report = application.export_report(
@@ -604,6 +612,7 @@ def command_gui(args: argparse.Namespace) -> int:
         cache_dir=args.cache_dir,
         optimization=args.optimization,
         allow_test_payloads=args.allow_test_payloads,
+        audio_song=getattr(args, "audio_song", None),
     )
 
 
@@ -641,6 +650,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gui.add_argument("--dxc")
     gui.add_argument("--player-template")
+    gui.add_argument("--audio-song", help="optional procedural song JSON for playback/export")
     gui.add_argument("--cache-dir")
     gui.add_argument("--optimization", default="O2", choices=["O0", "O1", "O2", "O3"])
     gui.add_argument("--allow-test-payloads", action="store_true")
@@ -687,6 +697,7 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--allow-unpinned-dxc", action="store_true")
     export.add_argument("--allow-test-payloads", action="store_true")
     export.add_argument("--player-template")
+    export.add_argument("--audio-song", help="optional procedural song JSON for export")
     export.add_argument("--byte-ceiling", type=int, default=nw05_export.DEFAULT_BYTE_CEILING)
     export.add_argument("--memory-budget", type=int, default=nw05_export.DEFAULT_MEMORY_BUDGET)
     export.add_argument("--target-profile", default=nwp_package.COMMON_PROFILE_ID)

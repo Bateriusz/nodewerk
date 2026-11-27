@@ -50,6 +50,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -241,6 +243,14 @@ jobs:
           path: ${{ runner.temp }}/nw01-runtime-smoke-inputs/
           if-no-files-found: error
           retention-days: 1
+
+      - name: Upload exact production audio inputs for desktop validation
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-physical-inputs-${{ github.sha }}
+          path: ${{ runner.temp }}/nw01-runtime-smoke-inputs/nw05/audio-physical-inputs/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload NW-01 build-check evidence
         if: always()

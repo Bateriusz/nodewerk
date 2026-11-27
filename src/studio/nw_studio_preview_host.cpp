@@ -23,6 +23,7 @@
 // names as identity and never fabricates timing values.
 
 #include "package_player.h"
+#include "audio/wasapi_output.h"
 
 #include <cerrno>
 #include <cstdint>
@@ -401,6 +402,9 @@ int RunSession(const Options& options, nw::player::PackagePlayer* player) {
         return 1;
     }
     EmitReady(*player);
+    nw::audio::WasapiOutput audio;
+    bool audio_playing = false;
+    std::uint64_t audio_duration = 0;
     char line[512]{};
     while (std::fgets(line, static_cast<int>(sizeof(line)), stdin) != nullptr) {
         std::string command(line);
@@ -408,7 +412,52 @@ int RunSession(const Options& options, nw::player::PackagePlayer* player) {
                (command.back() == '\n' || command.back() == '\r')) {
             command.pop_back();
         }
+        if (command == "audio-stop") {
+            audio.stop();
+            audio_playing = false;
+            std::printf("{\"event\":\"audio-stop\",\"ok\":true}\n");
+            std::fflush(stdout);
+            continue;
+        }
+        if (command == "audio-clock") {
+            const auto tick = audio.now_ticks();
+            const bool failed = audio.failed();
+            if (audio_playing && (failed || tick >= audio_duration)) {
+                audio.stop();
+                audio_playing = false;
+            }
+            std::printf("{\"event\":\"audio-clock\",\"ok\":%s,\"playing\":%s,\"tick\":%llu}\n",
+                        failed ? "false" : "true", audio_playing ? "true" : "false",
+                        static_cast<unsigned long long>(tick));
+            std::fflush(stdout);
+            continue;
+        }
+        if (command.rfind("audio-start ", 0u) == 0u) {
+            // The same authoring PackagePlayer owns the visual timeline.
+            // Stop first, reconstruct silently, then start the new clock epoch.
+            audio.stop();
+            audio_playing = false;
+            std::uint64_t target = 0u;
+            nw::audio::Song song{};
+            const auto& payload = player->package().audio_song;
+            bool ok = ParseU64(command.c_str() + 12u, &target) && payload &&
+                nw::audio::DecodeSong(payload->data(), payload->size(), song) &&
+                target < song.duration_ticks;
+            if (ok && !player->package().history.empty() &&
+                target / nw::package::kTimelineTicksPerSimulationTick < player->history_simulation_tick()) {
+                ok = player->rewindHistoryForAuthoring() == nw::player::ExitCode::Success;
+            }
+            if (ok) ok = player->renderAtTick(target) == nw::player::ExitCode::Success;
+            if (ok) ok = audio.start(song, target);
+            audio_playing = ok;
+            audio_duration = ok ? song.duration_ticks : 0u;
+            std::printf("{\"event\":\"audio-start\",\"ok\":%s,\"tick\":%llu}\n",
+                        ok ? "true" : "false", static_cast<unsigned long long>(target));
+            std::fflush(stdout);
+            continue;
+        }
         if (command == "quit") {
+            audio.stop();
             const nw::player::ExitCode shutdown = player->shutdown();
             const bool retired = shutdown == nw::player::ExitCode::Success;
             std::printf("{\"event\":\"shutdown\",\"ok\":%s,\"fence_retired\":%s,"
@@ -420,6 +469,8 @@ int RunSession(const Options& options, nw::player::PackagePlayer* player) {
             return retired ? 0 : static_cast<int>(shutdown);
         }
         if (command.rfind("load ", 0u) == 0u) {
+            audio.stop();
+            audio_playing = false;
             const std::string package_path = command.substr(5u);
             if (package_path.empty()) {
                 std::printf(
@@ -455,12 +506,16 @@ int RunSession(const Options& options, nw::player::PackagePlayer* player) {
             continue;
         }
         if (command == "lose-device") {
+            audio.stop();
+            audio_playing = false;
             player->SetForceDeviceRemovedForTesting(true);
             std::printf("{\"event\":\"device-lost\",\"ok\":true}\n");
             std::fflush(stdout);
             continue;
         }
         if (command == "rewind") {
+            audio.stop();
+            audio_playing = false;
             // Explicit replay request from the authoring session: reset the
             // History ping-pong resources and the simulation counter together
             // before the following render replays from tick zero.
@@ -502,6 +557,8 @@ int RunSession(const Options& options, nw::player::PackagePlayer* player) {
             const std::uint64_t target_sim =
                 tick / nw::package::kTimelineTicksPerSimulationTick;
             if (target_sim < player->history_simulation_tick()) {
+                audio.stop();
+                audio_playing = false;
                 const nw::player::ExitCode rewound =
                     player->rewindHistoryForAuthoring();
                 if (rewound != nw::player::ExitCode::Success) {
@@ -559,6 +616,7 @@ int RunSession(const Options& options, nw::player::PackagePlayer* player) {
             captured ? "true" : "false", stats_ok ? "true" : "false");
         std::fflush(stdout);
     }
+    audio.stop();
     const nw::player::ExitCode shutdown = player->shutdown();
     return shutdown == nw::player::ExitCode::Success
                ? 0
@@ -574,6 +632,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     nw::player::PlayerConfig config;
+    config.allow_audio_package = true; // explicit authoring/capture consumer
     config.width = options.width;
     config.height = options.height;
     config.headless = options.headless;

@@ -325,6 +325,8 @@ class StudioWindow:
         self.dispatcher = PreviewDispatcher(application)
         self.actions = GuiActions(application)
         self._preview_photo: Any = None
+        self._audio_playing = False
+        self._audio_pending = None
         self._build()
         self.refresh()
         self._schedule_preview_poll()
@@ -380,6 +382,8 @@ class StudioWindow:
         self.timeline.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.tick_label = ttk.Label(timeline_frame, text="tick 0")
         self.tick_label.pack(side=tk.LEFT)
+        ttk.Button(timeline_frame, text="Play audio", command=self.play_audio).pack(side=tk.LEFT)
+        ttk.Button(timeline_frame, text="Stop", command=self.stop_audio).pack(side=tk.LEFT)
 
         notebook = ttk.Notebook(inspector)
         notebook.pack(fill=tk.BOTH, expand=True)
@@ -843,6 +847,7 @@ class StudioWindow:
         self._after_edit(result)
 
     def _after_edit(self, result: Any) -> None:
+        self.stop_audio()
         if not result.valid:
             self.status.configure(text="edit rejected; last valid snapshot retained")
         self.refresh()
@@ -888,13 +893,60 @@ class StudioWindow:
         self._after_edit(result)
 
     def _on_timeline(self, value: str) -> None:
+        resume = self._audio_playing or self._audio_pending is not None
+        if resume:
+            self.stop_audio()
         try:
             self.application.scrub(int(float(value)))
         except (EditorError, ValueError):
             return
         self.tick_label.configure(text=f"tick {self.application.session.timeline_tick}")
+        if resume:
+            self.play_audio()
+
+    def play_audio(self) -> None:
+        self.stop_audio()
+        if not self.application.export_settings.get("audio_song_path"):
+            self.status.configure(text="Choose a procedural song in Export Settings")
+            return
+        tick = self.application.session.timeline_tick
+        token = self.dispatcher.request(tick)
+        if token is None:
+            self.status.configure(text="Audio preview unavailable")
+            return
+        # Compilation/scene reconstruction is performed by the ordinary
+        # preview worker, before starting the endpoint (no audible replay).
+        self._audio_pending = (token.job_id, tick)
+
+    def stop_audio(self) -> None:
+        was_playing = self._audio_playing
+        self._audio_playing = False
+        self._audio_pending = None
+        if was_playing:
+            try:
+                self.application.audio_command("audio-stop")
+            except (RuntimeError, OSError) as exc:
+                self.status.configure(text=f"Audio stop failed: {exc}")
+
+    def _advance_audio(self) -> None:
+        if not self._audio_playing or self.dispatcher.busy:
+            return
+        try:
+            result = self.application.audio_command("audio-clock")
+            if not result["playing"]:
+                self.stop_audio()
+                return
+            tick = int(result["tick"])
+            self.application.scrub(tick)
+            self.tick_label.configure(text=f"tick {tick}")
+            if self.dispatcher.request(tick) is None:
+                self.stop_audio()
+        except (RuntimeError, OSError, ValueError) as exc:
+            self.stop_audio()
+            self.status.configure(text=f"Audio playback failed: {exc}")
 
     def preview(self) -> None:
+        self.stop_audio()
         token = self.dispatcher.request(self.application.session.timeline_tick)
         if token is None:
             self.status.configure(
@@ -906,12 +958,14 @@ class StudioWindow:
         )
 
     def cancel_preview(self) -> None:
+        self.stop_audio()
         cancelled = self.dispatcher.cancel()
         self.status.configure(
             text="preview cancelled" if cancelled else "no preview to cancel"
         )
 
     def reinitialize_device(self) -> None:
+        self.stop_audio()
         try:
             generation = self.application.reinitialize_device()
         except Exception as exc:
@@ -937,11 +991,22 @@ class StudioWindow:
                 # replace the last valid preview.
                 self.status.configure(text="discarded stale preview completion")
             elif outcome.error:
+                self.stop_audio()
                 self.status.configure(
                     text=f"preview failed: {outcome.error}; last valid frame retained"
                 )
                 self.refresh()
             elif outcome.accepted:
+                if self._audio_pending is not None and outcome.token.job_id == self._audio_pending[0]:
+                    _, tick = self._audio_pending
+                    self._audio_pending = None
+                    try:
+                        self.application.audio_command(f"audio-start {tick}")
+                        self._audio_playing = True
+                    except (RuntimeError, OSError) as exc:
+                        self.status.configure(text=f"Audio start failed: {exc}")
+                        self._schedule_preview_poll()
+                        return
                 self.status.configure(
                     text=(
                         f"preview updated (job {outcome.token.job_id}, "
@@ -950,6 +1015,7 @@ class StudioWindow:
                 )
                 self.refresh()
             else:
+                self.stop_audio()
                 reason = (
                     outcome.decision.reason
                     if outcome.decision is not None
@@ -962,9 +1028,11 @@ class StudioWindow:
                 self.refresh_timings()
                 self.refresh_size()
                 self.refresh_state()
+        self._advance_audio()
         self._schedule_preview_poll()
 
     def apply_budget(self) -> None:
+        self.stop_audio()
         try:
             self.application.configure_gpu_cache_budget(int(self.budget_entry.get()))
         except (ValueError, RuntimeError) as exc:
@@ -974,6 +1042,7 @@ class StudioWindow:
         self.status.configure(text="GPU cache budget updated")
 
     def new_proof(self) -> None:
+        self.stop_audio()
         self.dispatcher.cancel()
         self.actions.close()
         if not self.application.explicit_backend:
@@ -995,6 +1064,7 @@ class StudioWindow:
         if not path:
             return
         try:
+            self.stop_audio()
             self.dispatcher.cancel()
             self.actions.close()
             replacement = self.application.reopen(path)
@@ -1029,12 +1099,14 @@ class StudioWindow:
     def edit_export_settings(self) -> None:
         from tkinter import simpledialog
 
+        self.stop_audio()
         values: dict[str, str] = {}
         prompts = (
             ("dxc", "DXC executable", self.application.dxc_executable),
             ("player_template", "Player template", self.application.player_template),
             ("cache_dir", "Compiler cache directory", self.application.cache_dir),
             ("optimization", "Optimization (O0..O3)", self.application.optimization),
+            ("audio_song", "Procedural song JSON (empty for silent)", self.application.export_settings.get("audio_song_path", "")),
         )
         for key, label, current in prompts:
             value = simpledialog.askstring(
@@ -1049,6 +1121,7 @@ class StudioWindow:
                 player_template=values["player_template"],
                 cache_dir=values["cache_dir"],
                 optimization=values["optimization"],
+                settings={**self.application.export_settings, "audio_song_path": values["audio_song"]},
             )
         except EditorError as exc:
             self.status.configure(text=str(exc))
@@ -1132,6 +1205,7 @@ def run_gui(
     cache_dir: str | os.PathLike[str] | None = None,
     optimization: str = "O2",
     allow_test_payloads: bool = False,
+    audio_song: str | None = None,
 ) -> int:
     try:
         import tkinter as tk
@@ -1150,6 +1224,7 @@ def run_gui(
             cache_dir=cache_dir,
             optimization=optimization,
             allow_test_payloads=allow_test_payloads,
+            export_settings={"audio_song_path": audio_song} if audio_song else None,
         )
     except (EditorError, RuntimeError) as exc:
         print(f"cannot create studio application: {exc}", file=sys.stderr)
@@ -1159,8 +1234,14 @@ def run_gui(
     except Exception as exc:  # pragma: no cover - headless display
         print(f"cannot create GUI root: {exc}", file=sys.stderr)
         return 1
-    StudioWindow(root, application)
-    root.mainloop()
+    window = StudioWindow(root, application)
+    try:
+        root.mainloop()
+    finally:
+        # The Tk widgets are already destroyed; close the native process
+        # directly (quit stops audio before retirement), not UI callbacks.
+        window.dispatcher.cancel()
+        window.application.close()
     return 0
 
 

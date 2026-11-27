@@ -42,6 +42,10 @@ struct PlayerConfig {
     bool maximized_window = false;
     bool enable_validation = false;
     bool headless = false;
+#if NW_PACKAGE_AUDIO
+    // Explicit capability admission by an audio transport or offline reader.
+    bool allow_audio_package = false;
+#endif
     // Diagnostic/CI only: allow the Microsoft Basic Render Driver (WARP)
     // adapter for native lifecycle and D3D12-validation execution.  Hardware
     // qualification never sets this flag.
@@ -122,6 +126,9 @@ public:
                         std::size_t size_bytes);
     ExitCode initializeFromFile(const char* package_path);
     ExitCode renderAtTick(std::uint64_t tick);
+#if NW_PACKAGE_AUDIO
+    void* playback_window_handle() const noexcept;
+#endif
     // Reads back the exact resource target of frame.present.  Diagnostic/
     // qualification only; returns the bytes written by the package shader.
     ExitCode readbackPresentedOutput(std::vector<std::uint8_t>* bytes);

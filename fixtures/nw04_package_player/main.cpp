@@ -28,6 +28,7 @@ struct FixtureArgs {
     std::uint32_t height = 720u;
     bool diagnostics = false;
     bool headless = false;
+    bool audio_offline = false;
     bool allow_software_adapter = false;
     bool emit_benchmark_metrics = false;
     bool emit_image_hash = false;
@@ -114,6 +115,8 @@ bool ParseArgs(int argc, char** argv, FixtureArgs* args) {
             args->diagnostics = true;
         } else if (std::strcmp(arg, "--headless") == 0) {
             args->headless = true;
+        } else if (std::strcmp(arg, "--audio-offline") == 0) {
+            args->audio_offline = true;
         } else if (std::strcmp(arg, "--allow-software-adapter") == 0) {
             args->allow_software_adapter = true;
         } else if (std::strcmp(arg, "--emit-benchmark-metrics") == 0) {
@@ -204,6 +207,13 @@ int main(int argc, char** argv) {
     config.width = args.width;
     config.height = args.height;
     config.headless = args.headless;
+    if (args.audio_offline && !args.headless)
+        return static_cast<int>(nw::player::ExitCode::InvalidArguments);
+#if NW_PACKAGE_AUDIO
+    config.allow_audio_package = args.audio_offline;
+#else
+    if (args.audio_offline) return static_cast<int>(nw::player::ExitCode::InvalidArguments);
+#endif
     config.allow_software_adapter =
         args.allow_software_adapter ||
         HasEnvironmentVariable("NW04_ALLOW_SOFTWARE_ADAPTER");

@@ -32,6 +32,7 @@ graph semantics and `.nwgraph` schema.
 23. [NW-10 Compact Export, Restricted Intro & Measured 64 KiB Attempt](nw10-compact-export.md)
 24. [NW-11 Advanced GPU Feature Experiments](nw11-advanced-gpu-experiments.md)
 25. [NW-11 Bounded Follow-Up Matrix](nw11-follow-up-matrix.md)
+26. [NW-12 Optional Procedural Audio](procedural-audio.md)
 
 ## Schemas & Recorded Baseline Artifacts
 
@@ -58,6 +59,7 @@ graph semantics and `.nwgraph` schema.
 - NW-07 Export Report Schema: [`schemas/nw07-export-report.schema.json`](../schemas/nw07-export-report.schema.json)
 - NW-07 Clean-System Report Schema: [`schemas/nw07-clean-system-report.schema.json`](../schemas/nw07-clean-system-report.schema.json)
 - NW-07 Diagnostic Sibling-Build Overhead: [`benchmarks/nw07/diagnostic-overhead.v1.json`](../benchmarks/nw07/diagnostic-overhead.v1.json) (validated by [`schemas/nw07-diagnostic-overhead.schema.json`](../schemas/nw07-diagnostic-overhead.schema.json)); pending separate diagnostic measurement
+- NW-12 Physical Audio/Display Evidence: [`benchmarks/nw12/audio-physical-evidence.v1.json`](../benchmarks/nw12/audio-physical-evidence.v1.json) (validated by [`schemas/nw12-audio-physical-evidence.schema.json`](../schemas/nw12-audio-physical-evidence.schema.json)); physical observation pending until the exact artifact is recorded on a Windows 11 WASAPI/display session
 - NW-08 Studio Report Schema: [`schemas/nw08-studio-report.schema.json`](../schemas/nw08-studio-report.schema.json)
 - NW-08 Verification Summary Schema: [`schemas/nw08-verification.schema.json`](../schemas/nw08-verification.schema.json)
 - NW-09 Checkpoint Schema: [`schemas/nw09-checkpoint.schema.json`](../schemas/nw09-checkpoint.schema.json)
