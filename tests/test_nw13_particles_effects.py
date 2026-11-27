@@ -84,6 +84,19 @@ def test_history_reconstructs_across_reset_seek_and_rewind() -> None:
     assert history.advance_to(18) == expected
 
 
+def test_history_seek_before_retained_window_reconstructs_from_origin() -> None:
+    emitter = particles.compile_emitter(EMITTER)
+    history = particles.ParticleHistory(emitter, max_steps=10)
+    fresh = particles.ParticleHistory(emitter, max_steps=10)
+    expected = fresh.advance_to(5)
+    history.advance_to(40)
+    assert min(history.checkpoints) > 5
+    assert history.seek(5) == expected
+    assert history.step == 5
+    assert min(history.checkpoints) == 0
+    assert history.rewind(10) == fresh.advance_to(0)
+
+
 def test_history_memory_bound_is_explicit() -> None:
     emitter = particles.compile_emitter({**EMITTER, "count": 4000})
     with pytest.raises(particles.ParticleError) as exc:

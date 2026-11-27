@@ -255,13 +255,18 @@ Every optional export binds the selected lowering, queried D3D12 capabilities,
 shader model, runtime dependencies and budgets to artifact provenance.
 Unsupported requests fail before GPU work. The common fallback is exported and
 smoke-tested independently, including after an optional build/validation
-failure. Unreachable NW-13 paths contribute zero release code, shader bytes,
-imports, package sections or dependencies.
+failure. When hosted CI has the native template and pinned DXC it builds the
+common artifact twice, runs it through the PackagePlayer, and records the
+measured sizes/imports/smoke. Unreachable NW-13 paths are asserted to contribute
+zero release code, shader bytes, imports, package sections or dependencies only
+after a matched same-revision export pair is measured; otherwise those fields
+remain explicitly `null`.
 
 `tools/nw13_evidence.py` also emits matched-arm ledgers. Distribution bytes,
 shader bytes, startup, committed memory/VRAM, CPU submission, GPU time and
 image error are recorded; unavailable observations stay explicit `null` with
-their names, never zero. Independent rebuild/provenance and validation-bundle
+their names, never zero. `tools/nw13_artifact_measure.py` refuses to claim an
+unexecuted smoke, and independent rebuild/provenance and validation-bundle
 integrity are checked in hosted CI.
 
 Physical GPU/audio qualification continues to use

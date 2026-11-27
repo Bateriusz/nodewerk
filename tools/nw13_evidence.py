@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from typing import Any, Mapping, Sequence
 
 import nwp_package as nwp
@@ -300,8 +301,18 @@ def export_artifacts(
     capabilities: Mapping[str, Any] | None = None,
     requested_features: Sequence[str] = (),
     optional_build_fails: bool = False,
+    common_observation: Mapping[str, Any] | None = None,
+    optional_observations: Mapping[str, Mapping[str, Any]] | None = None,
+    independent_builds: bool = False,
 ) -> dict[str, Any]:
-    """Independently export common and optional artifacts from one revision."""
+    """Bind exported artifact provenance to measured observations.
+
+    Build sizes, package sections, imports and smoke results are never invented.
+    Callers that ran independent exports supply ``common_observation`` and
+    ``optional_observations``; otherwise those fields stay ``None`` and smoke is
+    recorded as ``unavailable`` so committed evidence cannot claim an
+    unexecuted pass.
+    """
     revision = str(production.get("revision", ""))
     production_id = str(production.get("id", "nw13.production"))
     if not revision:
@@ -309,6 +320,7 @@ def export_artifacts(
     caps = dict(DEFAULT_CAPABILITIES)
     if capabilities:
         caps.update(capabilities)
+    common_obs = _artifact_observation(common_observation)
     common = {
         "artifact_id": "nw13.common",
         "kind": "common",
@@ -321,13 +333,9 @@ def export_artifacts(
         "capabilities": caps,
         "capability_revision": capabilities_revision(caps),
         "runtime_dependencies": ["d3d12", "dxgi"],
-        "sections": ["NWPK", "CODE", "SHDR", "DATA"],
-        "imports": ["d3d12.dll", "dxgi.dll"],
-        "distribution_bytes": 256 * 1024,
-        "shader_bytes": 4096,
         "budgets": {"max_distribution_bytes": 262144, "max_memory_bytes": 64 * 1024 * 1024},
-        "smoke": {"executed": True, "status": "pass", "headless": True},
         "fallback_artifact_id": None,
+        **common_obs,
     }
     optional: list[dict[str, Any]] = []
     diagnostics: list[dict[str, Any]] = []
@@ -342,6 +350,9 @@ def export_artifacts(
                 continue
             if selection["profile_id"] == COMMON_PROFILE_ID:
                 continue
+            observation = _artifact_observation(
+                (optional_observations or {}).get(feature)
+            )
             optional.append(
                 {
                     "artifact_id": f"nw13.optional.{feature}",
@@ -355,13 +366,9 @@ def export_artifacts(
                     "capabilities": selection["capabilities"],
                     "capability_revision": capabilities_revision(selection["capabilities"]),
                     "runtime_dependencies": ["d3d12", "dxgi"],
-                    "sections": ["NWPK", "CODE", "SHDR", "DATA", "OPTN"],
-                    "imports": ["d3d12.dll", "dxgi.dll"],
-                    "distribution_bytes": 256 * 1024 + 8192,
-                    "shader_bytes": 4096 + 2048,
                     "budgets": selection.get("budgets", {"max_distribution_bytes": 262144, "max_memory_bytes": 96 * 1024 * 1024}),
-                    "smoke": {"executed": True, "status": "pass", "headless": True},
                     "fallback_artifact_id": selection.get("fallback_artifact_id"),
+                    **observation,
                 }
             )
     bundle = {
@@ -373,7 +380,7 @@ def export_artifacts(
         "optional": optional,
         "fallback": {**common, "artifact_id": "nw13.common.fallback", "kind": "fallback"},
         "diagnostics": diagnostics,
-        "independent_builds": True,
+        "independent_builds": bool(independent_builds),
     }
     return seal_bundle(bundle)
 
@@ -386,24 +393,123 @@ def seal_bundle(bundle: Mapping[str, Any]) -> dict[str, Any]:
     return sealed
 
 
-def unreachable_incremental(feature_reachable: bool) -> dict[str, Any]:
-    """Prove that unreachable NW-13 paths contribute zero release weight."""
-    if feature_reachable:
+def _optional_nonnegative_int(value: Any, name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise EvidenceError(f"measurement '{name}' must be a non-negative integer or null")
+    return value
+
+
+def unavailable_smoke() -> dict[str, Any]:
+    """Explicitly represent a smoke run that was not executed."""
+    return {"executed": False, "status": "unavailable", "headless": None}
+
+
+def smoke_observation(executable: str, arguments: Sequence[str] = ("--frames", "1"), *, timeout: float = 180.0) -> dict[str, Any]:
+    """Run a real artifact smoke and record the observation, including failure."""
+    try:
+        completed = subprocess.run(
+            [executable, *arguments],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
         return {
-            "reachable": True,
-            "additional_release_code_bytes": 8192,
-            "additional_shader_bytes": 2048,
-            "additional_imports": ["d3d12.dll"],
-            "additional_package_sections": ["OPTN"],
-            "additional_dependencies": ["optional-nw13-runtime"],
+            "executed": True,
+            "status": "error",
+            "headless": "--headless" in arguments or "--allow-software-adapter" in arguments,
+            "error": str(exc),
         }
     return {
-        "reachable": False,
-        "additional_release_code_bytes": 0,
-        "additional_shader_bytes": 0,
-        "additional_imports": [],
-        "additional_package_sections": [],
-        "additional_dependencies": [],
+        "executed": True,
+        "status": "pass" if completed.returncode == 0 else "fail",
+        "headless": "--headless" in arguments or "--allow-software-adapter" in arguments,
+        "returncode": completed.returncode,
+        "stdout_sha256": sha256_text(completed.stdout),
+        "stderr_sha256": sha256_text(completed.stderr),
+    }
+
+
+def _normalise_smoke(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or not value.get("executed"):
+        return unavailable_smoke()
+    status = value.get("status")
+    if status not in {"pass", "fail", "error"}:
+        raise EvidenceError("executed smoke observation must record pass, fail or error")
+    result = {"executed": True, "status": status, "headless": value.get("headless")}
+    for key in ("returncode", "stdout_sha256", "stderr_sha256", "error"):
+        if key in value:
+            result[key] = value[key]
+    return result
+
+
+def _artifact_observation(observation: Mapping[str, Any] | None) -> dict[str, Any]:
+    observation = dict(observation or {})
+    result: dict[str, Any] = {
+        "distribution_bytes": _optional_nonnegative_int(observation.get("distribution_bytes"), "distribution_bytes"),
+        "shader_bytes": _optional_nonnegative_int(observation.get("shader_bytes"), "shader_bytes"),
+        "sections": list(observation["sections"]) if observation.get("sections") is not None else None,
+        "imports": list(observation["imports"]) if observation.get("imports") is not None else None,
+        "smoke": _normalise_smoke(observation.get("smoke")),
+    }
+    for key in (
+        "startup_ms",
+        "committed_memory_bytes",
+        "vram_bytes",
+        "cpu_submit_us",
+        "gpu_time_us",
+        "image_max_abs_error",
+        "image_rmse",
+        "executable_sha256",
+        "package_sha256",
+        "manifest_sha256",
+        "dependency_identities",
+    ):
+        result[key] = observation.get(key)
+    measured = result["distribution_bytes"] is not None and result["shader_bytes"] is not None
+    executed = bool(result["smoke"]["executed"])
+    result["measurement_status"] = "measured" if measured and executed else ("partial" if measured or executed else "unavailable")
+    return result
+
+
+def unreachable_incremental(
+    feature_reachable: bool,
+    *,
+    observations: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compare unrelated same-revision exports, or record unavailability.
+
+    Zero additional release weight is only asserted when a matched pair of
+    unrelated exports was actually inspected.  Without that observation every
+    byte/section/import/dependency count is ``None`` and the measurement status
+    is explicitly ``unavailable``.
+    """
+    if observations is None:
+        return {
+            "reachable": feature_reachable,
+            "measurement_status": "unavailable",
+            "additional_release_code_bytes": None,
+            "additional_shader_bytes": None,
+            "additional_imports": None,
+            "additional_package_sections": None,
+            "additional_dependencies": None,
+        }
+    return {
+        "reachable": feature_reachable,
+        "measurement_status": "measured",
+        "additional_release_code_bytes": _optional_nonnegative_int(
+            observations.get("additional_release_code_bytes"), "additional_release_code_bytes"
+        ),
+        "additional_shader_bytes": _optional_nonnegative_int(
+            observations.get("additional_shader_bytes"), "additional_shader_bytes"
+        ),
+        "additional_imports": list(observations.get("additional_imports", [])),
+        "additional_package_sections": list(observations.get("additional_package_sections", [])),
+        "additional_dependencies": list(observations.get("additional_dependencies", [])),
     }
 
 
@@ -423,6 +529,25 @@ def validate_bundle(bundle: Mapping[str, Any]) -> list[dict[str, Any]]:
         for key in ("profile_id", "requirements_digest", "lowering", "shader_model", "capabilities", "runtime_dependencies", "budgets"):
             if key not in artifact:
                 diagnostics.append(_diagnostic("nw13_invalid_bundle", f"artifact is missing provenance field '{key}'"))
+        smoke = artifact.get("smoke")
+        if not isinstance(smoke, Mapping):
+            diagnostics.append(_diagnostic("nw13_invalid_bundle", "artifact is missing a smoke observation"))
+            continue
+        status = artifact.get("measurement_status")
+        if status == "measured":
+            if artifact.get("distribution_bytes") is None or artifact.get("shader_bytes") is None:
+                diagnostics.append(_diagnostic("nw13_invalid_bundle", "measured artifact lacks byte observations"))
+            if not smoke.get("executed"):
+                diagnostics.append(_diagnostic("nw13_invalid_bundle", "measured artifact lacks an executed smoke"))
+        elif not smoke.get("executed") and smoke.get("status") != "unavailable":
+            diagnostics.append(_diagnostic("nw13_invalid_bundle", "unexecuted smoke must be marked unavailable"))
+    if bundle.get("independent_builds") and common.get("measurement_status") != "measured":
+        diagnostics.append(
+            _diagnostic(
+                "nw13_invalid_bundle",
+                "independent_builds cannot be claimed without measured common bytes and an executed smoke",
+            )
+        )
     expected = bundle.get("bundle_sha256")
     if expected is not None:
         copy = dict(bundle)

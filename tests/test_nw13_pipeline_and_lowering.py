@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw13_evidence as evidence  # noqa: E402
+import nw13_artifact_measure as artifact_measure  # noqa: E402
 import nw13_pipeline as pipeline  # noqa: E402
 import nw04_fixture  # noqa: E402
 import nw05_export  # noqa: E402
@@ -165,21 +166,117 @@ def test_export_artifacts_bind_provenance_and_independent_fallback() -> None:
     assert bundle["fallback"]["artifact_id"] == "nw13.common.fallback"
     assert any(entry["artifact_id"].endswith("dxr_inline_ray_query") for entry in bundle["optional"])
     assert any(item["code"] == "nw13_optional_unsupported" for item in bundle["diagnostics"])
+    # No build or smoke ran, so the bundle must not claim one.
+    assert bundle["independent_builds"] is False
+    assert bundle["common"]["distribution_bytes"] is None
+    assert bundle["common"]["shader_bytes"] is None
+    assert bundle["common"]["measurement_status"] == "unavailable"
+    assert bundle["common"]["smoke"] == {"executed": False, "status": "unavailable", "headless": None}
 
     failed = evidence.export_artifacts(production, capabilities=capabilities, requested_features=["dxr_inline_ray_query"], optional_build_fails=True)
-    assert failed["common"]["smoke"]["status"] == "pass"
-    assert failed["fallback"]["smoke"]["status"] == "pass"
+    assert failed["common"]["smoke"]["status"] == "unavailable"
+    assert failed["fallback"]["smoke"]["status"] == "unavailable"
     assert any(item["code"] == "nw13_optional_build_failed" for item in failed["diagnostics"])
+
+
+def test_export_artifacts_only_records_supplied_measurements_and_smoke() -> None:
+    production = {"id": "nw13.hotel_corridor", "revision": "abc123"}
+    observation = {
+        "distribution_bytes": 123456,
+        "shader_bytes": 4321,
+        "sections": ["CAP ", "RES ", "SHDR"],
+        "imports": ["d3d12.dll", "dxgi.dll"],
+        "smoke": {"executed": True, "status": "pass", "headless": True, "returncode": 0},
+        "startup_ms": 12.5,
+    }
+    bundle = evidence.export_artifacts(
+        production,
+        capabilities={"raytracing_tier": 1.1, "highest_shader_model": "6_5"},
+        requested_features=["dxr_inline_ray_query"],
+        common_observation=observation,
+        optional_observations={"dxr_inline_ray_query": {**observation, "distribution_bytes": 130000}},
+        independent_builds=True,
+    )
+    assert evidence.validate_bundle(bundle) == []
+    assert bundle["independent_builds"] is True
+    assert bundle["common"]["distribution_bytes"] == 123456
+    assert bundle["common"]["smoke"]["status"] == "pass"
+    assert bundle["common"]["measurement_status"] == "measured"
+    optional = bundle["optional"][0]
+    assert optional["distribution_bytes"] == 130000
+    assert optional["measurement_status"] == "measured"
+
+    inconsistent = evidence.seal_bundle(
+        {
+            **bundle,
+            "common": {**bundle["common"], "smoke": {"executed": False, "status": "pass", "headless": True}},
+        }
+    )
+    assert any("executed smoke" in item["message"] for item in evidence.validate_bundle(inconsistent))
+    unmeasured = evidence.export_artifacts(production, independent_builds=True)
+    assert any("independent_builds" in item["message"] for item in evidence.validate_bundle(unmeasured))
+
+
+def test_smoke_observation_records_real_execution(tmp_path: Path) -> None:
+    script = tmp_path / "smoke.py"
+    script.write_text("#!/usr/bin/env python3\nraise SystemExit(0)\n", encoding="utf-8")
+    script.chmod(0o755)
+    passed = evidence.smoke_observation(str(script), ["--headless"])
+    assert passed["executed"] is True
+    assert passed["status"] == "pass"
+    assert passed["headless"] is True
+    failing = tmp_path / "failing.py"
+    failing.write_text("#!/usr/bin/env python3\nraise SystemExit(3)\n", encoding="utf-8")
+    failing.chmod(0o755)
+    failed = evidence.smoke_observation(str(failing), ["--headless"])
+    assert failed["executed"] is True
+    assert failed["status"] == "fail"
+    assert failed["returncode"] == 3
+
+
+def test_artifact_measurement_without_toolchain_records_unavailable(tmp_path: Path) -> None:
+    result = artifact_measure.write_evidence(
+        repo_root=REPO_ROOT,
+        production_path=REPO_ROOT / "fixtures" / "nw13" / "hotel_corridor.production.json",
+        output_dir=tmp_path,
+    )
+    bundle = result["bundle"]
+    ledger = result["ledger"]
+    assert evidence.validate_bundle(bundle) == []
+    assert bundle["independent_builds"] is False
+    assert bundle["common"]["measurement_status"] == "unavailable"
+    assert bundle["common"]["smoke"]["executed"] is False
+    assert bundle["common"]["distribution_bytes"] is None
+    for arm in ledger["arms"]:
+        assert arm["available"] is False
+        assert arm["metrics"]["distribution_bytes"] is None
+        assert arm["metrics"]["shader_bytes"] is None
+    assert (tmp_path / "artifact-bundle.v1.json").exists()
+    assert (tmp_path / "matched-arms.v1.json").exists()
 
 
 def test_unreachable_optional_paths_add_zero_release_weight() -> None:
     unreachable = evidence.unreachable_incremental(False)
-    assert unreachable["additional_release_code_bytes"] == 0
-    assert unreachable["additional_shader_bytes"] == 0
-    assert unreachable["additional_imports"] == []
-    assert unreachable["additional_package_sections"] == []
-    reachable = evidence.unreachable_incremental(True)
-    assert reachable["additional_release_code_bytes"] > 0
+    assert unreachable["measurement_status"] == "unavailable"
+    assert unreachable["additional_release_code_bytes"] is None
+    assert unreachable["additional_shader_bytes"] is None
+    assert unreachable["additional_imports"] is None
+    assert unreachable["additional_package_sections"] is None
+    measured = evidence.unreachable_incremental(
+        False,
+        observations={
+            "additional_release_code_bytes": 0,
+            "additional_shader_bytes": 0,
+            "additional_imports": [],
+            "additional_package_sections": [],
+            "additional_dependencies": [],
+        },
+    )
+    assert measured["measurement_status"] == "measured"
+    assert measured["additional_release_code_bytes"] == 0
+    assert measured["additional_shader_bytes"] == 0
+    assert measured["additional_imports"] == []
+    assert measured["additional_package_sections"] == []
 
 
 def test_matched_arms_mark_unavailable_observations_explicitly() -> None:
@@ -207,11 +304,25 @@ def test_recorded_lowering_and_artifact_evidence_is_internally_consistent() -> N
     bundle = json.loads((REPO_ROOT / "benchmarks" / "nw13" / "artifact-bundle.v1.json").read_text(encoding="utf-8"))
     assert evidence.validate_bundle(bundle) == []
     assert bundle["common"]["revision"] == "1c9e1559c8d43530c7b213461c6719b6aa43ae35"
+    assert bundle["independent_builds"] is False
+    assert bundle["common"]["distribution_bytes"] is None
+    assert bundle["common"]["shader_bytes"] is None
+    assert bundle["common"]["smoke"]["executed"] is False
+    assert bundle["common"]["smoke"]["status"] == "unavailable"
+    assert bundle["fallback"]["smoke"]["executed"] is False
+    for artifact in bundle["optional"]:
+        assert artifact["distribution_bytes"] is None
+        assert artifact["shader_bytes"] is None
+        assert artifact["smoke"]["status"] == "unavailable"
     ledger = json.loads((REPO_ROOT / "benchmarks" / "nw13" / "matched-arms.v1.json").read_text(encoding="utf-8"))
     assert ledger["unavailable_observations_explicit"] is True
     for arm in ledger["arms"]:
         assert arm["available"] is False
         assert "gpu_time_us" in arm["unavailable"]
+        assert "distribution_bytes" in arm["unavailable"]
+        assert "shader_bytes" in arm["unavailable"]
+        assert arm["metrics"]["distribution_bytes"] is None
+        assert arm["metrics"]["shader_bytes"] is None
     status = json.loads((REPO_ROOT / "benchmarks" / "nw13" / "evidence-status.v1.json").read_text(encoding="utf-8"))
     assert status["pending_is_not_pass"] is True
     assert status["observations"]["performance"]["status"] == "unavailable"

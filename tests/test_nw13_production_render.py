@@ -218,9 +218,21 @@ def test_production_transport_trace_reports_cut_and_one_shot_cues() -> None:
     assert any(event.get("cue_id") == "flash" for event in trace[2]["events"])
     assert any(event.get("kind") == "cut" and event.get("cut_tick") == 192000 for event in trace[3]["events"])
     assert sum(1 for entry in trace for event in entry["events"] if event.get("cue_id") == "door_hinge") == 1
+
+    declared = production.transport_trace(document, REPO_ROOT)
+    assert any(entry["direction"] == -1 for entry in declared)
+    reverse_entry = next(entry for entry in declared if entry["direction"] == -1)
+    assert reverse_entry["tick"] == 240000
+    assert any(event.get("kind") == "reverse" and event.get("direction") == -1 for event in reverse_entry["events"])
+    assert any(event.get("kind") == "reverse" and event.get("direction") == 1 for entry in declared for event in entry["events"])
+    assert any(event.get("kind") == "freeze" for entry in declared for event in entry["events"])
+    assert any(event.get("kind") == "resume" for entry in declared for event in entry["events"])
+
     retained = json.loads((REPO_ROOT / "fixtures" / "nw13" / "evidence" / "transport.v1.json").read_text(encoding="utf-8"))
     retained_events = [event["kind"] for entry in retained["trace"] for event in entry["events"]]
     assert "freeze" in retained_events
     assert "resume" in retained_events
     assert "cut" in retained_events
+    assert "reverse" in retained_events
+    assert any(entry["direction"] == -1 for entry in retained["trace"])
 

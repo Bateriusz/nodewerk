@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -63,16 +65,44 @@ def test_schema_and_public_payload_validate() -> None:
     assert set(compiled.instruments) == {"lead", "bass", "percussion", "event"}
 
 
-def test_nwas_v1_container_is_preserved_and_canonical() -> None:
+def test_nwas_v1_decoding_is_preserved_and_canonical() -> None:
+    v1_events = [
+        {"tick": 0, "duration": 4800, "frequency_millihz": 440000, "gain": 12000},
+        {"tick": 9600, "duration": 4800, "frequency_millihz": 660000, "gain": 9000},
+    ]
+    v1 = audio_song.compile_song({"version": 1, "duration_ticks": 48000, "events": v1_events})
+    decoded_v1 = audio.decode_nwas(v1)
+    assert decoded_v1["version"] == 1
+    assert decoded_v1["events"] == v1_events
+    assert audio_song.compile_song(decoded_v1) == v1
+
+
+def test_shared_v2_container_carries_instrument_filter_pan_bus_and_automation() -> None:
     document = json.loads(SONG_PATH.read_text(encoding="utf-8"))
     sequence = audio.compile_sequence(document)
     payload = audio.compile_to_nwas(sequence)
-    decoded = audio_song.decode_song(payload)
-    assert decoded["version"] == 1
+    assert payload[:4] == b"NWAS"
+    assert int.from_bytes(payload[4:8], "little") == 2
+    decoded = audio.decode_nwas(payload)
+    assert decoded["version"] == 2
     assert decoded["duration_ticks"] == 288000
-    assert len(decoded["events"]) == 30
+    assert len(decoded["notes"]) == 30
+    assert len(decoded["instruments"]) == 4
+    assert len(decoded["automation"]) == 2
+    lead = decoded["instruments"][0]
+    assert lead["waveform"] == "saw"
+    assert lead["seed"] == 11
+    assert lead["pan_milli"] == -250
+    assert lead["cutoff_hz"] == 4200
+    buses = {entry["bus"] for entry in decoded["automation"]}
+    assert buses == {"music", "effect"}
+    assert {note["bus"] for note in decoded["notes"]} == {"music", "effect"}
     assert audio.decode_nwas(payload) == decoded
-    assert audio_song.compile_song(decoded) == payload
+    # The preserved NWAS v1 reader remains byte-canonical for v1 payloads.
+    v1_single = audio_song.compile_song({"version": 1, "duration_ticks": 48000,
+                                         "events": [{"tick": 0, "duration": 4800,
+                                                     "frequency_millihz": 440000, "gain": 12000}]})
+    assert audio_song.compile_song(audio_song.decode_song(v1_single)) == v1_single
 
 
 @pytest.mark.parametrize("waveform", ["sine", "square", "saw", "triangle", "noise"])
@@ -185,4 +215,57 @@ def test_audiovisual_cues_align_within_one_frame_without_duplicate_transport_cue
     transport.reset()
     assert transport.cue("flash") is True
     assert audio.semantic_hash(json.loads(SONG_PATH.read_text(encoding="utf-8"))) == audio.semantic_hash(json.loads(SONG_PATH.read_text(encoding="utf-8")))
+
+
+def _compile_native(tmp_path: Path, source: str, name: str) -> Path:
+    compiler = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
+    if compiler is None:
+        pytest.skip("shared procedural-audio contract requires a C++20 compiler")
+    output = tmp_path / name
+    subprocess.run(
+        [
+            compiler,
+            "-std=c++20",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-fno-exceptions",
+            "-fno-rtti",
+            "-O2",
+            "-I",
+            str(REPO_ROOT / "src"),
+            str(REPO_ROOT / "src" / "audio" / "procedural_audio.cpp"),
+            str(REPO_ROOT / "tests" / source),
+            "-o",
+            str(output),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return output
+
+
+def test_shared_cpp_decoder_reaches_v2_instruments_filter_pan_bus_and_automation(
+    tmp_path: Path,
+) -> None:
+    executable = _compile_native(tmp_path, "nw13_audio_payload.cpp", "nw13_audio_payload")
+    sequence = audio.compile_sequence(json.loads(SONG_PATH.read_text(encoding="utf-8")))
+    payload = tmp_path / "hotel.nwas"
+    payload.write_bytes(audio.compile_to_nwas(sequence))
+    completed = subprocess.run([str(executable), str(payload)], capture_output=True, text=True, check=False)
+    assert completed.returncode == 0, completed.stderr
+    assert "version=2 instruments=4 notes=30 automation=2" in completed.stdout
+    assert "chunked_equal=1" in completed.stdout
+    assert "pcm_nonzero=" in completed.stdout
+    hash_line = next(line for line in completed.stdout.splitlines() if line.startswith("pcm_fnv64="))
+    assert hash_line != "pcm_fnv64=0000000000000000"
+
+
+def test_shared_cpp_contract_selects_waveforms_pan_envelope_filter_and_automation(
+    tmp_path: Path,
+) -> None:
+    executable = _compile_native(tmp_path, "nw13_audio_contract.cpp", "nw13_audio_contract")
+    completed = subprocess.run([str(executable)], capture_output=True, text=True, check=False)
+    assert completed.returncode == 0, completed.stderr
 

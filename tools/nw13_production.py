@@ -269,23 +269,62 @@ def transport_trace(production: Mapping[str, Any], repo_root: Path, *, ticks: Se
     scene = nw13_scene.compile_scene(json.loads(_resolve(repo_root, production["scene"]).read_text(encoding="utf-8")))
     transport = nw13_scene.Transport(scene)
     active = list(ticks if ticks is not None else production.get("fixed_ticks", [0, 96000, 144000, 192000]))
+    script = production.get("transport_script", {})
+    if not isinstance(script, Mapping):
+        raise ProductionError("transport_script must be an object")
+    freeze_at = script.get("freeze_at")
+    resume_at = script.get("resume_at")
+    reverse_at = script.get("reverse_at")
+    freeze_applied = False
+    reverse_applied = False
+    reverse_pending = False
+
+    def step_to(target: int) -> None:
+        while transport.tick < target:
+            transport.step(min(4800, target - transport.tick))
+
     result = []
-    events: list[dict[str, Any]] = []
     cursor = 0
-    for index, tick in enumerate(active):
+    for tick in active:
+        tick = int(tick)
         if tick < transport.tick:
-            transport.reverse()
-        if index == 2:
-            transport.freeze()
-            events.extend(transport.events[-1:])
-            transport.resume()
-            events.extend(transport.events[-1:])
+            transport.seek(tick)
         while transport.tick < tick:
-            events.extend(transport.step(min(4800, tick - transport.tick)))
+            if reverse_pending:
+                # A reverse state is observable at the fixed tick where it was
+                # declared; resume forward before traversing to the next target.
+                transport.reverse()
+                reverse_pending = False
+            if transport.frozen:
+                if not isinstance(resume_at, int) or resume_at > tick:
+                    break
+                # Model frozen wall-clock time without emitting seek history.
+                transport.tick = resume_at
+                transport.resume()
+                continue
+            if isinstance(freeze_at, int) and not freeze_applied and transport.tick < freeze_at <= tick:
+                step_to(freeze_at)
+                transport.freeze()
+                freeze_applied = True
+                continue
+            if isinstance(reverse_at, int) and not reverse_applied and transport.tick < reverse_at < tick:
+                step_to(reverse_at)
+                transport.reverse()
+                reverse_applied = True
+                reverse_pending = True
+                continue
+            step_to(min(tick, transport.tick + 4800))
+        if isinstance(freeze_at, int) and not freeze_applied and transport.tick == freeze_at:
+            transport.freeze()
+            freeze_applied = True
+        if isinstance(reverse_at, int) and not reverse_applied and transport.tick >= reverse_at:
+            transport.reverse()
+            reverse_applied = True
+            reverse_pending = True
         if transport.tick > tick:
             transport.seek(tick)
-        interval_events = events[cursor:]
-        cursor = len(events)
+        interval_events = transport.events[cursor:]
+        cursor = len(transport.events)
         result.append(
             {
                 "tick": tick,

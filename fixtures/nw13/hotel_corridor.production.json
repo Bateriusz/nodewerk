@@ -52,6 +52,11 @@
   },
   "fixed_ticks": [0, 96000, 120000, 144000, 192000, 240000, 264000, 288000],
   "transport_states": ["resume", "freeze", "cut", "reverse", "resume"],
+  "transport_script": {
+    "freeze_at": 120000,
+    "resume_at": 124800,
+    "reverse_at": 240000
+  },
   "capabilities": {
     "d3d_feature_level": "12_0",
     "highest_shader_model": "6_5",

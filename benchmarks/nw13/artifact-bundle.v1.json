@@ -26,28 +26,32 @@
       "d3d12",
       "dxgi"
     ],
-    "sections": [
-      "NWPK",
-      "CODE",
-      "SHDR",
-      "DATA"
-    ],
-    "imports": [
-      "d3d12.dll",
-      "dxgi.dll"
-    ],
-    "distribution_bytes": 262144,
-    "shader_bytes": 4096,
     "budgets": {
       "max_distribution_bytes": 262144,
       "max_memory_bytes": 67108864
     },
+    "fallback_artifact_id": null,
+    "distribution_bytes": null,
+    "shader_bytes": null,
+    "sections": null,
+    "imports": null,
     "smoke": {
-      "executed": true,
-      "status": "pass",
-      "headless": true
+      "executed": false,
+      "status": "unavailable",
+      "headless": null
     },
-    "fallback_artifact_id": null
+    "startup_ms": null,
+    "committed_memory_bytes": null,
+    "vram_bytes": null,
+    "cpu_submit_us": null,
+    "gpu_time_us": null,
+    "image_max_abs_error": null,
+    "image_rmse": null,
+    "executable_sha256": null,
+    "package_sha256": null,
+    "manifest_sha256": null,
+    "dependency_identities": null,
+    "measurement_status": "unavailable"
   },
   "optional": [
     {
@@ -73,31 +77,34 @@
         "d3d12",
         "dxgi"
       ],
-      "sections": [
-        "NWPK",
-        "CODE",
-        "SHDR",
-        "DATA",
-        "OPTN"
-      ],
-      "imports": [
-        "d3d12.dll",
-        "dxgi.dll"
-      ],
-      "distribution_bytes": 270336,
-      "shader_bytes": 6144,
       "budgets": {
         "max_ray_length": 64.0,
         "max_samples": 8,
         "max_bounces": 1,
         "max_blas_bytes": 33554432
       },
+      "fallback_artifact_id": "nw11.fallback.ray.analytic.d3d12.fl12_0.sm6_0.v1",
+      "distribution_bytes": null,
+      "shader_bytes": null,
+      "sections": null,
+      "imports": null,
       "smoke": {
-        "executed": true,
-        "status": "pass",
-        "headless": true
+        "executed": false,
+        "status": "unavailable",
+        "headless": null
       },
-      "fallback_artifact_id": "nw11.fallback.ray.analytic.d3d12.fl12_0.sm6_0.v1"
+      "startup_ms": null,
+      "committed_memory_bytes": null,
+      "vram_bytes": null,
+      "cpu_submit_us": null,
+      "gpu_time_us": null,
+      "image_max_abs_error": null,
+      "image_rmse": null,
+      "executable_sha256": null,
+      "package_sha256": null,
+      "manifest_sha256": null,
+      "dependency_identities": null,
+      "measurement_status": "unavailable"
     }
   ],
   "fallback": {
@@ -123,28 +130,32 @@
       "d3d12",
       "dxgi"
     ],
-    "sections": [
-      "NWPK",
-      "CODE",
-      "SHDR",
-      "DATA"
-    ],
-    "imports": [
-      "d3d12.dll",
-      "dxgi.dll"
-    ],
-    "distribution_bytes": 262144,
-    "shader_bytes": 4096,
     "budgets": {
       "max_distribution_bytes": 262144,
       "max_memory_bytes": 67108864
     },
+    "fallback_artifact_id": null,
+    "distribution_bytes": null,
+    "shader_bytes": null,
+    "sections": null,
+    "imports": null,
     "smoke": {
-      "executed": true,
-      "status": "pass",
-      "headless": true
+      "executed": false,
+      "status": "unavailable",
+      "headless": null
     },
-    "fallback_artifact_id": null
+    "startup_ms": null,
+    "committed_memory_bytes": null,
+    "vram_bytes": null,
+    "cpu_submit_us": null,
+    "gpu_time_us": null,
+    "image_max_abs_error": null,
+    "image_rmse": null,
+    "executable_sha256": null,
+    "package_sha256": null,
+    "manifest_sha256": null,
+    "dependency_identities": null,
+    "measurement_status": "unavailable"
   },
   "diagnostics": [
     {
@@ -156,7 +167,7 @@
       "tier": null
     }
   ],
-  "independent_builds": true,
+  "independent_builds": false,
   "validation": {
     "ok": true,
     "diagnostics": [],
@@ -204,9 +215,9 @@
         "sha256": "sha256:efde0e5366b891ea33ef8d07b2c353ff3c7e4f46a92b14e66b5a5532eac04f3a",
         "semantic_hash": "sha256:v1:33737ce61b7c7ad9fb4b195b4ec9f9b30475bc5e88f5b6e36838d491dbee714c",
         "notes": 30,
-        "nwas_sha256": "sha256:7f5d5ae91977573a31238bf946b7d42f3631d6e143ffa9cdaebabc3bd75fbe07"
+        "nwas_sha256": "sha256:6e229d9bb2e31a44e5e6fed7424f0c623936ffb8c744da7aa47d5b89ef59e3c0"
       }
     }
   },
-  "bundle_sha256": "sha256:a8328a5dd47a9aa62b3d8398cedd5b26511bf8343d396c10f5382fb717442ebf"
+  "bundle_sha256": "sha256:afb7fe641d2370f520ad06c5e709fdc9d1cf897218d9d95f7017ec8bd2be4a29"
 }

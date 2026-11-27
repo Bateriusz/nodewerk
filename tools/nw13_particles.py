@@ -291,14 +291,26 @@ class ParticleHistory:
         return self.particles
 
     def seek(self, step: int) -> tuple[Particle, ...]:
-        if step not in self.checkpoints:
-            candidate = max((value for value in self.checkpoints if value < step), default=0)
-            self.step = candidate
-            self.particles = self.checkpoints[candidate]
-            self.advance_to(step)
-        else:
+        if step < 0:
+            raise ParticleError("particle step must be non-negative")
+        if step in self.checkpoints:
             self.step = step
             self.particles = self.checkpoints[step]
+            return self.particles
+        retained = sorted(self.checkpoints)
+        candidate = next((value for value in reversed(retained) if value < step), None)
+        if candidate is None:
+            # The requested step precedes the retained checkpoint window.  The
+            # history is bounded, so the origin itself may have been evicted;
+            # reconstruct deterministically from step 0 instead of indexing a
+            # missing checkpoint.  This keeps reset/seek/rewind bounded for long
+            # timelines.
+            self.reset()
+            self.advance_to(step)
+            return self.particles
+        self.step = candidate
+        self.particles = self.checkpoints[candidate]
+        self.advance_to(step)
         return self.particles
 
     def rewind(self, steps: int) -> tuple[Particle, ...]:

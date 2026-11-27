@@ -77,26 +77,9 @@ jobs:
           print(json.dumps(manifest['contact_sheet'], sort_keys=True))
           PY
       - name: Export independent common/optional/fallback artifacts and matched ledger
-        run: |
-          PYTHONPATH=tools python - <<'PY'
-          from pathlib import Path
-          import json
-          import nw13_production as production
-          import nw13_evidence as evidence
-          root = Path('.').resolve()
-          document = production.load_production(root, 'fixtures/nw13/hotel_corridor.production.json')
-          bundle = evidence.export_artifacts(
-              document,
-              capabilities=document.get('capabilities', {}),
-              requested_features=document.get('optional_requests', []),
-          )
-          errors = evidence.validate_bundle(bundle)
-          if errors:
-              raise SystemExit(errors)
-          Path('build/nw13-evidence').mkdir(parents=True, exist_ok=True)
-          Path('build/nw13-evidence/export-bundle.v1.json').write_text(json.dumps(bundle, indent=2), encoding='utf-8')
-          print(json.dumps({'common': bundle['common']['artifact_id'], 'optional': [a['artifact_id'] for a in bundle['optional']], 'diagnostics': bundle['diagnostics']}, sort_keys=True))
-          PY
+        run: >-
+          env PYTHONPATH=tools python tools/nw13_artifact_measure.py
+          --output-dir build/nw13-evidence
       - name: Upload NW-13 evidence bundle
         uses: actions/upload-artifact@v4
         with:
@@ -119,12 +102,31 @@ jobs:
           python-version: "3.12"
       - name: Install pytest
         run: python -m pip install pytest
-      - name: Configure host player build
-        run: cmake -S . -B build/host-player -DCMAKE_BUILD_TYPE=Release -DNW_ENFORCE_PINNED_TOOLCHAIN=OFF
-      - name: Build portable PackagePlayer and capability checker
+      - name: Restore pinned portable-tool payload cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\nw01-download-cache
+          key: nw13-pinned-toolchain-${{ runner.os }}-${{ hashFiles('benchmarks/toolchain-manifest.v1.json') }}
+      - name: Export portable-tool payload cache root
+        shell: pwsh
         run: |
-          cmake --build build/host-player --target nw_package_player_host_compile --parallel 2
-          cmake --build build/host-player --target nw06_capability_check --parallel 2
+          $cache = Join-Path $env:RUNNER_TEMP "nw01-download-cache"
+          "NW01_DOWNLOAD_CACHE=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Bootstrap exact NW-01 Windows toolchain
+        shell: pwsh
+        run: >-
+          pwsh tools/nw01/bootstrap-windows.ps1
+          -Ci
+          -ProvenancePath build/nw01-bootstrap.json
+      - name: Export the pinned MSVC/SDK build environment
+        shell: pwsh
+        run: pwsh tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
+      - name: Configure the frozen NW-07 release build
+        run: cmake --preset nw07-release -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+      - name: Build portable PackagePlayer, capability checker and standalone player
+        run: |
+          cmake --build --preset nw07-release --target nw06_capability_check --parallel 2
+          cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
       - name: Run NW-13 contracts on Windows
         run: >-
           python -m pytest -v
@@ -138,30 +140,17 @@ jobs:
           tests/test_nw13_provenance_and_catalog.py
       - name: Preserve the shared NW-11 headless WARP command-path regression
         run: python -m pytest -q tests/test_nw11_advanced_gpu.py -k "warp or common_regression"
-      - name: Validate independent artifact identities and unavailable observations
-        shell: bash
+      - name: Independently export, smoke-test and measure common/optional artifacts
+        shell: pwsh
         run: |
-          PYTHONPATH=tools python - <<'PY'
-          from pathlib import Path
-          import json
-          import nw13_production as production
-          import nw13_evidence as evidence
-          root = Path('.').resolve()
-          document = production.load_production(root, 'fixtures/nw13/hotel_corridor.production.json')
-          first = evidence.export_artifacts(document, capabilities=document.get('capabilities', {}), requested_features=document.get('optional_requests', []))
-          second = evidence.export_artifacts(document, capabilities=document.get('capabilities', {}), requested_features=document.get('optional_requests', []))
-          assert first['common']['profile_id'] == evidence.COMMON_PROFILE_ID
-          assert second['common']['requirements_digest'] == first['common']['requirements_digest']
-          assert evidence.validate_bundle(first) == []
-          ledger = evidence.matched_arms(
-              revision=document['revision'],
-              common={**first['common'], 'startup_ms': None, 'committed_memory_bytes': None, 'vram_bytes': None, 'cpu_submit_us': None, 'gpu_time_us': None, 'image_max_abs_error': None, 'image_rmse': None},
-              optional=first['optional'][0] if first['optional'] else None,
-          )
-          Path('build/nw13-evidence').mkdir(parents=True, exist_ok=True)
-          Path('build/nw13-evidence/matched-arms.v1.json').write_text(json.dumps(ledger, indent=2), encoding='utf-8')
-          print(json.dumps(ledger, indent=2)[:2000])
-          PY
+          $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+          if (-not (Test-Path $template)) { throw "nw_procedural_image_player.exe was not built" }
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          $env:PYTHONPATH = "tools"
+          python tools/nw13_artifact_measure.py `
+            --output-dir build/nw13-evidence `
+            --template $template `
+            --dxc $dxc
       - name: Upload validation bundle
         uses: actions/upload-artifact@v4
         with:
