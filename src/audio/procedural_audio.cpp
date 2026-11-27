@@ -175,95 +175,101 @@ bool RenderV1(const Song& song, PcmFormat format, std::uint64_t first_sample,
     return true;
 }
 
-struct V2Voice {
-    std::uint64_t start = 0;
-    std::uint64_t end = 0;
-    std::uint32_t freq = 0;
-    std::uint32_t velocity_milli = 0;
-    std::uint32_t instrument = 0;
-    std::uint8_t bus = 0;
-    double left_gain = 0.0;
-    double right_gain = 0.0;
-    double filter_state = 0.0;
-};
+}
 
-bool RenderV2(const Song& song, PcmFormat format, std::uint64_t first_sample,
-              std::int16_t* output, std::size_t count) noexcept {
-    std::array<V2Voice, kMaxEvents> voices{};
+double PcmStream::Advance(Voice& voice, const Event& event,
+                          std::uint64_t sample) const noexcept {
+    const auto age = sample - voice.start;
+    const auto& instrument = song_->instruments[event.instrument];
+    const double phase = double(age) * double(event.frequency_millihz) /
+        1000.0 / double(format_.sample_rate);
+    const double raw = Waveform(
+        instrument.waveform, phase - std::floor(phase), instrument.seed, sample);
+    if (age % window_ == 0u) {
+        voice.filter = voice.warming_filter;
+        voice.warming_filter = 0.0;
+    }
+    voice.filter += voice.alpha * (raw - voice.filter);
+    voice.warming_filter += voice.alpha * (raw - voice.warming_filter);
+    return voice.filter;
+}
+
+bool PcmStream::Start(const Song& song, PcmFormat format,
+                      std::uint64_t first_sample) noexcept {
+    song_ = nullptr;
+    if (!ValidateSong(song) || !format.sample_rate || format.sample_rate > kMaxSampleRate ||
+        (format.channels != 1u && format.channels != 2u)) return false;
+    song_ = &song;
+    format_ = format;
+    cursor_ = first_sample;
+    // A one-second warm-up attenuates even the minimum 20 Hz cutoff by
+    // far more than the precision of PCM16. Window boundaries are anchored
+    // to the note start, so changing callback sizes leaves samples identical.
+    window_ = format.sample_rate;
+    if (song.version == 1u) return true;
     for (std::uint32_t j = 0; j < song.count; ++j) {
         const auto& event = song.events[j];
-        auto& voice = voices[j];
+        auto& voice = voices_[j];
+        voice = {};
         if (!TickToSample(event.tick, format.sample_rate, voice.start) ||
-            !TickToSample(event.tick + event.duration, format.sample_rate, voice.end))
+            !TickToSample(event.tick + event.duration, format.sample_rate, voice.end)) {
+            song_ = nullptr;
             return false;
-        voice.freq = event.frequency_millihz;
-        voice.velocity_milli = event.gain;
-        voice.instrument = event.instrument;
-        voice.bus = event.bus;
+        }
         const auto& instrument = song.instruments[event.instrument];
         const double angle = (double(instrument.pan_milli) / 1000.0 + 1.0) * kPi * 0.25;
         voice.left_gain = std::cos(angle);
         voice.right_gain = std::sin(angle);
-    }
-    // Reconstruct the bounded one-pole state for notes that began before this
-    // chunk so arbitrary chunk partitions match one continuous render.
-    for (std::uint32_t j = 0; j < song.count; ++j) {
-        auto& voice = voices[j];
-        if (voice.start >= first_sample || voice.end <= first_sample) continue;
-        const auto& instrument = song.instruments[voice.instrument];
         const double dt = 1.0 / double(format.sample_rate);
         const double rc = 1.0 / (2.0 * kPi * double(instrument.cutoff_hz));
-        const double alpha = dt / (rc + dt);
-        for (std::uint64_t sample = voice.start; sample < first_sample; ++sample) {
-            const double phase =
-                (double(sample - voice.start) * double(voice.freq) / 1000.0 /
-                 double(format.sample_rate));
-            const double wrapped = phase - std::floor(phase);
-            voice.filter_state += alpha *
-                (Waveform(instrument.waveform, wrapped, instrument.seed, sample) -
-                 voice.filter_state);
-        }
+        voice.alpha = dt / (rc + dt);
+        if (voice.start >= first_sample || voice.end <= first_sample) continue;
+        const auto block = (first_sample - voice.start) / window_;
+        const auto begin = voice.start + (block == 0 ? 0 : (block - 1) * window_);
+        for (auto sample = begin; sample < first_sample; ++sample)
+            Advance(voice, event, sample);
+    }
+    return true;
+}
+
+bool PcmStream::Render(std::int16_t* output, std::size_t count) noexcept {
+    if (!song_ || (!output && count) ||
+        count > (std::numeric_limits<std::uint64_t>::max)() - cursor_ ||
+        count > (std::numeric_limits<std::size_t>::max)() / format_.channels) return false;
+    const auto& song = *song_;
+    if (song.version == 1u) {
+        if (!RenderV1(song, format_, cursor_, output, count)) return false;
+        cursor_ += count;
+        return true;
     }
     for (std::size_t i = 0; i < count; ++i) {
-        const std::uint64_t sample = first_sample + i;
+        const std::uint64_t sample = cursor_ + i;
         double left = 0.0;
         double right = 0.0;
         for (std::uint32_t j = 0; j < song.count; ++j) {
-            auto& voice = voices[j];
+            auto& voice = voices_[j];
             if (sample < voice.start || sample >= voice.end) continue;
-            const auto& instrument = song.instruments[voice.instrument];
-            const std::uint64_t age = sample - voice.start;
-            const double phase =
-                (double(age) * double(voice.freq) / 1000.0 /
-                 double(format.sample_rate));
-            const double wrapped = phase - std::floor(phase);
-            const double raw =
-                Waveform(instrument.waveform, wrapped, instrument.seed, sample);
-            const double dt = 1.0 / double(format.sample_rate);
-            const double rc = 1.0 / (2.0 * kPi * double(instrument.cutoff_hz));
-            const double alpha = dt / (rc + dt);
-            voice.filter_state += alpha * (raw - voice.filter_state);
-            if (!std::isfinite(voice.filter_state) ||
-                std::fabs(voice.filter_state) > 1.0e6)
-                return false;
+            const auto& event = song.events[j];
+            const auto& instrument = song.instruments[event.instrument];
+            const double state = Advance(voice, event, sample);
             const double envelope = EnvelopeLevel(
-                instrument, age, voice.end - voice.start, format.sample_rate);
-            const double bus = BusGain(song, voice.bus, sample, format.sample_rate);
-            const double amplitude = voice.filter_state * envelope *
-                (double(voice.velocity_milli) / 1000.0) *
+                instrument, sample - voice.start, voice.end - voice.start, format_.sample_rate);
+            const double bus = BusGain(song, event.bus, sample, format_.sample_rate);
+            const double amplitude = state * envelope *
+                (double(event.gain) / 1000.0) *
                 (double(instrument.gain_milli) / 1000.0) * bus;
             left += amplitude * voice.left_gain;
             right += amplitude * voice.right_gain;
         }
-        if (format.channels == 2u) {
+        if (format_.channels == 2u) {
             output[2u * i] = ClampPcm(left * 32767.0);
             output[2u * i + 1u] = ClampPcm(right * 32767.0);
         } else {
             output[i] = ClampPcm((left + right) * 0.5 * 32767.0);
         }
     }
+    cursor_ += count;
     return true;
-}
 }
 
 bool SampleToTick(std::uint64_t sample, std::uint32_t rate,
@@ -316,7 +322,7 @@ bool ValidateSong(const Song& song) noexcept {
     }
     for (std::uint32_t i = 0; i < song.automation_count; ++i) {
         const auto& track = song.automation[i];
-        if (track.bus > 1) return false;
+        if (track.bus > 1 || track.count > kMaxAutomationKeys) return false;
         std::uint64_t key_tick = 0;
         for (std::uint32_t k = 0; k < track.count; ++k) {
             if (track.keys[k].tick < key_tick ||
@@ -382,7 +388,7 @@ bool DecodeSong(const std::uint8_t* bytes, std::size_t size, Song& song) noexcep
     for (std::uint32_t i = 0; i < candidate.count; ++i) {
         if (offset + 24u > size) return false;
         const auto* p = bytes + offset;
-        if (p[23] != 0) return false;
+        if (p[23] != 0 || Read32(p + 16) > 8000u) return false;
         candidate.events[i] = {Read64(p), Read32(p + 8), Read32(p + 12),
                                static_cast<std::uint16_t>(Read32(p + 16)),
                                Read16(p + 20), p[22]};
@@ -413,16 +419,7 @@ bool DecodeSong(const std::uint8_t* bytes, std::size_t size, Song& song) noexcep
 }
 bool RenderPcm(const Song& song, PcmFormat format, std::uint64_t first_sample,
                std::int16_t* output, std::size_t count) noexcept {
-    if (!ValidateSong(song) || !format.sample_rate ||
-        format.sample_rate > kMaxSampleRate || (!output && count) ||
-        (format.channels != 1u && format.channels != 2u) ||
-        count > (std::numeric_limits<std::uint64_t>::max)() - first_sample ||
-        (format.channels == 2u &&
-         count > (std::numeric_limits<std::size_t>::max)() / 2u))
-        return false;
-    if (song.version == 1u) {
-        return RenderV1(song, format, first_sample, output, count);
-    }
-    return RenderV2(song, format, first_sample, output, count);
+    PcmStream stream;
+    return stream.Start(song, format, first_sample) && stream.Render(output, count);
 }
 }

@@ -55,7 +55,7 @@ def test_production_validation_and_evidence_manifest(tmp_path: Path) -> None:
     document = production.load_production(REPO_ROOT, PRODUCTION)
     validation = production.validate_production(REPO_ROOT, document)
     assert validation["ok"], validation["diagnostics"]
-    assert validation["sources"]["scene"]["objects"] == 12
+    assert validation["sources"]["scene"]["objects"] == 17
     assert validation["sources"]["song"]["notes"] == 30
     assert validation["sources"]["geometry"]["stats"]["evaluation_steps"] > 0
     assert validation["sources"]["geometry"]["stats"]["memory_bytes"] > 0
@@ -66,7 +66,7 @@ def test_production_validation_and_evidence_manifest(tmp_path: Path) -> None:
         REPO_ROOT,
         document,
         output_dir=tmp_path / "evidence",
-        ticks=[0, 96000, 144000, 192000, 288000],
+        ticks=[0, 96000, 148800, 192000, 288000],
     )
     assert len(manifest["frames"]) == 5
     assert manifest["contact_sheet"]["file"].endswith(".ppm")
@@ -109,18 +109,11 @@ def test_committed_fixed_tick_frames_and_contact_sheet_are_retained() -> None:
         assert sidecar.read_text(encoding="utf-8").strip() == hashlib.sha256((evidence_dir / name).read_bytes()).hexdigest()
 
 
-def test_common_and_optional_reference_paths_match_declared_tolerance() -> None:
-    document = json.loads((REPO_ROOT / "fixtures" / "nw13" / "geometry_room.json").read_text(encoding="utf-8"))
-    scene = scene_module.compile_scene(json.loads((REPO_ROOT / "fixtures" / "nw13" / "hotel_corridor.scene.json").read_text(encoding="utf-8")))
-    common = render.render_backend(scene, document, "common", width=24, height=14, max_steps=72, shadows=True, reflection_bounces=1)
-    dxr = render.render_backend(scene, document, "dxr", width=24, height=14, max_steps=72, shadows=True, reflection_bounces=1)
-    assert common.backend == "common"
-    assert dxr.backend == "dxr"
-    first, _ = common.render(96000)
-    second, _ = dxr.render(96000)
-    difference = render.image_difference(first, second)
-    assert difference["max_abs_channel_error"] <= 1e-9
-    assert difference["rmse"] <= 1e-9
+def test_reference_renderer_does_not_claim_optional_execution() -> None:
+    document = json.loads((REPO_ROOT / "fixtures/nw13/geometry_room.json").read_text())
+    scene = scene_module.compile_scene(json.loads((REPO_ROOT / "fixtures/nw13/hotel_corridor.scene.json").read_text()))
+    with pytest.raises(render.RenderError, match="native"):
+        render.render_backend(scene, document, "dxr", width=24, height=14)
 
 
 def test_moving_occluder_changes_the_expected_shadow_region() -> None:
@@ -180,7 +173,7 @@ def test_off_camera_reflected_object_material_changes_nearest_hit_response() -> 
     lights = [{"id": "l", "type": "point", "position": [0, 3, 3], "color": [1, 1, 1], "intensity": 20.0, "range": 30.0}]
     object_document = [
         {"id": "mirror", "geometry": "mirror", "material": "mirror", "parent": None, "transform": {"position": [0, 0, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1]}},
-        {"id": "reflected_object", "geometry": "reflected", "material": "red", "parent": None, "transform": {"position": [1, 0.5, 6], "rotation": [0, 0, 0], "scale": [1, 1, 1]}},
+        {"id": "reflected_object", "geometry": "reflected", "material": "red", "parent": None, "transform": {"position": [1, 0.5, 6], "rotation": [0, 0, 0], "scale": [1.5, 0.8, 1]}},
     ]
     shot = {"id": "front", "start_tick": 0, "end_tick": 192000, "position": [0, 1, 4], "target": [0, 0, 0], "up": [0, 1, 0], "projection": {"fov_degrees": 70, "near": 0.01, "far": 50, "aspect": 1.0}}
     red_scene = scene_module.compile_scene(_scene_document(object_document, materials, lights, shot))
@@ -212,15 +205,20 @@ def test_renderer_bound_validation() -> None:
 
 def test_production_transport_trace_reports_cut_and_one_shot_cues() -> None:
     document = production.load_production(REPO_ROOT, PRODUCTION)
-    trace = production.transport_trace(document, REPO_ROOT, ticks=[0, 96000, 144000, 192000, 288000])
-    assert [entry["tick"] for entry in trace] == [0, 96000, 144000, 192000, 288000]
+    trace = production.transport_trace(document, REPO_ROOT, ticks=[0, 96000, 148800, 192000, 288000])
+    assert [entry["tick"] for entry in trace] == [0, 96000, 148800, 192000, 288000]
     assert any(event.get("cue_id") == "door_hinge" for event in trace[1]["events"])
     assert any(event.get("cue_id") == "flash" for event in trace[2]["events"])
     assert any(event.get("kind") == "cut" and event.get("cut_tick") == 192000 for event in trace[3]["events"])
     assert sum(1 for entry in trace for event in entry["events"] if event.get("cue_id") == "door_hinge") == 1
 
     declared = production.transport_trace(document, REPO_ROOT)
-    assert any(entry["direction"] == -1 for entry in declared)
+    states = {entry["tick"]: entry for entry in declared}
+    assert states[120000]["action_tick"] == states[123200]["action_tick"] == 120000
+    assert states[252000]["action_tick"] < states[240000]["action_tick"]
+    assert states[288000]["action_tick"] > states[264000]["action_tick"]
+    assert states[148800]["flash_active"]
+    assert not states[144000]["flash_active"]
     reverse_entry = next(entry for entry in declared if entry["direction"] == -1)
     assert reverse_entry["tick"] == 240000
     assert any(event.get("kind") == "reverse" and event.get("direction") == -1 for event in reverse_entry["events"])
@@ -236,3 +234,98 @@ def test_production_transport_trace_reports_cut_and_one_shot_cues() -> None:
     assert "reverse" in retained_events
     assert any(entry["direction"] == -1 for entry in retained["trace"])
 
+
+
+def test_scaled_nearest_hit_and_shadow_limit_are_world_distances() -> None:
+    sphere = {"id": "ball", "version": "1.0.0", "operator": "nw.geom.sphere", "parameters": {"radius": 1}}
+    made = {"schema_version": 1, "root": sphere}
+    material = {"id": "white", "base_color": [1, 1, 1, 1], "roughness": 1,
+                "metallic": 0, "specular": 0, "emission": [0, 0, 0]}
+    shot = {"id": "front", "start_tick": 0, "end_tick": 192000, "position": [0, 0, 5],
+            "target": [0, 0, 0], "up": [0, 1, 0],
+            "projection": {"fov_degrees": 90, "near": 0.05, "far": 30, "aspect": 1}}
+    objects = [
+        {"id": "large", "geometry": "ball", "material": "white",
+         "transform": {"position": [0, 0, 0], "scale": [2, 1, 2]}},
+        {"id": "farther", "geometry": "ball", "material": "white",
+         "transform": {"position": [0, 0, -3], "scale": [0.5, 0.5, 0.5]}},
+    ]
+    scene = scene_module.compile_scene(_scene_document(objects, [material], [], shot))
+    renderer = render.Renderer(scene, made, epsilon=1e-4)
+    hit = renderer.trace((0, 0, 5), (0, 0, -1))
+    assert hit is not None and hit.object_id == "large"
+    assert hit.distance == pytest.approx(3, abs=0.0003)
+    assert hit.position == pytest.approx((0, 0, 2), abs=0.0003)
+    assert renderer.trace((0, 0, 5), (0, 0, -1), max_distance=2.9) is None
+    assert renderer._shadowed((0, 0, 5), (0, 0, 1), "")
+    assert not renderer._shadowed((0, 0, 5), (0, 0, 2.2), "")
+
+
+def test_off_axis_particle_uses_the_scene_view_depth() -> None:
+    wall = {"id": "wall", "version": "1.0.0", "operator": "nw.geom.box",
+            "parameters": {"half_extents": [4, 4, 0.1]}}
+    material = {"id": "surface", "base_color": [1, 1, 1, 1], "roughness": 1,
+                "metallic": 0, "specular": 0, "emission": [0, 0, 0]}
+    obj = {"id": "wall", "geometry": "wall", "material": "surface",
+           "transform": {"position": [0, 0, -2.1]}}
+    shot = {"id": "view", "start_tick": 0, "end_tick": 192000, "position": [0, 0, 0],
+            "target": [0, 0, -1], "up": [0, 1, 0],
+            "projection": {"fov_degrees": 90, "near": 0.05, "far": 30, "aspect": 1}}
+    scene = scene_module.compile_scene(_scene_document([obj], [material], [], shot))
+    renderer = render.Renderer(scene, {"schema_version": 1, "root": wall}, width=4, height=4)
+    image, depth = renderer.render(0)
+    assert depth[2 * 4 + 3] == pytest.approx(2, abs=0.005)
+    emitter = {"id": "dust", "seed": 1, "count": 1, "origin": [1.65, -0.55, -2.2],
+               "size_start": 0.16, "speed_min": 0, "speed_max": 0}
+    assert renderer.render_particles(image, depth, emitter, 0) == image
+    emitter["origin"] = [1.35, -0.45, -1.8]
+    assert renderer.render_particles(image, depth, emitter, 0) != image
+
+
+def test_film_import_and_typed_studio_edit_reach_preview_and_offline_lowering(tmp_path) -> None:
+    import nw03_compiler as compiler
+    import nw08_editor
+    import nw08_preview
+
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    graph = tmp_path / "film.nwgraph"
+    production.import_graph(REPO_ROOT, document, graph)
+    assert graph.read_bytes() == (REPO_ROOT / document["graph"]).read_bytes()
+    author = nw08_editor.GraphEditorSession(compiler.load_graph(graph))
+    viewer = nw08_preview.ReferencePreviewBackend()
+
+    def preview():
+        return viewer.render(author.document, 0, width=32, height=18)
+
+    def lower():
+        shaders, diagnostics = compiler.lower_to_fused_hlsl(author.document, image_width=48, image_height=27)
+        assert not diagnostics
+        assert len(shaders) == 1 and "mirror_panel" in shaders[0].root_node_ids
+        return shaders[0]
+
+    initial, first_shader = preview(), lower()
+    result = author.set_parameter("mirror_panel", "half_extents", [0.15, 0.15, 0.04])
+    assert result.valid
+    edited, edited_shader = preview(), lower()
+    assert initial.has_image and edited.image_data != initial.image_data
+    assert first_shader.specialization_key != edited_shader.specialization_key
+    assert "localInverse" in edited_shader.hlsl
+
+
+def test_transport_flash_drives_reference_light_and_exported_transient() -> None:
+    import nw13_audio
+
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    trace = production.transport_trace(document, REPO_ROOT, ticks=[148800, 149600])
+    assert trace[0]["action_tick"] == 144000
+    assert sum(event.get("cue_id") == "flash" for frame in trace for event in frame["events"]) == 1
+    decoded = nw13_audio.decode_nwas(production.playback_song(REPO_ROOT, document))
+    flash = next(note for note in decoded["notes"] if note["frequency_millihz"] == 1760000)
+    assert flash["tick"] == 148800
+
+    geometry_doc = json.loads((REPO_ROOT / document["geometry"]).read_text())
+    scene = scene_module.compile_scene(json.loads((REPO_ROOT / document["scene"]).read_text()))
+    renderer = render.Renderer(scene, geometry_doc, width=24, height=14)
+    lit, _ = renderer.render(148800, action_tick=144000)
+    dark, _ = renderer.render(148800, action_tick=144000, light_gain={"flash_light": 0})
+    assert render.image_difference(lit, dark)["max_abs_channel_error"] > 0.02

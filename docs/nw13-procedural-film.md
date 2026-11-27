@@ -34,12 +34,12 @@ queried capabilities; representative device names are provenance metadata.
 ## 2. Pinned operator catalog
 
 [`references/operator_catalog/`](../references/operator_catalog/) contains the
-complete declaration export and regenerated inventories for the separately
-scoped Werkkzeug3 and Werkkzeug4 engines. Regeneration is deterministic:
+499 Werkkzeug3 registrations and 370 Werkkzeug4 declarations from PR #48.
+The regeneration commands check the original Git blob identities and Wz4 source path set.
 
 ```sh
-python tools/operator_catalog.py        # verify
-python tools/operator_catalog.py --write  # regenerate inventories
+python tools/operator_catalog.py check --reference-root /path/to/pinned/fr_public
+python tools/operator_catalog.py generate --reference-root /path/to/pinned/fr_public
 ```
 
 The regeneration check preserves declaration identity, engine/variant, types,
@@ -93,7 +93,7 @@ the common profile:
 | profile | `nw.common.d3d12.fl12_0.sm6_0.v1` |
 | requirements digest | `sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a` |
 | API / feature level / shader model | D3D12 / 12_0 / 6_0 |
-| fallback | the common artifact itself |
+| fallback | a separately built copy of the common film |
 
 The pipeline tests cover canonical semantic serialization, versioning,
 semantic hashing, profile selection, reachability, frequency/residency
@@ -123,19 +123,21 @@ geometry to stable object identities. `tools/nw13_scene.py` provides:
 * fixed-tick transport with freeze, reverse, resume, cut notification and a
   declared one-shot cue policy that never duplicates a cue in one generation.
 
-## 6. Bounded common and DXR reference paths
+## 6. Common rendering and inline ray queries
 
-`tools/nw13_render.py` renders shadows and one-bounce reflections from the
-current scene using the same geometry/scene documents. The common path is a
-bounded CPU/analytic reference; the optional DXR path is capability-qualified
-by `tools/nw13_evidence.py`. Tests verify:
+The film graph connects a named geometry library to `nw.shader.film`,
+`nw.render.film` and `nw.render.present`. The library contains the source
+solids and their dependencies. The shared optimizer and offline compiler
+specialize the film pass from those nodes. Studio can preview the graph through
+the existing Windows package host or the CPU reference renderer.
 
-* moving an occluder changes the expected shadow region;
-* changing an off-camera reflected object's material changes the mirror
-  reflection response;
-* common and optional reference arms agree within declared image tolerance;
-* ray length, samples, bounces and acceleration-structure budgets are bounded;
-* startup/memory estimates are reported.
+The SM 6.0 common compute pass traces bounded solids against the current
+transforms. The separately linked SM 6.5 film uses inline ray queries to find
+candidate solids from a swept-bounds acceleration structure. Both paths
+evaluate detailed intersections and material response at the current tick.
+The optional player builds one BLAS and one TLAS at startup and performs no
+per-frame acceleration builds. Its runtime checks DXR 1.1 and SM 6.5 before
+allocating the acceleration resources.
 
 Surface response parameters are effective base color, roughness,
 metallic/specular response, emission, local light falloff/range, reflection
@@ -156,23 +158,23 @@ The reference shading contract is:
 
 ## 7. Particles, history and composition
 
-[`schemas/nw13-particles.v1.json`](../schemas/nw13-particles.v1.json) and
-`tools/nw13_particles.py` implement seeded spatial particles with animated
-emitters, world-space motion, lifetime, size/material controls and
-scene-camera depth occlusion. History reconstructs across reset, seek and
-rewind under a fixed 120 Hz cadence and bounded checkpoint memory.
+[`schemas/nw13-particles.v1.json`](../schemas/nw13-particles.v1.json)
+supports seeded emitters with animated origins and world-space motion. The
+film pass reconstructs its bounded particle cycle from the 120 Hz action
+tick. A particle samples its emitter at the spawn tick and compares its
+positive linear view-space depth with the scene depth at the covered pixel.
+The film composites straight-alpha particles before spatial bloom and
+tonemapping.
 
-Composite images use straight alpha by default and typed depth/camera
-metadata. Feedback consumes the current image plus prior scheduled state,
-rejects occluded history, and clears unrelated history at cuts and time
-discontinuities. Bloom and tonemapping are applied after scene/effect
-composition.
+The existing Python reference helpers also cover checkpointed History and
+feedback from the current image and previous state. Connecting those feedback
+operators to the shared GPU History schedule for this film remains open.
 
 ## 8. Versioned audio
 
 The public payload is
 [`schemas/nw13-instrument-sequence.v2.json`](../schemas/nw13-instrument-sequence.v2.json).
-`tools/nw13_audio.py` compiles it to the preserved NWAS v1 container for the
+`tools/nw13_audio.py` compiles it to NWAS v2 for the
 shared procedural-audio/player path:
 
 * selectable sine, square, saw, triangle and seeded noise waveforms;
@@ -182,7 +184,10 @@ shared procedural-audio/player path:
 * separate music/effect tracks and bus automation;
 * distinct lead, bass, percussion and event effects.
 
-NWAS v1 decoding and the 48 kHz authoritative sample clock are unchanged.
+The player retains NWAS v1 decoding and a 48 kHz authoritative sample clock.
+NWAS v2 uses stereo PCM in offline WAV and WASAPI playback. Sequential
+refills carry voice and filter state. Seeking reconstructs the active filter
+from at most two one-second windows per active voice.
 Diagnostics cover event, voice, filter-state and memory overflow. Offline
 samples are identical across chunk partitions, audiovisual cues align within
 one offline output frame, and transport cues are not duplicated.
@@ -247,7 +252,18 @@ clocks.
 
 The bounded Work Graphs experiment is recorded in
 [`benchmarks/nw13/work-graph-experiment.v1.json`](../benchmarks/nw13/work-graph-experiment.v1.json).
-Without a matched measurement it is `defer`, not an inferred pass.
+The conventional and Work Graphs arms route 1,024 deterministic candidates
+through the same visibility and shading functions. Each compares all output
+slots with a CPU oracle. The predeclared criterion requires a median GPU
+dispatch time below 95% of the conventional arm, exact output and at most
+32 MiB of backing memory. The Windows runner logs hosted WARP baseline
+execution and leaves Work Graphs adoption pending until a matched device run.
+
+```powershell
+cmake -S src/nw13 -B build/nw13-work-graph -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build/nw13-work-graph --target nw13_work_graph
+python tools/nw13_work_graph.py build/nw13-work-graph/nw13_work_graph.exe --output build/nw13-evidence/work-graph-matched.json
+```
 
 ## 11. Artifacts, reproducibility and physical qualification
 
@@ -272,7 +288,10 @@ shader bytes, startup, committed memory/VRAM, CPU submission, GPU time and
 image error are recorded; unavailable observations stay explicit `null` with
 their names, never zero. `tools/nw13_artifact_measure.py` refuses to claim an
 unexecuted smoke, and independent rebuild/provenance and validation-bundle
-integrity are checked in hosted CI.
+integrity are checked in hosted CI. The artifact runner resolves the measured
+commit from the clean checkout and retains the historical implementation base
+as a separate field. It compares independently linked outputs and their
+manifests across isolated CMake and DXC cache roots.
 
 Physical GPU/audio qualification continues to use
 [ADR 0009](architecture/0009-validation-and-evidence-lifecycle.md), the
@@ -287,9 +306,10 @@ recorded only as observed.
 
 | Observation | Status |
 |---|---|
-| catalog regeneration, schemas, graph/scene/particle/audio contracts | implemented and exercised by hosted tests |
+| catalog regeneration, schemas, graph/scene/particle/audio contracts | portable verification |
 | fixed-tick images, region checks, contact sheet | generated and retained; CPU reference evidence |
 | independent common/fallback export identities | hosted CI contract |
-| DXR/mesh/Work-Graph/SER/OMM/Micro-Mesh physical measurements | pending/unavailable as recorded per item |
+| DXR and Work Graphs native experiments | executables and runners implemented, device measurements pending |
+| Mesh shader, SER, OMM and Micro-Mesh | adoption status recorded per technique and workload |
 | real display/audio alignment | pending; use the NW-12 physical validation path |
 

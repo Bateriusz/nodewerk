@@ -183,12 +183,15 @@ void WasapiOutput::run() noexcept {
         }
         CoTaskMemFree(id);
     }
+    const auto pcm = SongPcmFormat(song_);
+    PcmStream stream;
+    if (!stream.Start(song_, pcm, origin_)) { fail(); return; }
     WAVEFORMATEX format{};
     format.wFormatTag = WAVE_FORMAT_PCM;
-    format.nChannels = 1;
-    format.nSamplesPerSec = player::kTicksPerSecond;
+    format.nChannels = static_cast<WORD>(pcm.channels);
+    format.nSamplesPerSec = pcm.sample_rate;
     format.wBitsPerSample = 16;
-    format.nBlockAlign = 2;
+    format.nBlockAlign = static_cast<WORD>(pcm.channels * sizeof(std::int16_t));
     format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
     // Shared mode allows endpoint conversion. The actual clock units/second
     // come from IAudioClock, not the requested stream sample rate.
@@ -215,8 +218,7 @@ void WasapiOutput::run() noexcept {
         if (FAILED(render->GetBuffer(frames, &data))) return false;
         std::uint64_t before = 0, after = 0;
         const bool before_available = CpuTime(GetCurrentThread(), before);
-        const bool ok = RenderPcm(song_, {}, cursor,
-                                  reinterpret_cast<std::int16_t*>(data), frames);
+        const bool ok = stream.Render(reinterpret_cast<std::int16_t*>(data), frames);
         const bool after_available = CpuTime(GetCurrentThread(), after);
         if (before_available && after_available && after >= before)
             cpu_.fetch_add(after - before);
@@ -277,7 +279,7 @@ void WasapiOutput::run() noexcept {
             progress.last = tick;
             progress.submitted_until = tick;
             tick_.store(tick);
-            if (FAILED(client->Reset()) ||
+            if (!stream.Start(song_, pcm, cursor) || FAILED(client->Reset()) ||
                 FAILED(clock->GetPosition(&base_position, nullptr)) ||
                 !fill(capacity) || FAILED(client->Start())) { fail(); break; }
         } else if (!fill(capacity - padding)) { fail(); break; }

@@ -133,11 +133,20 @@ class Renderer:
             raise RenderError("ray samples must be in 1..8")
         if not 0 <= reflection_bounces <= 1:
             raise RenderError("reflection bounces must be 0 or 1")
-        if backend not in {"common", "dxr"}:
-            raise RenderError("render backend must be 'common' or 'dxr'")
+        if backend != "common":
+            raise RenderError("optional film rendering requires the native GPU artifact")
         self.scene = scene
         self.geometry_index: dict[str, Mapping[str, Any]] = {}
+        geometry.prepare(geometry_document)
         _walk_nodes(geometry_document["root"], self.geometry_index)
+        self.geometry_bounds = {
+            identifier: geometry.bounds_node(node)
+            for identifier, node in self.geometry_index.items()
+        }
+        scene_module._check_scene_bounds(scene, {
+            identifier: (bounds.minimum, bounds.maximum)
+            for identifier, bounds in self.geometry_bounds.items()
+        })
         self.width = width
         self.height = height
         self.max_steps = max_steps
@@ -151,6 +160,7 @@ class Renderer:
         self.objects: list[RenderObject] = []
         self.action_tick = 0
         self.objects_by_tick: dict[int, list[RenderObject]] = {}
+        self.light_gain: Mapping[str, float] = {}
 
     def _objects_at(self, tick: int) -> list[RenderObject]:
         if tick in self.objects_by_tick:
@@ -162,7 +172,7 @@ class Renderer:
                 raise RenderError(f"scene object '{obj.id}' references unknown geometry '{obj.geometry}'")
             world = scene_module.world_matrix(self.scene, obj.id, tick)
             inverse = invert_matrix(world)
-            local_bounds = geometry.bounds_node(node)
+            local_bounds = self.geometry_bounds[obj.geometry]
             local_center = local_bounds.center
             center = scene_module.transform_point(world, local_center)
             # Use the world-space distance from the transformed bound corners.
@@ -172,7 +182,7 @@ class Renderer:
                     for z in (local_bounds.minimum[2], local_bounds.maximum[2]):
                         radius = max(radius, _length(_sub(scene_module.transform_point(world, (x, y, z)), center)))
             objects.append(RenderObject(obj.id, node, world, inverse, center, radius, obj.material, local_bounds))
-        self.objects_by_tick[tick] = objects
+        self.objects_by_tick = {tick: objects}
         return objects
 
     def _local_ray(self, obj: RenderObject, origin: Sequence[float], direction: Sequence[float]) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
@@ -201,7 +211,7 @@ class Renderer:
             value = geometry.evaluate_node(node, point)
             if abs(value) <= self.epsilon:
                 return distance, point
-            step = max(value * 0.8, self.epsilon)
+            step = max(abs(value) * 0.8, self.epsilon)
             distance += step
             if distance > max_distance:
                 return None
@@ -227,10 +237,9 @@ class Renderer:
             local_origin, local_direction = self._local_ray(obj, origin, ray)
             if local_direction == (0.0, 0.0, 0.0):
                 continue
-            # The local ray is normalized, so world distance needs the local
-            # direction's inverse length.
+            # Normalizing the transformed ray makes its parameter local distance.
             raw_local = transform_direction(obj.inverse, ray)
-            scale = 1.0 / max(1.0e-9, _length(raw_local))
+            scale = _length(raw_local)
             local_limit = min(limit * scale, sphere[1] * scale + 1.0)
             march = self._march_node(obj.node, local_origin, local_direction, local_limit)
             if march is None:
@@ -287,6 +296,9 @@ class Renderer:
         normal = hit.normal
         color = [0.025 + material.base_color[0] * 0.04, 0.025 + material.base_color[1] * 0.04, 0.025 + material.base_color[2] * 0.04]
         for light in self.scene.lights.values():
+            intensity = light.intensity * self.light_gain.get(light.id, 1.0)
+            if intensity == 0.0:
+                continue
             to_light = _sub(light.position, hit.position)
             distance = _length(to_light)
             if distance >= light.range:
@@ -296,7 +308,7 @@ class Renderer:
             if ndotl <= 0.0:
                 continue
             falloff = (1.0 - distance / light.range) ** 2
-            attenuation = falloff * light.intensity / (1.0 + distance * distance)
+            attenuation = falloff * intensity / (1.0 + distance * distance)
             shadow = 0.0 if self._shadowed(hit.position, light.position, hit.object_id) else 1.0
             for channel in range(3):
                 color[channel] += material.base_color[channel] * light.color[channel] * ndotl * attenuation * shadow
@@ -334,8 +346,10 @@ class Renderer:
         *,
         action_tick: int | None = None,
         camera_tick: float | None = None,
+        light_gain: Mapping[str, float] | None = None,
     ) -> tuple[list[float], list[float]]:
         self.action_tick = tick if action_tick is None else action_tick
+        self.light_gain = light_gain or {}
         camera = scene_module.camera_state(self.scene, tick if camera_tick is None else camera_tick, action_tick=self.action_tick)
         forward = _normalize(camera.forward)
         right = _normalize(_cross(forward, camera.up))
@@ -353,21 +367,25 @@ class Renderer:
                     forward[1] + right[1] * nx + up[1] * ny,
                     forward[2] + right[2] * nx + up[2] * ny,
                 ))
-                hit = self.trace(camera.position, direction)
+                view_projection = _dot(direction, forward)
+                near_distance = camera.near / view_projection
+                far_distance = min(camera.far / view_projection, self.max_distance)
+                start = tuple(camera.position[i] + direction[i] * near_distance for i in range(3))
+                hit = self.trace(start, direction, max_distance=far_distance - near_distance)
                 pixel = (y * width + x) * 4
                 if hit is None:
                     color = self._miss(direction)
                 else:
                     color = self.shade(hit, direction)
-                    depth[y * width + x] = hit.distance
+                    depth[y * width + x] = (hit.distance + near_distance) * view_projection
                 image[pixel] = color[0]
                 image[pixel + 1] = color[1]
                 image[pixel + 2] = color[2]
                 image[pixel + 3] = 1.0
         return image, depth
 
-    def depth_camera(self, tick: int) -> particles.CameraDepth:
-        camera = scene_module.camera_state(self.scene, tick, action_tick=tick)
+    def depth_camera(self, tick: int, *, action_tick: int | None = None) -> particles.CameraDepth:
+        camera = scene_module.camera_state(self.scene, tick, action_tick=action_tick)
         return particles.CameraDepth(
             position=camera.position,
             forward=camera.forward,
@@ -386,13 +404,17 @@ class Renderer:
         depth: Sequence[float],
         emitter_document: Mapping[str, Any],
         tick: int,
+        *,
+        action_tick: int | None = None,
+        film_cycle: bool = False,
     ) -> list[float]:
         emitter = particles.compile_emitter(emitter_document)
-        history = particles.ParticleHistory(emitter, max_steps=240)
-        step = max(0, tick // particles.TICKS_PER_STEP)
-        state = history.advance_to(step)
-        camera = self.depth_camera(tick)
-        mask = particles.occlusion_mask(state, camera, list(depth))
+        step = max(0, (tick if action_tick is None else action_tick) // particles.TICKS_PER_STEP)
+        state = (particles.film_particles(emitter, step) if film_cycle else
+                 particles.ParticleHistory(emitter, max_steps=240).advance_to(step))
+        camera = self.depth_camera(tick, action_tick=action_tick)
+        mask = [False] * len(state) if film_cycle else particles.occlusion_mask(state, camera, list(depth))
+        tint = self.scene.materials[emitter.material].base_color if film_cycle else (0.65, 0.55, 0.45)
         rgba = [0.0] * len(image)
         for particle, occluded in zip(state, mask):
             if occluded:
@@ -404,15 +426,16 @@ class Renderer:
             radius = max(0.6, particle.size * self.width / max(0.1, z))
             for y in range(max(0, int(py - radius)), min(self.height, int(py + radius) + 1)):
                 for x in range(max(0, int(px - radius)), min(self.width, int(px + radius) + 1)):
+                    if z > depth[y * self.width + x] + emitter.depth_bias:
+                        continue
                     dx = (x + 0.5 - px) / radius
                     dy = (y + 0.5 - py) / radius
                     strength = max(0.0, 1.0 - dx * dx - dy * dy)
                     if strength <= 0.0:
                         continue
                     index = (y * self.width + x) * 4
-                    rgba[index] = max(rgba[index], 0.65 * strength)
-                    rgba[index + 1] = max(rgba[index + 1], 0.55 * strength)
-                    rgba[index + 2] = max(rgba[index + 2], 0.45 * strength)
+                    for channel in range(3):
+                        rgba[index + channel] = max(rgba[index + channel], tint[channel] * (1.0 if film_cycle else strength))
                     rgba[index + 3] = max(rgba[index + 3], min(1.0, strength * 0.8))
         return particles.composite(image, rgba, width=self.width, height=self.height)
 

@@ -22,9 +22,9 @@ COMMON_REQUIREMENTS_DIGEST = nwp.COMMON_REQUIREMENTS_DIGEST
 MESH_PROFILE_ID = "nw.optional.d3d12.mesh_shaders.ms6_5.v1"
 MESH_REQUIREMENTS_DIGEST = "sha256:v1:a522ce6f0f5163ecbcf6045ab8c52fe72ee9855c902db40b2094ffc530bc4d62"
 MESH_FALLBACK_ID = "nw11.fallback.mesh.indexed.d3d12.fl12_0.sm6_0.v1"
-RAY_PROFILE_ID = "nw.optional.d3d12.ray_query.ps6_5.v1"
-RAY_REQUIREMENTS_DIGEST = "sha256:v1:7f18259d05889226ad52e72c36dda206a1ba58bac205417aa15ce665e78602f3"
-RAY_FALLBACK_ID = "nw11.fallback.ray.analytic.d3d12.fl12_0.sm6_0.v1"
+RAY_PROFILE_ID = "nw.optional.d3d12.nw13.inline_ray.cs6_5.v1"
+RAY_REQUIREMENTS_DIGEST = "sha256:v1:" + hashlib.sha256(b"NW-13 inline ray v1: FL12.0, SM6.5, DXR1.1, swept procedural AABB").hexdigest()
+RAY_FALLBACK_ID = "nw13.common.fallback"
 
 WORK_GRAPH_PROFILE_ID = "nw13.optional.d3d12.work_graphs.experimental.v1"
 WORK_GRAPH_FALLBACK_ID = "nw13.fallback.work_graphs.conventional.v1"
@@ -70,7 +70,7 @@ DEFAULT_CAPABILITIES = {
     "enhanced_barriers": False,
 }
 
-SHADER_MODEL_ORDER = {"6_0": 60, "6_5": 65, "6_6": 66, "6_8": 68, "6_9": 69}
+SHADER_MODEL_ORDER = {f"6_{minor}": 60 + minor for minor in range(10)}
 
 
 def _shader_model_at_least(value: Any, required: str) -> bool:
@@ -192,7 +192,7 @@ def select_lowering(
             "profile_id": COMMON_PROFILE_ID,
             "requirements_digest": COMMON_REQUIREMENTS_DIGEST,
             "shader_model": "6_0",
-            "lowering": "raster.indexed_instanced",
+            "lowering": "compute.bounded_solid_trace",
             "capabilities": caps,
             "fallback_artifact_id": None,
         }
@@ -207,10 +207,10 @@ def select_lowering(
             "profile_id": RAY_PROFILE_ID,
             "requirements_digest": RAY_REQUIREMENTS_DIGEST,
             "shader_model": "6_5",
-            "lowering": "dxr.inline_ray_query.ps6_5",
+            "lowering": "dxr.inline_ray_query.cs6_5",
             "capabilities": caps,
             "fallback_artifact_id": RAY_FALLBACK_ID,
-            "budgets": {"max_ray_length": 64.0, "max_samples": 8, "max_bounces": 1, "max_blas_bytes": 32 * 1024 * 1024},
+            "budgets": {"max_ray_length": 64.0, "max_samples": 1, "max_bounces": 1, "max_as_bytes": 16 * 1024 * 1024, "max_as_boxes": 32},
         }
     if feature == "mesh_shader":
         tier = caps.get("mesh_shader_tier")
@@ -303,6 +303,7 @@ def export_artifacts(
     requested_features: Sequence[str] = (),
     optional_build_fails: bool = False,
     common_observation: Mapping[str, Any] | None = None,
+    fallback_observation: Mapping[str, Any] | None = None,
     optional_observations: Mapping[str, Mapping[str, Any]] | None = None,
     independent_builds: bool = False,
 ) -> dict[str, Any]:
@@ -314,16 +315,16 @@ def export_artifacts(
     recorded as ``unavailable`` so committed evidence cannot claim an
     unexecuted pass.
     """
-    revision = str(production.get("revision", ""))
+    revision = production.get("revision")
     production_id = str(production.get("id", "nw13.production"))
-    if not revision:
-        raise EvidenceError("production revision is required")
+    if not revision and (common_observation or optional_observations or fallback_observation):
+        raise EvidenceError("measured observations require a source revision")
     caps = dict(DEFAULT_CAPABILITIES)
     if capabilities:
         caps.update(capabilities)
     common_budgets = {
         "max_distribution_bytes": CANONICAL_DISTRIBUTION_CEILING_BYTES,
-        "max_shader_bytes": 16 * 1024,
+        "max_shader_bytes": 48 * 1024,
         "max_memory_bytes": 64 * 1024 * 1024,
     }
     common_obs = _artifact_observation(common_observation, common_budgets)
@@ -334,7 +335,7 @@ def export_artifacts(
         "revision": revision,
         "profile_id": COMMON_PROFILE_ID,
         "requirements_digest": COMMON_REQUIREMENTS_DIGEST,
-        "lowering": "raster.indexed_instanced",
+        "lowering": "compute.bounded_solid_trace",
         "shader_model": "6_0",
         "capabilities": caps,
         "capability_revision": capabilities_revision(caps),
@@ -358,7 +359,7 @@ def export_artifacts(
                 continue
             optional_budgets = {
                 "max_distribution_bytes": CANONICAL_DISTRIBUTION_CEILING_BYTES,
-                "max_shader_bytes": 20 * 1024,
+                "max_shader_bytes": 96 * 1024,
                 "max_memory_bytes": 96 * 1024 * 1024,
                 **selection.get("budgets", {}),
             }
@@ -389,9 +390,16 @@ def export_artifacts(
         "version": 1,
         "production_id": production_id,
         "revision": revision,
+        "source_state": "clean_revision" if revision else "uncommitted",
+        "implementation_base": production.get("implementation_base"),
         "common": common,
         "optional": optional,
-        "fallback": {**common, "artifact_id": "nw13.common.fallback", "kind": "fallback"},
+        "fallback": {
+            **common,
+            **_artifact_observation(fallback_observation, common_budgets),
+            "artifact_id": "nw13.common.fallback",
+            "kind": "fallback",
+        },
         "diagnostics": diagnostics,
         "independent_builds": bool(independent_builds),
     }
@@ -419,7 +427,7 @@ def unavailable_smoke() -> dict[str, Any]:
     return {"executed": False, "status": "unavailable", "headless": None}
 
 
-def smoke_observation(executable: str, arguments: Sequence[str] = ("--frames", "1"), *, timeout: float = 180.0) -> dict[str, Any]:
+def smoke_observation(executable: str, arguments: Sequence[str] = ("--frames", "1"), *, timeout: float = 180.0, environment: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Run a real artifact smoke and record the observation, including failure."""
     try:
         completed = subprocess.run(
@@ -429,22 +437,40 @@ def smoke_observation(executable: str, arguments: Sequence[str] = ("--frames", "
             errors="replace",
             timeout=timeout,
             check=False,
+            env=environment,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return {
             "executed": True,
             "status": "error",
-            "headless": "--headless" in arguments or "--allow-software-adapter" in arguments,
+            "headless": "--headless" in arguments,
             "error": str(exc),
         }
-    return {
+    observation = {
         "executed": True,
         "status": "pass" if completed.returncode == 0 else "fail",
-        "headless": "--headless" in arguments or "--allow-software-adapter" in arguments,
+        "headless": "--headless" in arguments,
         "returncode": completed.returncode,
         "stdout_sha256": sha256_text(completed.stdout),
         "stderr_sha256": sha256_text(completed.stderr),
     }
+
+    for line in completed.stdout.splitlines():
+        if line.startswith("NW13_STARTUP_US="):
+            micros = line.removeprefix("NW13_STARTUP_US=")
+            if micros.isdecimal():
+                observation["startup_ms"] = int(micros) / 1000
+        elif line.startswith("NW13_MANAGED_COMMITTED_BYTES="):
+            value = line.removeprefix("NW13_MANAGED_COMMITTED_BYTES=")
+            if value.isdecimal():
+                observation["committed_memory_bytes"] = int(value)
+        elif line.startswith("NW13_AS_COMMITTED_BYTES="):
+            value = line.removeprefix("NW13_AS_COMMITTED_BYTES=")
+            if value.isdecimal():
+                observation["acceleration_structure_bytes"] = int(value)
+        elif line.startswith("NW07_IMAGE_FNV64=") or line.startswith("NW05_IMAGE_FNV64="):
+            observation["image_hash"] = line.split("=", 1)[1]
+    return observation
 
 
 def _normalise_smoke(value: Any) -> dict[str, Any]:
@@ -454,7 +480,7 @@ def _normalise_smoke(value: Any) -> dict[str, Any]:
     if status not in {"pass", "fail", "error"}:
         raise EvidenceError("executed smoke observation must record pass, fail or error")
     result = {"executed": True, "status": status, "headless": value.get("headless")}
-    for key in ("returncode", "stdout_sha256", "stderr_sha256", "error"):
+    for key in ("returncode", "stdout_sha256", "stderr_sha256", "error", "startup_ms", "image_hash", "acceleration_structure_bytes", "capture", "capture_sha256", "committed_memory_bytes"):
         if key in value:
             result[key] = value[key]
     return result
@@ -480,6 +506,8 @@ def _budget_checks(
     check("distribution_bytes", observation.get("distribution_bytes"), budgets.get("max_distribution_bytes"))
     check("shader_bytes", observation.get("shader_bytes"), budgets.get("max_shader_bytes"))
     check("committed_memory_bytes", observation.get("committed_memory_bytes"), budgets.get("max_memory_bytes"))
+    if "max_as_bytes" in budgets:
+        check("acceleration_structure_bytes", observation["smoke"].get("acceleration_structure_bytes"), budgets["max_as_bytes"])
     return checks
 
 
@@ -503,6 +531,8 @@ def _artifact_observation(
         "gpu_time_us",
         "image_max_abs_error",
         "image_rmse",
+        "image_within_tolerance",
+        "film_lowering",
         "executable_sha256",
         "package_sha256",
         "audio_song_sha256",
@@ -512,7 +542,12 @@ def _artifact_observation(
         result[key] = observation.get(key)
     measured = result["distribution_bytes"] is not None and result["shader_bytes"] is not None
     executed = bool(result["smoke"]["executed"])
-    result["measurement_status"] = "measured" if measured and executed else ("partial" if measured or executed else "unavailable")
+    passed = executed and result["smoke"]["status"] == "pass" and result["smoke"].get("returncode") == 0
+    result["measurement_status"] = (
+        "failed" if executed and not passed else
+        "measured" if measured and passed else
+        "partial" if measured or executed else "unavailable"
+    )
     result["budget_checks"] = _budget_checks(result, budgets)
     observed_checks = [check for check in result["budget_checks"].values() if check["status"] != "unavailable"]
     if not observed_checks:
@@ -571,7 +606,11 @@ def validate_bundle(bundle: Mapping[str, Any]) -> list[dict[str, Any]]:
         diagnostics.append(_diagnostic("nw13_invalid_bundle", "common artifact revision does not match bundle"))
     if common.get("profile_id") != COMMON_PROFILE_ID or common.get("requirements_digest") != COMMON_REQUIREMENTS_DIGEST:
         diagnostics.append(_diagnostic("nw13_invalid_bundle", "common artifact does not use the common capability profile"))
-    for artifact in [common, *bundle.get("optional", [])]:
+    fallback = bundle.get("fallback")
+    if not isinstance(fallback, Mapping):
+        diagnostics.append(_diagnostic("nw13_invalid_bundle", "bundle has no common fallback record"))
+        return diagnostics
+    for artifact in [common, fallback, *bundle.get("optional", [])]:
         for key in ("profile_id", "requirements_digest", "lowering", "shader_model", "capabilities", "runtime_dependencies", "budgets"):
             if key not in artifact:
                 diagnostics.append(_diagnostic("nw13_invalid_bundle", f"artifact is missing provenance field '{key}'"))
@@ -579,6 +618,13 @@ def validate_bundle(bundle: Mapping[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(smoke, Mapping):
             diagnostics.append(_diagnostic("nw13_invalid_bundle", "artifact is missing a smoke observation"))
             continue
+        if artifact.get("revision") != bundle.get("revision"):
+            diagnostics.append(_diagnostic("nw13_invalid_bundle", "artifact revision does not match bundle"))
+        if smoke.get("executed") and (smoke.get("status") != "pass" or smoke.get("returncode") != 0):
+            diagnostics.append(_diagnostic(
+                "nw13_smoke_failed", "executed artifact smoke did not succeed",
+                artifact_id=artifact.get("artifact_id"), returncode=smoke.get("returncode"),
+            ))
         status = artifact.get("measurement_status")
         if status == "measured":
             if artifact.get("distribution_bytes") is None or artifact.get("shader_bytes") is None:
@@ -587,6 +633,8 @@ def validate_bundle(bundle: Mapping[str, Any]) -> list[dict[str, Any]]:
                 diagnostics.append(_diagnostic("nw13_invalid_bundle", "measured artifact lacks an executed smoke"))
         elif not smoke.get("executed") and smoke.get("status") != "unavailable":
             diagnostics.append(_diagnostic("nw13_invalid_bundle", "unexecuted smoke must be marked unavailable"))
+        if artifact.get("image_within_tolerance") is False:
+            diagnostics.append(_diagnostic("nw13_image_mismatch", "matched artifact exceeds its image tolerance"))
         for name, check in (artifact.get("budget_checks") or {}).items():
             if check.get("status") == "exceeded":
                 diagnostics.append(
@@ -605,8 +653,20 @@ def validate_bundle(bundle: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "independent_builds cannot be claimed without measured common bytes and an executed smoke",
             )
         )
+    if bundle.get("independent_observations") is not None:
+        pair = bundle["independent_observations"]
+        first, second = pair.get("a", {}), pair.get("b", {})
+        identity = ("executable_sha256", "package_sha256", "manifest_file_sha256", "dependency_identities")
+        if not bundle.get("independent_builds") or any(
+            key not in first or key not in second or first[key] != second[key] for key in identity
+        ):
+            diagnostics.append(_diagnostic("nw13_rebuild_identity_mismatch", "independent artifact identities differ"))
+        if fallback.get("measurement_status") != "measured":
+            diagnostics.append(_diagnostic("nw13_fallback_unverified", "native evidence requires an independent fallback smoke"))
     expected = bundle.get("bundle_sha256")
-    if expected is not None:
+    if not isinstance(expected, str):
+        diagnostics.append(_diagnostic("nw13_invalid_bundle", "bundle digest is required"))
+    else:
         copy = dict(bundle)
         copy.pop("bundle_sha256", None)
         if sha256_text(json.dumps(copy, sort_keys=True, separators=(",", ":"), default=str)) != expected:

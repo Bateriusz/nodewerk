@@ -308,7 +308,11 @@ def _parse_track(channel: str, doc: Mapping[str, Any], duration: int) -> TypedTr
     return TypedTrack(channel, SUPPORTED_TRACK_CHANNELS[channel], tuple(keys))
 
 
-def compile_scene(document: Mapping[str, Any]) -> Scene:
+def compile_scene(
+    document: Mapping[str, Any],
+    *,
+    geometry_bounds: Mapping[str, tuple[Vec3, Vec3]] | None = None,
+) -> Scene:
     if not isinstance(document, Mapping):
         raise SceneError("scene document must be an object")
     if document.get("format") != FORMAT or document.get("version") != SCHEMA_VERSION:
@@ -566,17 +570,21 @@ def compile_scene(document: Mapping[str, Any]) -> Scene:
         bounds_max=bounds_max,
         source=dict(document),
     )
-    _check_scene_bounds(scene)
+    _check_scene_bounds(scene, geometry_bounds)
     return scene
 
 
 def _check_hierarchy_cycles(objects: Mapping[str, SceneObject]) -> None:
     visiting: set[str] = set()
-    visited: set[str] = set()
+    depths: dict[str, int] = {}
 
-    def visit(identifier: str, trail: list[str]) -> None:
-        if identifier in visited:
-            return
+    def visit(identifier: str, trail: list[str]) -> int:
+        if len(trail) > 64:
+            raise SceneError("scene hierarchy depth exceeds 64", [
+                _diagnostic("scene_hierarchy_depth_exceeded", "scene hierarchy depth exceeds 64", object_id=identifier),
+            ])
+        if identifier in depths:
+            return depths[identifier]
         if identifier in visiting:
             raise SceneError(
                 "scene hierarchy contains a cycle: " + " -> ".join(trail + [identifier]),
@@ -584,26 +592,75 @@ def _check_hierarchy_cycles(objects: Mapping[str, SceneObject]) -> None:
             )
         visiting.add(identifier)
         parent = objects[identifier].parent
-        if parent is not None:
-            visit(parent, trail + [identifier])
+        depth = 0 if parent is None else visit(parent, trail + [identifier]) + 1
         visiting.remove(identifier)
-        visited.add(identifier)
+        depths[identifier] = depth
+        return depth
 
     for identifier in objects:
-        visit(identifier, [])
+        if visit(identifier, []) > 64:
+            raise SceneError("scene hierarchy depth exceeds 64", [
+                _diagnostic("scene_hierarchy_depth_exceeded", "scene hierarchy depth exceeds 64", object_id=identifier),
+            ])
 
 
-def _check_scene_bounds(scene: Scene) -> None:
+def _component_bounds(obj: SceneObject, component: str) -> tuple[Vec3, Vec3]:
+    track = obj.tracks.get(f"transform.{component}")
+    values = [key.value for key in track.keys] if track else [getattr(obj, component)]
+    return tuple(map(min, zip(*values))), tuple(map(max, zip(*values)))
+
+
+def _transform_bounds(
+    bounds: tuple[Vec3, Vec3], obj: SceneObject,
+) -> tuple[Vec3, Vec3]:
+    low, high = bounds
+    scale_low, scale_high = _component_bounds(obj, "scale")
+    scaled = [
+        [value * scale for value in (low[i], high[i])
+         for scale in (scale_low[i], scale_high[i])]
+        for i in range(3)
+    ]
+    scaled_low = tuple(map(min, scaled))
+    scaled_high = tuple(map(max, scaled))
+    rotation_low, rotation_high = _component_bounds(obj, "rotation")
+    if rotation_low == rotation_high:
+        rotation = euler_degrees_to_matrix(rotation_low)
+        rows = [
+            [(rotation[i][j] * scaled_low[j], rotation[i][j] * scaled_high[j])
+             for j in range(3)]
+            for i in range(3)
+        ]
+        rotated_low = tuple(sum(map(min, row)) for row in rows)
+        rotated_high = tuple(sum(map(max, row)) for row in rows)
+    else:
+        # Euler interpolation preserves length at every intermediate pose.
+        radius = _length(max(abs(a), abs(b)) for a, b in zip(scaled_low, scaled_high))
+        rotated_low, rotated_high = (-radius,) * 3, (radius,) * 3
+    position_low, position_high = _component_bounds(obj, "position")
+    return (
+        tuple(a + b for a, b in zip(rotated_low, position_low)),
+        tuple(a + b for a, b in zip(rotated_high, position_high)),
+    )
+
+
+def swept_object_bounds(
+    scene: Scene, obj: SceneObject, bounds: tuple[Vec3, Vec3],
+) -> tuple[Vec3, Vec3]:
+    """Conservatively enclose all poses of a local bound over the scene."""
+    current = obj
+    while current is not None:
+        bounds = _transform_bounds(bounds, current)
+        current = scene.objects[current.parent] if current.parent is not None else None
+    return bounds
+
+
+def _check_scene_bounds(
+    scene: Scene, geometry_bounds: Mapping[str, tuple[Vec3, Vec3]] | None,
+) -> None:
     for obj in scene.objects.values():
         for track in obj.tracks.values():
             for key in track.keys:
-                if track.channel == "transform.position":
-                    if not scene.contains_point(key.value):
-                        raise SceneError(
-                            f"object {obj.id} track '{track.channel}' exceeds scene bounds",
-                            [_diagnostic("scene_bounds_exceeded", "animated position exceeds scene bounds", object_id=obj.id, channel=track.channel)],
-                        )
-                elif track.channel == "transform.rotation":
+                if track.channel == "transform.rotation":
                     if any(abs(component) > 3600.0 for component in key.value):
                         raise SceneError(
                             f"object {obj.id} track '{track.channel}' exceeds rotation bounds",
@@ -615,10 +672,17 @@ def _check_scene_bounds(scene: Scene) -> None:
                             f"object {obj.id} track '{track.channel}' exceeds scale bounds",
                             [_diagnostic("scene_bounds_exceeded", "animated scale exceeds bounds", object_id=obj.id, channel=track.channel)],
                         )
-        if not scene.contains_point(obj.position):
+        if geometry_bounds is not None and obj.geometry not in geometry_bounds:
             raise SceneError(
-                f"object {obj.id} position exceeds scene bounds",
-                [_diagnostic("scene_bounds_exceeded", "object position exceeds scene bounds", object_id=obj.id)],
+                f"object {obj.id} references unknown geometry '{obj.geometry}'",
+                [_diagnostic("scene_unknown_geometry", "unknown object geometry", object_id=obj.id, geometry=obj.geometry)],
+            )
+        bounds = geometry_bounds[obj.geometry] if geometry_bounds is not None else ((0.0,) * 3,) * 2
+        bounds = swept_object_bounds(scene, obj, bounds)
+        if any(not scene.contains_point(point) for point in bounds):
+            raise SceneError(
+                f"object {obj.id} world-space extents exceed scene bounds",
+                [_diagnostic("scene_bounds_exceeded", "object world-space extents exceed scene bounds", object_id=obj.id, minimum=bounds[0], maximum=bounds[1])],
             )
     for light in scene.lights.values():
         if not scene.contains_point(light.position):
@@ -810,14 +874,15 @@ class Transport:
             result.append({"kind": "cue", "cue_id": cue["id"], "tick": tick, "policy": cue["policy"], "generation": self.generation})
         return result
 
-    def step(self, ticks: int = 1) -> list[dict[str, Any]]:
+    def step(self, ticks: int = 1, *, include_offsets: bool = False) -> list[dict[str, Any]]:
         if ticks <= 0:
             raise SceneError("transport step must be positive")
         if self.frozen:
             self.events.append({"kind": "frozen", "tick": self.tick})
             return list(self.events[-1:])
         produced: list[dict[str, Any]] = []
-        for _ in range(ticks):
+        for offset in range(1, ticks + 1):
+            first_event = len(produced)
             target = self.tick + self.direction
             if self.direction > 0 and target > int(self.loop_end or 0):
                 self.generation += 1
@@ -834,6 +899,9 @@ class Transport:
                     produced.append({"kind": "cut", "cut_tick": cut, "tick": target})
             self.tick = target
             produced.extend(self._cues_at(self.tick))
+            if include_offsets:
+                for event in produced[first_event:]:
+                    event["step_offset"] = offset
         self.events.extend(produced)
         return produced
 

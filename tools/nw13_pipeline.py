@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from functools import lru_cache
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -111,6 +112,7 @@ class OptimizedProduction:
 
 
 def optimize_document(document: Any, *, settings: Mapping[str, str] | None = None) -> OptimizedProduction:
+    admission_check(document)
     optimized = nw05.optimize_graph(document, settings=dict(settings) if settings else None)
     reachable = optimized.reachable_node_ids
     node_keys = {}
@@ -202,20 +204,51 @@ def admission_check(document: Any, *, budget: Mapping[str, Any] | None = None) -
             [_diagnostic("pipeline_node_budget_exceeded", "graph node admission bound exceeded", nodes=nodes)],
         )
     instances = 0
-    repetition = 1
-    generated = 0
     for node in document.nodes.values():
         if node.operator_id == "nw.scene.instances":
-            instances = max(instances, _param_int(document, node.node_id, "count", 1))
-        if node.operator_id == "nw.geom.repeat":
-            counts = node.params.get("counts", ["1", "1", "1"])
-            product = 1
-            for value in counts[:3]:
-                product *= max(1, int(float(value)))
-            repetition *= product
-            generated += product
+            instances += _param_int(document, node.node_id, "count", 256)
         if node.operator_id in {"nw.particles.system"}:
-            instances = max(instances, _param_int(document, node.node_id, "count", 1))
+            instances += _param_int(document, node.node_id, "count", 1)
+    geometry_nodes = {node_id for node_id, node in document.nodes.items()
+                      if node.operator_id.startswith("nw.geom.")}
+    consumed = {source for node_id in geometry_nodes for source, _ in document.nodes[node_id].inputs.values()}
+
+    visiting = set()
+
+    @lru_cache(maxsize=None)
+    def geometry_cost(node_id, depth):
+        if depth > active["max_recursion"] or node_id in visiting:
+            raise PipelineError("geometry recursion limit exceeded", [
+                _diagnostic("pipeline_recursion_budget_exceeded", "geometry recursion limit exceeded", node_id=node_id),
+            ])
+        node = document.nodes[node_id]
+        factor = 1
+        if node.operator_id == "nw.geom.repeat":
+            counts = node.params.get("counts", ())
+            try:
+                values = [float(value) for value in counts]
+            except (TypeError, ValueError):
+                values = []
+            if len(values) != 3 or any(not value.is_integer() or not 1 <= value <= 64 for value in values):
+                raise PipelineError("geometry repetition requires three integers in 1..64", [
+                    _diagnostic("pipeline_invalid_repetition", "geometry repetition requires three integers in 1..64", node_id=node_id),
+                ])
+            factor = int(values[0] * values[1] * values[2])
+        visiting.add(node_id)
+        costs = [geometry_cost(source, depth + 1) for source, _ in node.inputs.values()
+                 if source in geometry_nodes]
+        visiting.remove(node_id)
+        return (factor * max((cost[0] for cost in costs), default=1),
+                factor * (sum(cost[1] for cost in costs) if costs else 1))
+
+    # The typed schema rejects cycles. Bound valid DAGs here before compilation.
+    if geometry_nodes and not geometry_nodes - consumed:
+        raise PipelineError("geometry graph has no acyclic root", [
+            _diagnostic("pipeline_recursion_budget_exceeded", "geometry graph has no acyclic root"),
+        ])
+    costs = [geometry_cost(node_id, 0) for node_id in sorted(geometry_nodes - consumed)]
+    repetition = max((cost[0] for cost in costs), default=1)
+    generated = sum(cost[1] for cost in costs)
     if instances > active["max_instances"]:
         raise PipelineError(
             "instance admission bound exceeded",

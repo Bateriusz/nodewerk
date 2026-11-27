@@ -34,8 +34,7 @@ def test_actual_base_sha_and_merged_nw11_nw12_ancestry() -> None:
 def test_catalog_regeneration_reproduces_complete_declared_inventory() -> None:
     result = operator_catalog.verify_catalog(REPO_ROOT)
     assert result["ok"] is True, result["errors"]
-    assert result["engines"]["werkkzeug3"] >= 15
-    assert result["engines"]["werkkzeug4"] >= 10
+    assert result["engines"] == {"werkkzeug3": 499, "werkkzeug4": 370}
     assert result["unreviewed_entries"] > 0
     assert result["coverage_links"] >= 30
 
@@ -45,32 +44,28 @@ def test_kkrieger_variant_is_identifiable_and_not_merged_into_werkkzeug4() -> No
     fr = next(source for source in sources["sources"] if source["id"] == "fr_public")
     assert fr["commit"] == "8c8f82c2ae01133370e649bbc05916e7aceecadd"
     assert fr["vendored"] is False
-    wk3 = json.loads((REPO_ROOT / "references" / "operator_catalog" / "werkkzeug3.inventory.v1.json").read_text(encoding="utf-8"))
-    wk4 = json.loads((REPO_ROOT / "references" / "operator_catalog" / "werkkzeug4.inventory.v1.json").read_text(encoding="utf-8"))
-    kkrieger = [entry for entry in wk3["entries"] if entry["variant"] == "kkrieger"]
-    assert kkrieger
-    assert all(entry["engine_scope"]["identifiable"] is True for entry in kkrieger)
-    assert all(entry["engine_scope"]["origin_engine"] == "werkkzeug3" for entry in kkrieger)
-    assert all(entry["variant"] != "kkrieger" for entry in wk4["entries"])
+    wk3 = json.loads((REPO_ROOT / "references/operator_catalog/werkkzeug3.json").read_text())
+    wk4 = json.loads((REPO_ROOT / "references/operator_catalog/werkkzeug4.json").read_text())
+    variants = {entry["variant"] for entry in wk3["operators"]}
+    assert variants == {"werkkzeug3", "werkkzeug3_kkrieger"}
+    assert all(entry["key"].startswith(entry["variant"] + ":") for entry in wk3["operators"])
+    assert all(entry["key"].startswith("wz4:") for entry in wk4["operators"])
     assert {source["id"] for source in sources["other_engines"]} == {"theprodukkt"}
 
 
 def test_inventory_preserves_hidden_obsolete_types_ports_parameters_locations_and_limits() -> None:
-    declarations = json.loads((REPO_ROOT / "references" / "operator_catalog" / "werkkzeug3.declarations.v1.json").read_text(encoding="utf-8"))["declarations"]
-    inventory = json.loads((REPO_ROOT / "references" / "operator_catalog" / "werkkzeug3.inventory.v1.json").read_text(encoding="utf-8"))
-    by_id = {entry["id"]: entry for entry in inventory["entries"]}
-    for declaration in declarations:
-        entry = by_id[declaration["id"]]
-        assert entry["types"] == declaration["types"]
-        assert entry["ports"] == declaration["ports"]
-        assert entry["extractable_parameters"] == declaration["extractable_parameters"]
-        assert entry["source_location"] == declaration["source_location"]
-        assert entry["hidden"] == declaration["hidden"]
-        assert entry["obsolete"] == declaration["obsolete"]
-        assert entry["extraction_limits"] == declaration["extraction_limits"]
-    assert any(entry["hidden"] and entry["obsolete"] for entry in inventory["entries"])
-    assert all(entry["declaration_identity"] for entry in inventory["entries"])
-    assert all(entry["declaration_hash"].startswith("sha256:") for entry in inventory["entries"])
+    directory = REPO_ROOT / "references" / "operator_catalog"
+    wk3 = json.loads((directory / "werkkzeug3.json").read_text())
+    wk4 = json.loads((directory / "werkkzeug4.json").read_text())
+    assert len(wk4["source_files"]) == 33
+    assert {"hidden", "obsolete"} <= {role for e in wk4["operators"] for role in e["source_roles"]}
+    for catalog in (wk3, wk4):
+        assert catalog["extraction_notes"]
+        for entry in catalog["operators"]:
+            assert entry["parameters"]
+            assert entry["source"]["line"] > 0
+            assert catalog["source_revision"] in entry["source"]["url"]
+            assert entry["key"]
 
 
 def test_candidates_retain_review_decisions_and_unresolved_gaps() -> None:

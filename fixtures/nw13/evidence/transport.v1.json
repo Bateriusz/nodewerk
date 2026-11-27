@@ -1,130 +1,162 @@
 {
   "format": "nw13.transport-evidence",
   "version": 1,
-  "production_id": "nw13.hotel_corridor",
-  "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
-  "fixed_ticks": [
-    0,
-    96000,
-    120000,
-    144000,
-    192000,
-    240000,
-    264000,
-    288000
-  ],
-  "declared_states": [
-    "resume",
-    "freeze",
-    "cut",
-    "reverse",
-    "resume"
-  ],
   "trace": [
     {
       "tick": 0,
+      "action_tick": 0,
       "frozen": false,
       "direction": 1,
       "generation": 0,
+      "flash_active": false,
       "events": []
     },
     {
       "tick": 96000,
+      "action_tick": 96000,
       "frozen": false,
       "direction": 1,
       "generation": 0,
+      "flash_active": false,
       "events": [
         {
           "kind": "cue",
           "cue_id": "door_hinge",
           "tick": 96000,
           "policy": "one-shot",
-          "generation": 0
+          "generation": 0,
+          "presentation_tick": 96000
         }
       ]
     },
     {
       "tick": 120000,
+      "action_tick": 120000,
       "frozen": true,
       "direction": 1,
       "generation": 0,
+      "flash_active": false,
       "events": [
         {
           "kind": "freeze",
-          "tick": 120000
+          "tick": 120000,
+          "presentation_tick": 120000
         }
       ]
     },
     {
+      "tick": 123200,
+      "action_tick": 120000,
+      "frozen": true,
+      "direction": 1,
+      "generation": 0,
+      "flash_active": false,
+      "events": []
+    },
+    {
       "tick": 144000,
+      "action_tick": 139200,
       "frozen": false,
       "direction": 1,
       "generation": 0,
+      "flash_active": false,
       "events": [
         {
           "kind": "resume",
-          "tick": 124800
-        },
+          "tick": 120000,
+          "presentation_tick": 124800
+        }
+      ]
+    },
+    {
+      "tick": 148800,
+      "action_tick": 144000,
+      "frozen": false,
+      "direction": 1,
+      "generation": 0,
+      "flash_active": true,
+      "events": [
         {
           "kind": "cue",
           "cue_id": "flash",
           "tick": 144000,
           "policy": "one-shot",
-          "generation": 0
+          "generation": 0,
+          "presentation_tick": 148800
         }
       ]
     },
     {
       "tick": 192000,
+      "action_tick": 187200,
       "frozen": false,
       "direction": 1,
       "generation": 0,
+      "flash_active": false,
       "events": [
         {
           "kind": "cut",
           "cut_tick": 192000,
-          "tick": 192000
-        },
-        {
-          "kind": "cue",
-          "cue_id": "corridor_cut",
-          "tick": 192000,
-          "policy": "one-shot",
-          "generation": 0
+          "presentation_tick": 192000
         }
       ]
     },
     {
       "tick": 240000,
+      "action_tick": 235200,
       "frozen": false,
       "direction": -1,
       "generation": 0,
+      "flash_active": false,
       "events": [
         {
+          "kind": "cue",
+          "cue_id": "corridor_cut",
+          "tick": 192000,
+          "policy": "one-shot",
+          "generation": 0,
+          "presentation_tick": 196800
+        },
+        {
           "kind": "reverse",
-          "tick": 240000,
-          "direction": -1
+          "tick": 235200,
+          "direction": -1,
+          "presentation_tick": 240000
         }
       ]
     },
     {
+      "tick": 252000,
+      "action_tick": 223200,
+      "frozen": false,
+      "direction": -1,
+      "generation": 0,
+      "flash_active": false,
+      "events": []
+    },
+    {
       "tick": 264000,
+      "action_tick": 211200,
       "frozen": false,
       "direction": 1,
       "generation": 0,
+      "flash_active": false,
       "events": [
         {
           "kind": "reverse",
-          "tick": 240000,
-          "direction": 1
+          "tick": 211200,
+          "direction": 1,
+          "presentation_tick": 264000
         }
       ]
     },
     {
       "tick": 288000,
+      "action_tick": 235200,
       "frozen": false,
       "direction": 1,
       "generation": 0,
+      "flash_active": false,
       "events": []
     }
   ]

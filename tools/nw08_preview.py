@@ -21,6 +21,7 @@ import os
 import queue
 import shutil
 import subprocess
+import struct
 import sys
 import tempfile
 import threading
@@ -400,6 +401,22 @@ class ReferencePreviewBackend:
         width: int,
         height: int,
     ) -> PreviewFrame:
+        film = next((node for node in nw03_compiler._reachable_shader_roots(document)
+                     if node.operator_id == "nw.shader.film"), None)
+        if film is not None:
+            import nw13_film
+            start = time.perf_counter()
+            try:
+                image = nw13_film.reference_image(document, film, tick, width=width, height=height)
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                raise PreviewError(f"film node {film.node_id}: {error}") from error
+            pixels = struct.pack(f"<{len(image)}f", *image)
+            return PreviewFrame(
+                tick=tick, width=width, height=height,
+                image_sha256=hashlib.sha256(pixels).hexdigest(), semantic_digest="",
+                image_data=pixels, backend=self.name, execution_kind="contract_reference",
+                pass_timings=PassTimings((PassTiming("film_reference", (time.perf_counter() - start) * 1000.0),)),
+            )
         timings: list[PassTiming] = []
         noise, torus, instances, materials = _procedural_inputs(document)
 

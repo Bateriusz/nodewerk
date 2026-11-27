@@ -7,12 +7,16 @@
       "repo": "https://github.com/farbrausch/fr_public.git",
       "commit": "8c8f82c2ae01133370e649bbc05916e7aceecadd",
       "vendored": false,
-      "license": "upstream_unknown_not_available_in_worktree",
-      "extraction_mode": "pinned_declaration_export",
+      "license": "See pinned upstream notices and per-file metadata. No historical runtime implementation or assets are vendored.",
+      "extraction_mode": "pinned_git_blob_verification",
       "extraction_limits": [
-        "raw source tree is not checked out in this worktree",
-        "no upstream source or asset bytes are copied",
-        "declaration names are review labels, not a compatibility claim"
+        "verify source blobs before interpreting declarations",
+        "no upstream source or asset bytes are copied to this repository",
+        "static parameters are partial and do not imply implementation or production equivalence"
+      ],
+      "extractors": [
+        "../../tools/werkkzeug3_catalog.py",
+        "../../tools/werkkzeug4_catalog.py"
       ]
     }
   ],

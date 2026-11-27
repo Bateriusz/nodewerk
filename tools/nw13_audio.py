@@ -460,26 +460,30 @@ def render_pcm(
                 "left_gain": _pan_gains(instrument.pan)[0],
                 "right_gain": _pan_gains(instrument.pan)[1],
                 "filter_state": 0.0,
+                "warming_filter": 0.0,
+                "alpha": 1.0 / (1.0 + sample_rate / (math.tau * instrument.cutoff_hz)),
             }
         )
-    # Reconstruct the bounded one-pole filter state for voices that started
-    # before the requested chunk.  This makes an arbitrary chunk partition
-    # sample-identical to a single continuous render.
-    for voice in voices:
-        start = voice["start"]
-        if start >= first_sample:
-            continue
+    def advance_filter(voice, sample):
+        age = sample - voice["start"]
         note = voice["note"]
         instrument = voice["instrument"]
-        dt = 1.0 / sample_rate
-        rc = 1.0 / (math.tau * instrument.cutoff_hz)
-        alpha = dt / (rc + dt)
-        state = 0.0
-        for sample in range(start, first_sample):
-            phase = (sample - start) * note.frequency_millihz / 1000.0 / sample_rate % 1.0
-            raw = _waveform(instrument, phase, sample)
-            state += alpha * (raw - state)
-        voice["filter_state"] = state
+        phase = age * note.frequency_millihz / 1000.0 / sample_rate % 1.0
+        raw = _waveform(instrument, phase, sample)
+        if age % sample_rate == 0:
+            voice["filter_state"] = voice["warming_filter"]
+            voice["warming_filter"] = 0.0
+        alpha = voice["alpha"]
+        voice["filter_state"] += alpha * (raw - voice["filter_state"])
+        voice["warming_filter"] += alpha * (raw - voice["warming_filter"])
+        return voice["filter_state"]
+
+    for voice in voices:
+        start = voice["start"]
+        block = (first_sample - start) // sample_rate
+        begin = start + max(0, block - 1) * sample_rate
+        for sample in range(begin, first_sample):
+            advance_filter(voice, sample)
     output: list[int] = []
     for frame in range(sample_count):
         sample = first_sample + frame
@@ -494,14 +498,8 @@ def render_pcm(
             instrument = voice["instrument"]
             age = sample - start
             total = end - start
-            phase = (age * note.frequency_millihz / 1000.0 / sample_rate) % 1.0
-            raw = _waveform(instrument, phase, sample)
             envelope = instrument.envelope.level(age, total, sample_rate)
-            dt = 1.0 / sample_rate
-            rc = 1.0 / (math.tau * instrument.cutoff_hz)
-            alpha = dt / (rc + dt)
-            voice["filter_state"] += alpha * (raw - voice["filter_state"])
-            state = voice["filter_state"]
+            state = advance_filter(voice, sample)
             if not math.isfinite(state) or abs(state) > 1.0e6:
                 raise AudioError(
                     "audio filter state overflow",

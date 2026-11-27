@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import nw13_audio
 import nw13_evidence
+import nw13_film
 import nw13_geometry
 import nw13_particles
 import nw13_pipeline
@@ -51,10 +53,53 @@ def load_production(repo_root: Path, path: str | Path) -> dict[str, Any]:
     return document
 
 
+def measured_revision(repo_root: Path, expected: str | None = None, *, require_clean: bool = False) -> str | None:
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=repo_root, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+    revision = git("rev-parse", "--verify", "HEAD^{commit}")
+    if expected is not None and expected != revision:
+        raise ProductionError(f"expected measured commit {expected}, checked out {revision}")
+    if git("status", "--porcelain", "--untracked-files=normal"):
+        if require_clean or expected is not None:
+            raise ProductionError("commit-bound evidence requires a clean measured worktree")
+        return None
+    return revision
+
+
 def _geometry_index(document: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     index: dict[str, Mapping[str, Any]] = {}
     nw13_render._walk_nodes(document["root"], index)
     return index
+
+
+def import_graph(repo_root: Path, production: Mapping[str, Any], destination: Path) -> None:
+    geometry = json.loads(_resolve(repo_root, production["geometry"]).read_text(encoding="utf-8"))
+    scene = json.loads(_resolve(repo_root, production["scene"]).read_text(encoding="utf-8"))
+    destination.write_text(
+        nw13_film.import_graph(geometry, scene, production, source_name=str(destination)),
+        encoding="utf-8", newline="\n",
+    )
+
+
+def playback_song(repo_root: Path, production: Mapping[str, Any]) -> bytes:
+    song = json.loads(_resolve(repo_root, production["song"]).read_text(encoding="utf-8"))
+    scene = json.loads(_resolve(repo_root, production["scene"]).read_text(encoding="utf-8"))
+    trace = transport_trace(production, repo_root, ticks=[scene["duration_ticks"]])
+    onsets = {event["cue_id"]: event["presentation_tick"] for event in trace[0]["events"]
+              if event["kind"] == "cue"}
+    bindings = production.get("audio_cue_bindings", {})
+    for track in song["tracks"]:
+        if track["bus"] == "effect":
+            for note in track["notes"]:
+                cue = bindings.get(note["id"])
+                if cue is not None:
+                    if cue not in onsets:
+                        raise ProductionError(f"audio cue '{cue}' is not reached by the scripted transport")
+                    note["tick"] = onsets[cue]
+    return nw13_audio.compile_to_nwas(song)
 
 
 def validate_production(repo_root: Path, production: Mapping[str, Any]) -> dict[str, Any]:
@@ -71,10 +116,14 @@ def validate_production(repo_root: Path, production: Mapping[str, Any]) -> dict[
     graph = nw13_pipeline.load_graph(graph_path)
     geometry_document = json.loads(geometry_path.read_text(encoding="utf-8"))
     prepared = nw13_geometry.prepare(geometry_document)
-    scene = nw13_scene.compile_scene(json.loads(scene_path.read_text(encoding="utf-8")))
     song_document = json.loads(song_path.read_text(encoding="utf-8"))
     song = nw13_audio.compile_sequence(song_document)
     geometry_index = _geometry_index(geometry_document)
+    geometry_bounds = {key: nw13_geometry.bounds_node(node) for key, node in geometry_index.items()}
+    scene = nw13_scene.compile_scene(
+        json.loads(scene_path.read_text(encoding="utf-8")),
+        geometry_bounds={key: (bounds.minimum, bounds.maximum) for key, bounds in geometry_bounds.items()},
+    )
     for obj in scene.objects.values():
         if obj.geometry not in geometry_index:
             diagnostics.append({"category": "production_validation", "severity": "error", "code": "production_unknown_geometry", "message": f"object {obj.id} references unknown geometry {obj.geometry}"})
@@ -109,10 +158,10 @@ def validate_production(repo_root: Path, production: Mapping[str, Any]) -> dict[
     catalog_dir = repo_root / "references" / "operator_catalog"
     if catalog_dir.exists():
         known_entries = set()
-        for name in ("werkkzeug3.inventory.v1.json", "werkkzeug4.inventory.v1.json"):
+        for name in ("werkkzeug3.json", "werkkzeug4.json"):
             path = catalog_dir / name
             if path.exists():
-                known_entries.update(entry["id"] for entry in json.loads(path.read_text(encoding="utf-8"))["entries"])
+                known_entries.update(entry["key"] for entry in json.loads(path.read_text(encoding="utf-8"))["operators"])
         for item in mapping:
             for entry in item.get("catalog_entries", []):
                 if entry not in known_entries:
@@ -124,7 +173,7 @@ def validate_production(repo_root: Path, production: Mapping[str, Any]) -> dict[
             "graph": {"path": str(graph_path.relative_to(repo_root)), "sha256": _sha256_file(graph_path), "semantic_hash": nw13_pipeline.semantic_hash(graph)},
             "geometry": {"path": str(geometry_path.relative_to(repo_root)), "sha256": _sha256_file(geometry_path), "semantic_hash": nw13_geometry.semantic_hash(geometry_document), "bounds": prepared.bounds.to_dict(), "stats": prepared.stats},
             "scene": {"path": str(scene_path.relative_to(repo_root)), "sha256": _sha256_file(scene_path), "objects": len(scene.objects), "shots": [shot.id for shot in scene.shots]},
-            "song": {"path": str(song_path.relative_to(repo_root)), "sha256": _sha256_file(song_path), "semantic_hash": nw13_audio.semantic_hash(song_document), "notes": len(song.notes), "nwas_sha256": "sha256:" + hashlib.sha256(nw13_audio.compile_to_nwas(song)).hexdigest()},
+            "song": {"path": str(song_path.relative_to(repo_root)), "sha256": _sha256_file(song_path), "semantic_hash": nw13_audio.semantic_hash(song_document), "notes": len(song.notes), "nwas_sha256": "sha256:" + hashlib.sha256(playback_song(repo_root, production)).hexdigest()},
         },
     }
 
@@ -186,16 +235,20 @@ def render_evidence(
     frames = []
     region_checks: list[dict[str, Any]] = []
     images: list[list[float]] = []
-    for tick in active_ticks:
-        image, depth = renderer.render(int(tick))
+    for frame_state in transport_trace(production, repo_root, ticks=active_ticks):
+        tick = frame_state["tick"]
+        action_tick = frame_state["action_tick"]
+        flash = production.get("flash")
+        light_gain = {flash["light"]: float(frame_state["flash_active"])} if flash else {}
+        image, depth = renderer.render(tick, action_tick=action_tick, light_gain=light_gain)
         emitter_doc = production.get("particles", {}).get("emitter")
         if isinstance(emitter_doc, Mapping):
-            image = renderer.render_particles(image, depth, emitter_doc, int(tick))
+            image = renderer.render_particles(image, depth, emitter_doc, tick, action_tick=action_tick, film_cycle=True)
         image = _tone_image(production, image, width, height)
         frame_path = frames_dir / f"tick-{int(tick):06d}.ppm"
         nw13_render.to_ppm(image, width, height, frame_path)
         images.append(image)
-        camera = nw13_scene.camera_state(scene, int(tick), action_tick=int(tick))
+        camera = nw13_scene.camera_state(scene, tick, action_tick=action_tick)
         regions = {}
         checks = {}
         for region in rendering.get("regions", []):
@@ -222,7 +275,7 @@ def render_evidence(
             )
         frames.append(
             {
-                "tick": int(tick),
+                **frame_state,
                 "file": str(frame_path.relative_to(output)),
                 "sha256": _sha256_file(frame_path),
                 "shot_id": camera.shot_id,
@@ -237,7 +290,8 @@ def render_evidence(
         "format": "nw13.image-evidence",
         "version": 1,
         "production_id": production.get("id"),
-        "revision": production.get("revision"),
+        "revision": measured_revision(repo_root),
+        "implementation_base": production.get("implementation_base"),
         "width": width,
         "height": height,
         "samples": int(rendering.get("samples", 1)),
@@ -272,67 +326,66 @@ def transport_trace(production: Mapping[str, Any], repo_root: Path, *, ticks: Se
     script = production.get("transport_script", {})
     if not isinstance(script, Mapping):
         raise ProductionError("transport_script must be an object")
-    freeze_at = script.get("freeze_at")
-    resume_at = script.get("resume_at")
-    reverse_at = script.get("reverse_at")
-    freeze_applied = False
-    reverse_applied = False
-    reverse_pending = False
-
-    def step_to(target: int) -> None:
-        while transport.tick < target:
-            transport.step(min(4800, target - transport.tick))
-
+    commands = []
+    for key, command in (
+        ("freeze_at", transport.freeze), ("resume_at", transport.resume),
+        ("reverse_at", transport.reverse), ("forward_at", transport.reverse),
+    ):
+        if key in script:
+            tick = script[key]
+            if type(tick) is not int or not 0 <= tick <= scene.duration_ticks:
+                raise ProductionError(f"invalid {key} presentation tick")
+            commands.append((tick, command))
+    commands.sort(key=lambda item: item[0])
+    command_index = 0
+    presentation = 0
+    events = []
     result = []
-    cursor = 0
-    for tick in active:
-        tick = int(tick)
-        if tick < transport.tick:
-            transport.seek(tick)
-        while transport.tick < tick:
-            if reverse_pending:
-                # A reverse state is observable at the fixed tick where it was
-                # declared; resume forward before traversing to the next target.
-                transport.reverse()
-                reverse_pending = False
-            if transport.frozen:
-                if not isinstance(resume_at, int) or resume_at > tick:
-                    break
-                # Model frozen wall-clock time without emitting seek history.
-                transport.tick = resume_at
-                transport.resume()
-                continue
-            if isinstance(freeze_at, int) and not freeze_applied and transport.tick < freeze_at <= tick:
-                step_to(freeze_at)
-                transport.freeze()
-                freeze_applied = True
-                continue
-            if isinstance(reverse_at, int) and not reverse_applied and transport.tick < reverse_at < tick:
-                step_to(reverse_at)
-                transport.reverse()
-                reverse_applied = True
-                reverse_pending = True
-                continue
-            step_to(min(tick, transport.tick + 4800))
-        if isinstance(freeze_at, int) and not freeze_applied and transport.tick == freeze_at:
-            transport.freeze()
-            freeze_applied = True
-        if isinstance(reverse_at, int) and not reverse_applied and transport.tick >= reverse_at:
-            transport.reverse()
-            reverse_applied = True
-            reverse_pending = True
-        if transport.tick > tick:
-            transport.seek(tick)
-        interval_events = transport.events[cursor:]
-        cursor = len(transport.events)
-        result.append(
-            {
-                "tick": tick,
-                "frozen": transport.frozen,
-                "direction": transport.direction,
-                "generation": transport.generation,
-                "events": interval_events,
-            }
-        )
-    return result
+    flash_tick = None
+    flash = production.get("flash")
+    if flash:
+        if flash["light"] not in scene.lights or flash["duration_ticks"] <= 0:
+            raise ProductionError("flash must name a scene light and have a positive duration")
+        if not any(cue["id"] == flash["cue"] for cue in scene.cues):
+            raise ProductionError("flash must name a scene cue")
 
+    def advance(target: int) -> None:
+        nonlocal presentation, flash_tick
+        if target == presentation:
+            return
+        for event in transport.step(target - presentation, include_offsets=True):
+            if event["kind"] in {"cut", "frozen"}:
+                continue
+            event = dict(event)
+            event["presentation_tick"] = presentation + event.pop("step_offset")
+            events.append(event)
+            if flash and event.get("cue_id") == flash["cue"]:
+                flash_tick = event["presentation_tick"]
+        for cut in scene.cuts:
+            if presentation < cut <= target:
+                events.append({"kind": "cut", "cut_tick": cut, "presentation_tick": cut})
+        presentation = target
+        transport.events.clear()
+
+    for tick in active:
+        if type(tick) is not int or not presentation <= tick <= scene.duration_ticks:
+            raise ProductionError("evidence ticks must be ordered presentation ticks within the film")
+        while command_index < len(commands) and commands[command_index][0] <= tick:
+            command_tick, command = commands[command_index]
+            advance(command_tick)
+            command()
+            events.append({**transport.events[-1], "presentation_tick": presentation})
+            transport.events.clear()
+            command_index += 1
+        advance(tick)
+        result.append({
+            "tick": tick,
+            "action_tick": transport.tick,
+            "frozen": transport.frozen,
+            "direction": transport.direction,
+            "generation": transport.generation,
+            "flash_active": flash_tick is not None and tick - flash_tick < flash["duration_ticks"],
+            "events": sorted(events, key=lambda event: event["presentation_tick"]),
+        })
+        events = []
+    return result

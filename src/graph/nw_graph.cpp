@@ -1679,6 +1679,8 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
         geometry_binary("nw.geom.subtract",
                         "Solid subtraction of two bounded geometry recipes",
                         {});
+        geometry_binary("nw.geom.library",
+                        "Collection of named film geometry recipes", {});
         geometry_binary(
             "nw.geom.smooth_union",
             "Bounded smooth union of two geometry recipes",
@@ -1824,6 +1826,19 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
             Port("out", LogicalType::ShaderExpr, Residency::Logical)};
         schema.params = {VectorParam("value", ParamType::Vec4)};
         schema.shader_operations = {"vec4", "const"};
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.shader.film", OperatorKind::PureShaderExpr,
+            "Bounded procedural film renderer", {Frequency::Frame},
+            Frequency::Frame, "nw.lower.shader.film");
+        schema.inputs = {ResourcePort(
+            "geometry", LogicalType::GeometryRecipe, Residency::Logical,
+            GeometryDescriptor())};
+        schema.outputs = {
+            Port("out", LogicalType::ShaderExpr, Residency::Logical)};
+        schema.params = {StringParam("scene", "{}"), StringParam("production", "{}")};
         registry.Register(std::move(schema));
     }
     {
@@ -2070,6 +2085,19 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
         schema.outputs = {Port("value", LogicalType::Scalar, Residency::Cpu)};
         schema.explicit_readback = true;
         schema.produces_resource = false;
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.render.film", OperatorKind::GpuPass,
+            "Procedural film pass producing a render image",
+            {Frequency::Frame}, Frequency::Frame, "nw.lower.hlsl.render");
+        schema.inputs = {Port("shader", LogicalType::ShaderExpr, Residency::Logical)};
+        schema.outputs = {ResourcePort(
+            "image", LogicalType::RenderImage, Residency::Gpu,
+            RenderImageDescriptor())};
+        schema.produces_resource = true;
+        schema.resource_descriptor = RenderImageDescriptor();
         registry.Register(std::move(schema));
     }
     {
@@ -6212,6 +6240,12 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
                                   Residency::Logical);
         return true;
     }
+    if (op == "nw.shader.film") {
+        outputs["out"] = MakeText(LogicalType::ShaderExpr,
+                                  snapshot.StructuralHash(node.id),
+                                  Residency::Logical);
+        return true;
+    }
     if (op == "nw.shader.add" || op == "nw.shader.mul") {
         const std::string symbol = op == "nw.shader.add" ? " + " : " * ";
         outputs["out"] = MakeText(
@@ -6300,7 +6334,7 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         outputs["value"] = MakeScalar(image->numbers[0]);
         return true;
     }
-    if (op == "nw.render.fullscreen") {
+    if (op == "nw.render.fullscreen" || op == "nw.render.film") {
         outputs["image"] = ImageOracle(snapshot, node, "image", evaluated);
         return true;
     }
@@ -6530,7 +6564,7 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         // this reference path records a deterministic structural fingerprint
         // so seed and CSG identity tests can compare complete recipes.
         std::vector<const EvaluationValue*> inputs;
-        if (op == "nw.geom.union" || op == "nw.geom.intersection" ||
+        if (op == "nw.geom.library" || op == "nw.geom.union" || op == "nw.geom.intersection" ||
             op == "nw.geom.subtract" || op == "nw.geom.smooth_union") {
             if (const EvaluationValue* a = input("a")) inputs.push_back(a);
             if (const EvaluationValue* b = input("b")) inputs.push_back(b);

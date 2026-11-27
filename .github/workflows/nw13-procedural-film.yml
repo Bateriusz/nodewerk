@@ -53,7 +53,12 @@ jobs:
       - name: Install pytest
         run: python -m pip install pytest
       - name: Verify pinned catalog regeneration and clean-room boundary
-        run: python tools/operator_catalog.py
+        run: |
+          reference="$RUNNER_TEMP/fr-public-nw13"
+          git clone --filter=blob:none --no-checkout https://github.com/farbrausch/fr_public.git "$reference"
+          git -C "$reference" -c core.autocrlf=false checkout --detach 8c8f82c2ae01133370e649bbc05916e7aceecadd
+          python tools/operator_catalog.py check --reference-root "$reference"
+          python -m pytest -q tests/test_werkkzeug3_catalog.py tests/test_werkkzeug4_catalog.py
       - name: Run NW-13 contract, geometry, scene, particle, audio and pipeline tests
         run: >-
           python -m pytest -v
@@ -127,6 +132,20 @@ jobs:
         run: |
           cmake --build --preset nw07-release --target nw06_capability_check --parallel 2
           cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
+      - name: Build the optional capability probe and bounded Work Graphs experiment
+        shell: pwsh
+        run: |
+          $cl = (Get-Command cl.exe -ErrorAction Stop).Source
+          cmake -S src/nw11 -B build/nw13-probe -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_COMPILER=$cl"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build/nw13-probe --target nw11_capability_probe --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake -S src/nw13 -B build/nw13-work-graph -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_COMPILER=$cl"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build/nw13-work-graph --target nw13_work_graph --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/nw13_work_graph.py build/nw13-work-graph/nw13_work_graph.exe --warp --output build/nw13-evidence/work-graph-warp.json
+          exit $LASTEXITCODE
       - name: Run NW-13 contracts on Windows
         run: >-
           python -m pytest -v
@@ -146,12 +165,18 @@ jobs:
           $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
           if (-not (Test-Path $template)) { throw "nw_procedural_image_player.exe was not built" }
           $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          $probe = Get-ChildItem -Path build/nw13-probe -Filter nw11_capability_probe.exe -Recurse |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $probe) { throw "nw11_capability_probe.exe was not built" }
           $env:PYTHONPATH = "tools"
           python tools/nw13_artifact_measure.py `
             --output-dir build/nw13-evidence `
             --template $template `
+            --probe $probe `
             --dxc $dxc
+          exit $LASTEXITCODE
       - name: Upload validation bundle
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: nw13-windows-validation-${{ github.sha }}

@@ -13,6 +13,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
+import nw13_scene
+
 
 FORMAT = "nw13.particles"
 SCHEMA_VERSION = 1
@@ -112,6 +114,7 @@ class Emitter:
     size_end: float
     material: str
     depth_bias: float = 0.0
+    origin_track: nw13_scene.TypedTrack | None = None
 
     @property
     def lifetime_steps(self) -> int:
@@ -134,6 +137,10 @@ class Emitter:
             "size_end": self.size_end,
             "material": self.material,
             "depth_bias": self.depth_bias,
+            **({"origin_track": {"keys": [
+                {"tick": key.tick, "value": list(key.value), "interpolation": key.interpolation}
+                for key in self.origin_track.keys
+            ]}} if self.origin_track else {}),
         }
 
 
@@ -150,6 +157,17 @@ def compile_emitter(document: Mapping[str, Any]) -> Emitter:
             "emitter speed_max is below speed_min",
             [_diagnostic("particles_invalid_emitter", "speed_max is below speed_min", emitter_id=identifier)],
         )
+    origin_track = None
+    if "origin_track" in document:
+        raw_track = document["origin_track"]
+        if not isinstance(raw_track, Mapping):
+            raise ParticleError("emitter origin_track must be an object")
+        try:
+            origin_track = nw13_scene._parse_track("transform.position", {
+                **raw_track, "value_type": "vec3",
+            }, 48_000 * 60 * 60)
+        except nw13_scene.SceneError as error:
+            raise ParticleError(f"invalid emitter origin track: {error}", error.diagnostics) from error
     return Emitter(
         id=identifier,
         seed=_integer(document.get("seed", 0), "seed", minimum=0, maximum=4294967295),
@@ -166,6 +184,7 @@ def compile_emitter(document: Mapping[str, Any]) -> Emitter:
         size_end=_number(document.get("size_end", 0.01), "size_end", minimum=0.0, maximum=1.0e6),
         material=str(document.get("material", "default")),
         depth_bias=_number(document.get("depth_bias", 0.0), "depth_bias", minimum=-1.0e6, maximum=1.0e6),
+        origin_track=origin_track,
     )
 
 
@@ -211,12 +230,30 @@ def _spawn(emitter: Emitter, index: int, step: int) -> Particle:
     # Deterministic sub-frame phase offset keeps emitters spatially distributed.
     phase = (index + step) % emitter.count
     return Particle(
-        position=emitter.origin,
+        position=emitter.origin_track.value_at(step * TICKS_PER_STEP) if emitter.origin_track else emitter.origin,
         velocity=velocity,
         age_steps=phase % emitter.lifetime_steps,
         lifetime_steps=emitter.lifetime_steps,
         size=emitter.size_start,
     )
+
+
+def film_particles(emitter: Emitter, step: int) -> list[Particle]:
+    """Compute the film pass's finite-lifetime world-space particles at a fixed tick."""
+    lifetime = emitter.lifetime_steps
+    state = []
+    for index in range(emitter.count):
+        age = (step + index) % lifetime
+        age_seconds = age / SIMULATION_HZ
+        origin_tick = max(0, (step - age) * TICKS_PER_STEP)
+        origin = emitter.origin_track.value_at(origin_tick) if emitter.origin_track else emitter.origin
+        initial = _spawn(emitter, index, 0).velocity
+        drag = math.exp(-emitter.drag * age_seconds)
+        position = tuple(origin[i] + initial[i] * drag * age_seconds
+                         + 0.5 * emitter.gravity[i] * age_seconds ** 2 for i in range(3))
+        size = emitter.size_start + (emitter.size_end - emitter.size_start) * age / lifetime
+        state.append(Particle(position, initial, age, lifetime, size))
+    return state
 
 
 @dataclass

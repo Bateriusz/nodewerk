@@ -1,10 +1,21 @@
 {
   "format": "nw13.work-graph-experiment",
   "version": 1,
-  "criterion": "runtime_size_or_workload_feasibility",
-  "conventional_metric": 1.0,
+  "criterion": "median GPU dispatch time below 95% of conventional, exact output, backing allocation at most 32 MiB",
+  "conventional_metric": null,
   "work_graph_metric": null,
   "decision": "defer",
-  "reason": "matched Work Graphs measurement unavailable",
-  "satisfies_completion": false
+  "reason": "Native matched device measurements are pending.",
+  "satisfies_completion": false,
+  "functional_execution": "pending_native",
+  "workload": {
+    "source": "shaders/nw13/particle_routing.hlsl",
+    "harness": "src/nw13/work_graph.cpp",
+    "candidates": 1024,
+    "tick": 148800,
+    "samples_per_arm": 9,
+    "warmup_per_arm": 1,
+    "max_backing_bytes": 33554432,
+    "correctness": "Every output slot must equal the CPU oracle."
+  }
 }

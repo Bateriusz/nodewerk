@@ -18,6 +18,28 @@
         "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
         "count": { "type": "integer", "minimum": 1, "maximum": 65536 },
         "origin": { "$ref": "#/$defs/vec3" },
+        "origin_track": {
+          "type": "object",
+          "required": ["keys"],
+          "properties": {
+            "keys": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 4096,
+              "items": {
+                "type": "object",
+                "required": ["tick", "value"],
+                "properties": {
+                  "tick": { "type": "integer", "minimum": 0 },
+                  "value": { "$ref": "#/$defs/vec3" },
+                  "interpolation": { "enum": ["step", "linear", "smoothstep"] }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
         "direction": { "$ref": "#/$defs/vec3" },
         "speed_min": { "type": "number", "minimum": 0 },
         "speed_max": { "type": "number", "minimum": 0 },

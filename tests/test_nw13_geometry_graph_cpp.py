@@ -45,6 +45,12 @@ def cli_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
         "-o",
         str(executable),
     ]
+    if Path(compiler).stem.lower() == "cl":
+        command = [
+            compiler, "/nologo", "/std:c++20", "/EHsc", "/O2", f"/I{source_dir}",
+            str(source_dir / "nw_graph.cpp"), str(source_dir / "nw_graph_cli.cpp"),
+            f"/Fe:{executable}",
+        ]
     process = subprocess.run(command, capture_output=True, text=True, check=False, timeout=240, cwd=build_dir)
     assert process.returncode == 0, process.stderr
     return executable

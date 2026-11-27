@@ -5,9 +5,18 @@
     {
       "id": "nw.geom.sphere",
       "production_need": "hotel-room lamps, doorknobs and character joints",
-      "controls": ["radius"],
-      "animation": ["rigid transform", "no local animation state"],
-      "downstream": ["nw.geom.union", "nw.geom.subtract", "nw.geom.displace"],
+      "controls": [
+        "radius"
+      ],
+      "animation": [
+        "rigid transform",
+        "no local animation state"
+      ],
+      "downstream": [
+        "nw.geom.union",
+        "nw.geom.subtract",
+        "nw.geom.displace"
+      ],
       "temporal": "none; static initialization recipe",
       "realization": "bounded signed-distance primitive with conservative AABB",
       "backend": "backend-neutral authoring/compiler; common raster and optional DXR consume the same recipe",
@@ -17,9 +26,18 @@
     {
       "id": "nw.geom.box",
       "production_need": "hotel walls, corridor segments, furniture blocks and door slabs",
-      "controls": ["half_extents"],
-      "animation": ["rigid transform", "parented hinge on door slab"],
-      "downstream": ["nw.geom.union", "nw.geom.intersection", "nw.geom.subtract"],
+      "controls": [
+        "half_extents"
+      ],
+      "animation": [
+        "rigid transform",
+        "parented hinge on door slab"
+      ],
+      "downstream": [
+        "nw.geom.union",
+        "nw.geom.intersection",
+        "nw.geom.subtract"
+      ],
       "temporal": "none; static initialization recipe",
       "realization": "bounded axis-aligned box signed-distance primitive",
       "backend": "backend-neutral",
@@ -29,9 +47,17 @@
     {
       "id": "nw.geom.cylinder",
       "production_need": "columns, lamp stems and corridor arch supports",
-      "controls": ["radius", "half_height"],
-      "animation": ["rigid transform"],
-      "downstream": ["nw.geom.union", "nw.geom.subtract"],
+      "controls": [
+        "radius",
+        "half_height"
+      ],
+      "animation": [
+        "rigid transform"
+      ],
+      "downstream": [
+        "nw.geom.union",
+        "nw.geom.subtract"
+      ],
       "temporal": "none",
       "realization": "bounded Y-axis cylinder",
       "backend": "backend-neutral",
@@ -41,9 +67,17 @@
     {
       "id": "nw.geom.capsule",
       "production_need": "articulated character limbs and held-prop contact shapes",
-      "controls": ["radius", "half_height"],
-      "animation": ["rigid parent-child tracks"],
-      "downstream": ["nw.geom.smooth_union", "nw.geom.union"],
+      "controls": [
+        "radius",
+        "half_height"
+      ],
+      "animation": [
+        "rigid parent-child tracks"
+      ],
+      "downstream": [
+        "nw.geom.smooth_union",
+        "nw.geom.union"
+      ],
       "temporal": "none; animation binds transforms, not geometry state",
       "realization": "bounded Y-axis capsule",
       "backend": "backend-neutral",
@@ -53,9 +87,16 @@
     {
       "id": "nw.geom.torus",
       "production_need": "door handle, lamp ring and corridor trim",
-      "controls": ["major_radius", "minor_radius"],
-      "animation": ["rigid transform"],
-      "downstream": ["nw.geom.union"],
+      "controls": [
+        "major_radius",
+        "minor_radius"
+      ],
+      "animation": [
+        "rigid transform"
+      ],
+      "downstream": [
+        "nw.geom.union"
+      ],
       "temporal": "none",
       "realization": "bounded torus signed-distance primitive distinct from nw.mesh.torus aggregation",
       "backend": "backend-neutral",
@@ -65,9 +106,15 @@
     {
       "id": "nw.geom.translate",
       "production_need": "place room, corridor and props in world space",
-      "controls": ["offset"],
-      "animation": ["rigid transformation"],
-      "downstream": ["all CSG and deformation recipes"],
+      "controls": [
+        "offset"
+      ],
+      "animation": [
+        "rigid transformation"
+      ],
+      "downstream": [
+        "all CSG and deformation recipes"
+      ],
       "temporal": "none",
       "realization": "inverse-point transform with conservative bounds",
       "backend": "backend-neutral",
@@ -77,9 +124,16 @@
     {
       "id": "nw.geom.rotate",
       "production_need": "hinged door, camera-independent prop orientation and corridor turn",
-      "controls": ["axis", "degrees"],
-      "animation": ["typed rotation track"],
-      "downstream": ["CSG and deformations"],
+      "controls": [
+        "axis",
+        "degrees"
+      ],
+      "animation": [
+        "typed rotation track"
+      ],
+      "downstream": [
+        "CSG and deformations"
+      ],
       "temporal": "track values are sampled at fixed ticks",
       "realization": "inverse rigid rotation",
       "backend": "backend-neutral",
@@ -89,9 +143,16 @@
     {
       "id": "nw.geom.scale",
       "production_need": "furniture proportions and character part sizing",
-      "controls": ["scale"],
-      "animation": ["typed scale track", "negative/zero scale diagnosed"],
-      "downstream": ["CSG and deformations"],
+      "controls": [
+        "scale"
+      ],
+      "animation": [
+        "typed scale track",
+        "negative/zero scale diagnosed"
+      ],
+      "downstream": [
+        "CSG and deformations"
+      ],
       "temporal": "fixed-tick sampling",
       "realization": "bounded positive scale with Lipschitz correction",
       "backend": "backend-neutral",
@@ -101,9 +162,16 @@
     {
       "id": "nw.geom.union",
       "production_need": "room shell, character body and corridor assembly",
-      "controls": ["ordered solid operands"],
-      "animation": ["operands inherit rigid transforms"],
-      "downstream": ["deformations", "rendering"],
+      "controls": [
+        "ordered solid operands"
+      ],
+      "animation": [
+        "operands inherit rigid transforms"
+      ],
+      "downstream": [
+        "deformations",
+        "rendering"
+      ],
       "temporal": "none",
       "realization": "min signed-distance solid union",
       "backend": "backend-neutral",
@@ -113,9 +181,15 @@
     {
       "id": "nw.geom.intersection",
       "production_need": "door frame cut to wall opening and bounded room trim",
-      "controls": ["ordered solid operands"],
-      "animation": ["operands inherit rigid transforms"],
-      "downstream": ["rendering"],
+      "controls": [
+        "ordered solid operands"
+      ],
+      "animation": [
+        "operands inherit rigid transforms"
+      ],
+      "downstream": [
+        "rendering"
+      ],
       "temporal": "none",
       "realization": "max signed-distance solid intersection",
       "backend": "backend-neutral",
@@ -125,9 +199,15 @@
     {
       "id": "nw.geom.subtract",
       "production_need": "door and window openings, corridor recesses",
-      "controls": ["ordered solid operands"],
-      "animation": ["operands inherit rigid transforms"],
-      "downstream": ["rendering"],
+      "controls": [
+        "ordered solid operands"
+      ],
+      "animation": [
+        "operands inherit rigid transforms"
+      ],
+      "downstream": [
+        "rendering"
+      ],
       "temporal": "none",
       "realization": "max(a, -b) solid subtraction",
       "backend": "backend-neutral",
@@ -137,9 +217,16 @@
     {
       "id": "nw.geom.smooth_union",
       "production_need": "soft character joins and rounded room trim",
-      "controls": ["blend distance k"],
-      "animation": ["operands inherit rigid transforms"],
-      "downstream": ["deformations", "rendering"],
+      "controls": [
+        "blend distance k"
+      ],
+      "animation": [
+        "operands inherit rigid transforms"
+      ],
+      "downstream": [
+        "deformations",
+        "rendering"
+      ],
       "temporal": "none",
       "realization": "bounded polynomial smooth union; k=0 is exactly union",
       "backend": "backend-neutral",
@@ -149,9 +236,17 @@
     {
       "id": "nw.geom.repeat",
       "production_need": "corridor windows, wall panels and parallax depth layers",
-      "controls": ["spacing", "finite counts"],
-      "animation": ["rigid per-instance offsets"],
-      "downstream": ["rendering", "deformations"],
+      "controls": [
+        "spacing",
+        "finite counts"
+      ],
+      "animation": [
+        "rigid per-instance offsets"
+      ],
+      "downstream": [
+        "rendering",
+        "deformations"
+      ],
       "temporal": "none; finite counts are admission-checked",
       "realization": "bounded nearest-lattice repetition with explicit instance budget",
       "backend": "backend-neutral",
@@ -161,9 +256,16 @@
     {
       "id": "nw.geom.twist",
       "production_need": "corridor arch trim and stylized door frame",
-      "controls": ["half_height", "max_degrees"],
-      "animation": ["static or rigid parent transform"],
-      "downstream": ["rendering"],
+      "controls": [
+        "half_height",
+        "max_degrees"
+      ],
+      "animation": [
+        "static or rigid parent transform"
+      ],
+      "downstream": [
+        "rendering"
+      ],
       "temporal": "none",
       "realization": "bounded position-dependent rotation with conservative bounds",
       "backend": "backend-neutral",
@@ -173,9 +275,16 @@
     {
       "id": "nw.geom.bend",
       "production_need": "curved corridor wall and bent door frame",
-      "controls": ["half_width", "max_degrees"],
-      "animation": ["static or rigid parent transform"],
-      "downstream": ["rendering"],
+      "controls": [
+        "half_width",
+        "max_degrees"
+      ],
+      "animation": [
+        "static or rigid parent transform"
+      ],
+      "downstream": [
+        "rendering"
+      ],
       "temporal": "none",
       "realization": "bounded position-dependent bend with conservative bounds",
       "backend": "backend-neutral",
@@ -185,9 +294,17 @@
     {
       "id": "nw.geom.displace",
       "production_need": "seeded wall surface roughness and particle-borne debris",
-      "controls": ["seed", "amplitude", "frequency"],
-      "animation": ["seed is stable across frames"],
-      "downstream": ["rendering"],
+      "controls": [
+        "seed",
+        "amplitude",
+        "frequency"
+      ],
+      "animation": [
+        "seed is stable across frames"
+      ],
+      "downstream": [
+        "rendering"
+      ],
       "temporal": "clean-run seed must reproduce identical geometry",
       "realization": "seeded bounded value-noise displacement",
       "backend": "backend-neutral",
@@ -197,9 +314,20 @@
     {
       "id": "nw.scene.object",
       "production_need": "stable object identity binding geometry, material, light and transform",
-      "controls": ["parent", "geometry ref", "material ref", "static transform"],
-      "animation": ["typed position/rotation/scale tracks"],
-      "downstream": ["camera rendering", "DXR TLAS", "particles"],
+      "controls": [
+        "parent",
+        "geometry ref",
+        "material ref",
+        "static transform"
+      ],
+      "animation": [
+        "typed position/rotation/scale tracks"
+      ],
+      "downstream": [
+        "camera rendering",
+        "DXR TLAS",
+        "particles"
+      ],
       "temporal": "fixed-tick transform evaluation",
       "realization": "scene hierarchy separate from CSG and mesh aggregation",
       "backend": "backend-neutral",
@@ -209,9 +337,22 @@
     {
       "id": "nw.scene.camera",
       "production_need": "parallax corridor shot, camera motion around frozen action and shot cut",
-      "controls": ["shots", "pose tracks", "target", "projection", "cuts", "transitions"],
-      "animation": ["camera time independent of action time"],
-      "downstream": ["render", "particles depth occlusion", "DXR"],
+      "controls": [
+        "shots",
+        "pose tracks",
+        "target",
+        "projection",
+        "cuts",
+        "transitions"
+      ],
+      "animation": [
+        "camera time independent of action time"
+      ],
+      "downstream": [
+        "render",
+        "particles depth occlusion",
+        "DXR"
+      ],
       "temporal": "fixed-tick transport with cut notifications",
       "realization": "bounded shot graph with degenerate-camera and clipping diagnostics",
       "backend": "backend-neutral",
@@ -221,9 +362,23 @@
     {
       "id": "nw.particles.system",
       "production_need": "depth-occluded hotel dust and corridor debris",
-      "controls": ["seed", "count", "velocity", "lifetime", "size", "material"],
-      "animation": ["animated emitter", "world-space velocity"],
-      "downstream": ["composite", "bloom", "tonemap"],
+      "controls": [
+        "seed",
+        "count",
+        "velocity",
+        "lifetime",
+        "size",
+        "material"
+      ],
+      "animation": [
+        "animated emitter",
+        "world-space velocity"
+      ],
+      "downstream": [
+        "composite",
+        "bloom",
+        "tonemap"
+      ],
       "temporal": "fixed 120 Hz history; reset/seek/rewind reconstruction",
       "realization": "explicit History scheduler and bounded checkpoints",
       "backend": "backend-neutral",
@@ -233,9 +388,19 @@
     {
       "id": "nw.feedback.image",
       "production_need": "flash afterglow and corridor transient trails",
-      "controls": ["decay", "gain", "occlusion mask"],
-      "animation": ["prior scheduled state"],
-      "downstream": ["composite", "bloom", "tonemap"],
+      "controls": [
+        "decay",
+        "gain",
+        "occlusion mask"
+      ],
+      "animation": [
+        "prior scheduled state"
+      ],
+      "downstream": [
+        "composite",
+        "bloom",
+        "tonemap"
+      ],
       "temporal": "current image + prior state; cleared at cuts and time discontinuity",
       "realization": "bounded feedback with occluded-history rejection",
       "backend": "backend-neutral",
@@ -245,9 +410,22 @@
     {
       "id": "nw.audio.instrument_sequence",
       "production_need": "distinct lead, bass, percussion and event effects",
-      "controls": ["waveform", "seed", "envelope", "filter", "gain", "pan"],
-      "animation": ["note sequence", "bus automation"],
-      "downstream": ["shared procedural-audio renderer", "NWAS v1 transport"],
+      "controls": [
+        "waveform",
+        "seed",
+        "envelope",
+        "filter",
+        "gain",
+        "pan"
+      ],
+      "animation": [
+        "note sequence",
+        "bus automation"
+      ],
+      "downstream": [
+        "shared procedural-audio renderer",
+        "NWAS v1 transport"
+      ],
       "temporal": "48 kHz authoritative sample clock; cue alignment within one frame",
       "realization": "versioned nw13.instrument-sequence v2 compiled to preserved NWAS v1",
       "backend": "backend-neutral offline CPU; WASAPI consumes the shared clock",
@@ -257,9 +435,16 @@
     {
       "id": "nw.mesh.torus",
       "production_need": "existing NW-06/NW-11 production mesh aggregation",
-      "controls": ["major/minor segments and radii"],
-      "animation": ["rigid instance transforms"],
-      "downstream": ["instanced render", "PackagePlayer"],
+      "controls": [
+        "major/minor segments and radii"
+      ],
+      "animation": [
+        "rigid instance transforms"
+      ],
+      "downstream": [
+        "instanced render",
+        "PackagePlayer"
+      ],
       "temporal": "existing NW-06 timeline",
       "realization": "retain the established mesh-recipe path; do not conflate with nw.geom.torus solid CSG",
       "backend": "backend-neutral",
@@ -295,5 +480,6 @@
       "status": "unresolved",
       "description": "Legacy UV generation/assignment is not extracted; material mapping remains independently authored."
     }
-  ]
+  ],
+  "coverage_map": "semantic-coverage.v1.json"
 }

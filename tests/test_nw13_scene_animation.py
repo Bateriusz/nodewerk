@@ -210,3 +210,18 @@ def test_fixed_tick_transport_freeze_reverse_resume_cut_and_one_shot_cues(scene:
     # A new loop generation re-arms the declared one-shot cue.
     assert sum(1 for event in transport.events if event.get("cue_id") == "door_hinge") == 2
 
+
+
+def test_composed_transforms_and_animated_geometry_extents_are_admitted() -> None:
+    document = json.loads(SCENE_PATH.read_text())
+    by_id = {obj["id"]: obj for obj in document["objects"]}
+    by_id["corridor_wall"]["transform"]["position"] = [9, 0, 0]
+    by_id["corridor_windows"]["transform"]["position"] = [9, 0, 0]
+    with pytest.raises(scene_module.SceneError, match="world-space extents"):
+        scene_module.compile_scene(document)
+
+    document = json.loads(SCENE_PATH.read_text())
+    geometry_bounds = {obj["geometry"]: ((0, 0, 0), (0, 0, 0)) for obj in document["objects"]}
+    geometry_bounds["handle"] = ((-10, 0, 0), (10, 0, 0))
+    with pytest.raises(scene_module.SceneError, match="handle world-space extents"):
+        scene_module.compile_scene(document, geometry_bounds=geometry_bounds)

@@ -390,6 +390,14 @@ if(NW05_GENERATED_PLAYER_SOURCE OR NW05_FROZEN_EMBEDDED_SPECIALIZATION)
         NW06_COMPILE_HALF_RESOLUTION_BLOOM=$<BOOL:${NW06_COMPILE_HALF_RESOLUTION_BLOOM}>
         NW06_COMPILE_TONEMAP=$<BOOL:${NW06_COMPILE_TONEMAP}>
     )
+    if(NW13_INLINE_RAY_PAYLOAD_DIR)
+        if(NOT WIN32 OR NW05_FROZEN_EMBEDDED_SPECIALIZATION OR
+           NOT EXISTS "${NW13_INLINE_RAY_PAYLOAD_DIR}/nw13_inline_ray_payload.h")
+            message(FATAL_ERROR "NW-13 inline ray lowering requires its offline payload and the shared Windows player")
+        endif()
+        target_compile_definitions(nw05_player_bootstrap PRIVATE NW13_INLINE_RAY=1)
+        target_include_directories(nw05_player_bootstrap PRIVATE "${NW13_INLINE_RAY_PAYLOAD_DIR}")
+    endif()
     add_dependencies(nw05_player_bootstrap nw_offline_shaders)
     add_dependencies(nw05_player_bootstrap nw_offline_display_shader)
     if(WIN32)

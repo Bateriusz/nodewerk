@@ -14,6 +14,7 @@ from scene composition/mesh aggregation (see ``nw13_scene``).
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import math
 from dataclasses import dataclass, field
@@ -490,15 +491,12 @@ def evaluate_node(node: Mapping[str, Any], point: Sequence[float]) -> float:
                 [_diagnostic("geometry_invalid_parameter", "counts must be an integer vec3", parameter="counts")],
             )
         counts = tuple(_integer({"counts": value}, "counts", minimum=1, maximum=64) for value in counts_raw)
-        nearest = tuple(
-            round(p[i] / spacing[i]) if spacing[i] > 1.0e-12 else 0 for i in range(3)
+        child = _require_children(node)[0]
+        return min(
+            evaluate_node(child, tuple(p[i] - spacing[i] * (index[i] - counts[i] // 2)
+                                       for i in range(3)))
+            for index in itertools.product(*(range(count) for count in counts))
         )
-        clamped = tuple(
-            max(-(counts[i] - 1) // 2, min((counts[i] - 1) // 2, nearest[i]))
-            for i in range(3)
-        )
-        local = tuple(p[i] - spacing[i] * clamped[i] for i in range(3))
-        return evaluate_node(_require_children(node)[0], local)
     if op == "nw.geom.twist":
         half_height = _number(params, "half_height", minimum=1.0e-6, maximum=1.0e6)
         max_degrees = _number(params, "max_degrees", minimum=-3600.0, maximum=3600.0)
@@ -523,33 +521,33 @@ def evaluate_node(node: Mapping[str, Any], point: Sequence[float]) -> float:
     )
 
 
-def bounds_node(node: Mapping[str, Any]) -> AABB:
-    """Return a conservative bound that contains the complete surface."""
+def bounds_node(node: Mapping[str, Any], level: float = 0.0) -> AABB:
+    """Enclose the field's sublevel set, including positive displacement margins."""
     op = _operation(node)
     params = _params(node)
     if op == "nw.geom.sphere":
-        radius = _number(params, "radius", minimum=1.0e-6, maximum=1.0e6)
+        radius = _number(params, "radius", minimum=1.0e-6, maximum=1.0e6) + level
         return AABB((-radius, -radius, -radius), (radius, radius, radius))
     if op == "nw.geom.box":
         half = _vec(params.get("half_extents"), 3, "half_extents")
-        return AABB(tuple(-value for value in half), tuple(half))  # type: ignore[arg-type]
+        return AABB(tuple(-value for value in half), tuple(half)).expanded(level)  # type: ignore[arg-type]
     if op == "nw.geom.cylinder":
         radius = _number(params, "radius", minimum=1.0e-6, maximum=1.0e6)
         half_height = _number(params, "half_height", minimum=1.0e-6, maximum=1.0e6)
-        return AABB((-radius, -half_height, -radius), (radius, half_height, radius))
+        return AABB((-radius, -half_height, -radius), (radius, half_height, radius)).expanded(level)
     if op == "nw.geom.capsule":
         radius = _number(params, "radius", minimum=1.0e-6, maximum=1.0e6)
         half_height = _number(params, "half_height", minimum=0.0, maximum=1.0e6)
         extent = radius + half_height
-        return AABB((-radius, -extent, -radius), (radius, extent, radius))
+        return AABB((-radius, -extent, -radius), (radius, extent, radius)).expanded(level)
     if op == "nw.geom.torus":
         major = _number(params, "major_radius", minimum=1.0e-6, maximum=1.0e6)
         minor = _number(params, "minor_radius", minimum=1.0e-6, maximum=1.0e6)
         extent = major + minor
-        return AABB((-extent, -minor, -extent), (extent, minor, extent))
+        return AABB((-extent, -minor, -extent), (extent, minor, extent)).expanded(level)
     if op == "nw.geom.translate":
         offset = _vec(params.get("offset"), 3, "offset")
-        child = bounds_node(_require_children(node)[0])
+        child = bounds_node(_require_children(node)[0], level)
         return AABB(
             tuple(child.minimum[i] + offset[i] for i in range(3)),  # type: ignore[arg-type]
             tuple(child.maximum[i] + offset[i] for i in range(3)),  # type: ignore[arg-type]
@@ -557,7 +555,7 @@ def bounds_node(node: Mapping[str, Any]) -> AABB:
     if op == "nw.geom.rotate":
         axis = params.get("axis", "y")
         _number(params, "degrees", minimum=-3600.0, maximum=3600.0)
-        child = bounds_node(_require_children(node)[0])
+        child = bounds_node(_require_children(node)[0], level)
         radius = child.radius
         center = _rotate_point(child.center, axis, _number(params, "degrees", minimum=-3600.0, maximum=3600.0))
         # Rotate the bound centre and keep the enclosing radius.  Rotating the
@@ -568,20 +566,20 @@ def bounds_node(node: Mapping[str, Any]) -> AABB:
         )
     if op == "nw.geom.scale":
         scale = _vec(params.get("scale"), 3, "scale")
-        child = bounds_node(_require_children(node)[0])
+        child = bounds_node(_require_children(node)[0], level / min(scale))
         return AABB(
             tuple(child.minimum[i] * scale[i] for i in range(3)),  # type: ignore[arg-type]
             tuple(child.maximum[i] * scale[i] for i in range(3)),  # type: ignore[arg-type]
         )
     if op == "nw.geom.union":
-        result = bounds_node(_require_children(node)[0])
+        result = bounds_node(_require_children(node)[0], level)
         for child in _require_children(node)[1:]:
-            result = result.union(bounds_node(child))
+            result = result.union(bounds_node(child, level))
         return result
     if op == "nw.geom.intersection":
-        result = bounds_node(_require_children(node)[0])
+        result = bounds_node(_require_children(node)[0], level)
         for child in _require_children(node)[1:]:
-            other = bounds_node(child)
+            other = bounds_node(child, level)
             if any(result.minimum[i] > other.maximum[i] or other.minimum[i] > result.maximum[i] for i in range(3)):
                 # Disjoint solid intersection has no surface.  A degenerate
                 # bound is a valid conservative representation.
@@ -594,13 +592,15 @@ def bounds_node(node: Mapping[str, Any]) -> AABB:
         return result
     if op == "nw.geom.subtract":
         a, _ = _require_children(node)
-        return bounds_node(a)
+        return bounds_node(a, level)
     if op == "nw.geom.smooth_union":
         k = _number(params, "k", minimum=0.0, maximum=1.0e6)
-        result = bounds_node(_require_children(node)[0])
-        for child in _require_children(node)[1:]:
-            result = result.union(bounds_node(child))
-        return result.expanded(k * 0.5)
+        children = _require_children(node)
+        child_level = level + (len(children) - 1) * k * 0.25
+        result = bounds_node(children[0], child_level)
+        for child in children[1:]:
+            result = result.union(bounds_node(child, child_level))
+        return result
     if op == "nw.geom.repeat":
         spacing = _vec(params.get("spacing"), 3, "spacing")
         counts_raw = params.get("counts")
@@ -610,11 +610,12 @@ def bounds_node(node: Mapping[str, Any]) -> AABB:
                 [_diagnostic("geometry_invalid_parameter", "counts must be an integer vec3", parameter="counts")],
             )
         counts = tuple(_integer({"counts": value}, "counts", minimum=1, maximum=64) for value in counts_raw)
-        child = bounds_node(_require_children(node)[0])
-        expansion = tuple((counts[i] - 1) * spacing[i] * 0.5 for i in range(3))
+        child = bounds_node(_require_children(node)[0], level)
+        offsets = [(-(counts[i] // 2) * spacing[i], ((counts[i] - 1) // 2) * spacing[i])
+                   for i in range(3)]
         return AABB(
-            tuple(child.minimum[i] - expansion[i] - spacing[i] * 0.5 for i in range(3)),  # type: ignore[arg-type]
-            tuple(child.maximum[i] + expansion[i] + spacing[i] * 0.5 for i in range(3)),  # type: ignore[arg-type]
+            tuple(child.minimum[i] + min(offsets[i]) for i in range(3)),  # type: ignore[arg-type]
+            tuple(child.maximum[i] + max(offsets[i]) for i in range(3)),  # type: ignore[arg-type]
         )
     if op in {"nw.geom.twist", "nw.geom.bend"}:
         _number(
@@ -629,7 +630,7 @@ def bounds_node(node: Mapping[str, Any]) -> AABB:
             minimum=-3600.0 if op == "nw.geom.twist" else -180.0,
             maximum=3600.0 if op == "nw.geom.twist" else 180.0,
         )
-        child = bounds_node(_require_children(node)[0])
+        child = bounds_node(_require_children(node)[0], level)
         radius = child.radius
         center = child.center
         # Twist and bend rotate points about an axis through the origin by an
@@ -644,7 +645,7 @@ def bounds_node(node: Mapping[str, Any]) -> AABB:
         amplitude = _number(params, "amplitude", minimum=0.0, maximum=1.0e6)
         _integer(params, "seed", minimum=0, maximum=4294967295)
         _number(params, "frequency", minimum=1.0e-6, maximum=1.0e6)
-        return bounds_node(_require_children(node)[0]).expanded(amplitude)
+        return bounds_node(_require_children(node)[0], level + amplitude)
     raise GeometryError(
         f"unknown geometry operator '{op}'",
         [_diagnostic("geometry_unknown_operator", f"unknown geometry operator '{op}'", operator=op)],
@@ -656,6 +657,7 @@ def _prepare_node(
     budget: Budget,
     depth: int,
     stats: dict[str, int],
+    multiplicity: int = 1,
 ) -> None:
     if depth > budget.max_depth:
         raise GeometryError(
@@ -716,17 +718,12 @@ def _prepare_node(
             )
         counts = tuple(_integer({"counts": value}, "counts", minimum=1, maximum=64) for value in counts_raw)
         instances = counts[0] * counts[1] * counts[2]
-        stats["repetition_instances"] += instances
-        stats["generated_primitives"] += instances
+        multiplicity *= instances
+        stats["repetition_instances"] = max(stats["repetition_instances"], multiplicity)
         if stats["repetition_instances"] > budget.max_repetition_instances:
             raise GeometryError(
                 "finite repetition bound exceeded",
                 [_diagnostic("geometry_repetition_budget_exceeded", "finite repetition bound exceeded", instances=stats["repetition_instances"])],
-            )
-        if stats["generated_primitives"] > budget.max_generated_primitives:
-            raise GeometryError(
-                "generated geometry bound exceeded",
-                [_diagnostic("geometry_generated_geometry_budget_exceeded", "generated geometry bound exceeded", primitives=stats["generated_primitives"])],
             )
     elif op == "nw.geom.twist":
         _number(params, "half_height", minimum=1.0e-6, maximum=1.0e6)
@@ -738,8 +735,16 @@ def _prepare_node(
         _integer(params, "seed", minimum=0, maximum=4294967295)
         _number(params, "amplitude", minimum=0.0, maximum=1.0e6)
         _number(params, "frequency", minimum=1.0e-6, maximum=1.0e6)
-    for child in _require_children(node):
-        _prepare_node(child, budget, depth + 1, stats)
+    children = _require_children(node)
+    if not children:
+        stats["generated_primitives"] += multiplicity
+        if stats["generated_primitives"] > budget.max_generated_primitives:
+            raise GeometryError(
+                "generated geometry bound exceeded",
+                [_diagnostic("geometry_generated_geometry_budget_exceeded", "generated geometry bound exceeded", primitives=stats["generated_primitives"])],
+            )
+    for child in children:
+        _prepare_node(child, budget, depth + 1, stats, multiplicity)
 
 
 def prepare(document: Mapping[str, Any], budget: Budget | None = None) -> PreparedGeometry:
@@ -770,7 +775,13 @@ def prepare(document: Mapping[str, Any], budget: Budget | None = None) -> Prepar
     active_budget = budget or Budget()
     if isinstance(document.get("budget"), Mapping):
         values = document["budget"]
-        active_budget = Budget(**{name: int(values.get(name, getattr(active_budget, name))) for name in active_budget.to_dict()})
+        limits = active_budget.to_dict()
+        for name, limit in limits.items():
+            requested = values.get(name, limit)
+            if type(requested) is not int or requested <= 0:
+                raise GeometryError(f"geometry budget {name} must be a positive integer")
+            limits[name] = min(requested, limit)
+        active_budget = Budget(**limits)
     stats = {"nodes": 0, "repetition_instances": 0, "generated_primitives": 0}
     _prepare_node(root, active_budget, 0, stats)
     estimated_steps = stats["nodes"] * 64 + stats["generated_primitives"] * 8
@@ -916,9 +927,9 @@ def ray_march(
         value = prepared.evaluate(point)
         if abs(value) <= epsilon:
             return RayHit(distance, point, step + 1)
-        distance += max(value * 0.75, epsilon)
+        distance += max(abs(value) * 0.75, epsilon)
         if distance > max_distance:
             break
-        point = tuple(point[i] + ray[i] * distance for i in range(3))  # type: ignore[assignment]
+        point = tuple(origin[i] + ray[i] * distance for i in range(3))  # type: ignore[assignment]
     return RayHit(math.inf, point, max_steps)
 

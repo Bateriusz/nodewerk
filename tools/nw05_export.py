@@ -147,6 +147,7 @@ class ExportSettings:
     fusion_max_expression_bytes: int = optimizer.DEFAULT_FUSION_MAX_EXPRESSION_BYTES
     packaged_checkpoint_ticks: tuple[int, ...] = ()
     audio_song_path: str = ""
+    film_inline_ray_payload_dir: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -752,7 +753,8 @@ def _attach_audio_manifest(manifest: dict[str, Any], song: bytes) -> None:
     manifest["audio"] = {
         "format": "NWAS", "version": int(decoded["version"]),
         "duration_ticks": duration,
-        "sample_rate": 48000, "channels": 1, "bits_per_sample": 16,
+        "sample_rate": 48000, "channels": 2 if decoded["version"] == 2 else 1,
+        "bits_per_sample": 16,
         "clock": "wasapi_endpoint", "initialization_failure": "fail",
         "song_sha256": hashlib.sha256(song).hexdigest(),
         "song_bytes": len(song), "package_section": "AUDI",
@@ -779,8 +781,8 @@ def _audio_playback_source(audio: Mapping[str, Any]) -> str:
     // with the identical input, without linking the Windows output layer.
     // The probe renders a fixed PCM block, not the normal frame loop.
     (void)max_frames;
-    std::int16_t pcm[256]{{}};
-    if (!nw::audio::RenderPcm(song, {{}}, 0, pcm, 256)) return 70;
+    std::int16_t pcm[{256 * int(audio["channels"])}]{{}};
+    if (!nw::audio::RenderPcm(song, nw::audio::SongPcmFormat(song), 0, pcm, 256)) return 70;
     std::uint64_t checksum = 0;
     for (const auto sample : pcm)
         checksum = checksum * 1099511628211ULL + static_cast<std::uint16_t>(sample);
@@ -868,6 +870,7 @@ def generate_player_source(
     link_int64 = bool(feature_requirements.get("int64_shader_ops", False))
     implementation_mask = _specialized_implementation_mask(manifest)
     retained = manifest.get("retained", {})
+    film_controls = "nw.shader.film" in retained.get("operators", [])
     runtime_implementations = {
         str(item) for item in retained.get("runtime_implementations", [])
     }
@@ -1115,6 +1118,7 @@ def generate_player_source(
         "    unsigned long long max_frames = 0;\n"
         "    unsigned long long explicit_tick = 0;\n"
         "    bool has_explicit_tick = false;\n"
+        + ("    bool headless_smoke = false;\n    const char* film_capture = nullptr;\n" if film_controls else "")
         + ("#if !NW_AUDIO_MEASURE_SYNTHESIS_ONLY\n"
            "    bool audio_evidence = false;\n#endif\n" if manifest.get("audio") else "") +
         "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
@@ -1138,6 +1142,15 @@ def generate_player_source(
 
         "        } else if (std::string(argv[index]) == \"--allow-software-adapter\") {\n"
         "            config.allow_software_adapter = true;\n"
+        + ("        } else if (std::string(argv[index]) == \"--headless\") {\n"
+           "            headless_smoke = true;\n"
+           "            config.headless = true;\n"
+           "            config.visible_window = false;\n"
+           "            config.create_window = false;\n"
+           "        } else if (std::strcmp(argv[index], \"--film-capture\") == 0 && index + 1 < argc) {\n"
+           "            film_capture = argv[++index];\n"
+           "            emit_image_hash = true;\n" if film_controls else "")
+        +
         "        } else if (std::string(argv[index]) == \"--force-non-aliased-plan\") {\n"
         "            config.force_non_aliased_plan = true;\n"
         "        } else if (std::string(argv[index]) == \"--validation\") {\n"
@@ -1173,7 +1186,14 @@ def generate_player_source(
         "    }\n"
         "#endif\n"
         "    nw::player::PackagePlayer player(config);\n"
+        + ("    const auto startup_begin = std::chrono::steady_clock::now();\n" if film_controls else "")
+        +
         "    const auto status = player.initialize(embedded.bytes, embedded.size);\n"
+        + ("    const auto startup = std::chrono::steady_clock::now() - startup_begin;\n"
+           "    std::printf(\"NW13_STARTUP_US=%lld\\n\", static_cast<long long>(\n"
+           "        std::chrono::duration_cast<std::chrono::microseconds>(startup).count()));\n"
+           if film_controls else "")
+        +
         "    if (status != nw::player::ExitCode::Success) {\n"
         "#if NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
         "        return static_cast<int>(status);\n"
@@ -1201,7 +1221,8 @@ def generate_player_source(
         "        }\n"
         "        std::printf(\"NW05_EXPLICIT_TICK=%llu\\n\", static_cast<unsigned long long>(explicit_tick));\n"
         "#ifdef _WIN32\n"
-        "        ::Sleep(1500u);\n"
+        + ("        if (!headless_smoke) ::Sleep(1500u);\n" if film_controls else "        ::Sleep(1500u);\n")
+        +
         "#else\n"
         "        std::this_thread::sleep_for(std::chrono::milliseconds(1500));\n"
         "#endif\n"
@@ -1218,6 +1239,13 @@ def generate_player_source(
         "            (void)player.shutdown();\n"
         "            return reported;\n"
         "        }\n"
+        + ("        if (film_capture != nullptr) {\n"
+           "            FILE* file = std::fopen(film_capture, \"wb\");\n"
+           "            if (!file) return 70;\n"
+           "            const auto written = std::fwrite(image.data(), 1, image.size(), file);\n"
+           "            if (std::fclose(file) != 0 || written != image.size()) return 70;\n"
+           "        }\n" if film_controls else "")
+        +
         "        std::uint64_t hash = 1469598103934665603ULL;\n"
         "        std::uint64_t nonzero_bytes = 0u;\n"
         "        for (const std::uint8_t byte : image) {\n"
@@ -1231,6 +1259,11 @@ def generate_player_source(
         "    }\n"
         "#endif\n"
         "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+        + ("    const auto& stats = player.allocation_stats();\n"
+           "    std::printf(\"NW13_MANAGED_COMMITTED_BYTES=%llu\\n\", static_cast<unsigned long long>(\n"
+           "        stats.engine_resource_bytes + stats.engine_upload_bytes));\n"
+           if film_controls else "")
+        +
         "    std::printf(\"NW05_ADAPTER=%s\\n\", player.queried_capabilities().adapter_description.c_str());\n"
         "    std::printf(\"NW05_DRIVER=%s\\n\", player.queried_capabilities().driver_version.c_str());\n"
         "    std::printf(\"NW05_VENDOR_ID=%u\\n\", player.queried_capabilities().vendor_id);\n"
@@ -1506,6 +1539,7 @@ def _build_specialized_player(
     build_root_override: Path | None = None,
     frozen_embedded_specialization: bool = False,
     audio_measure_synthesis_only: bool = False,
+    film_inline_ray_payload_dir: str = "",
 ) -> bytes:
     if audio_measure_synthesis_only and not manifest.get("audio"):
         raise ExportError("synthesis-only measurement requires audio manifest")
@@ -1578,6 +1612,8 @@ def _build_specialized_player(
         f"-D{name}:BOOL={'ON' if enabled else 'OFF'}"
         for name, enabled in sorted(flags.items())
     )
+    if film_inline_ray_payload_dir:
+        configure.append(f"-DNW13_INLINE_RAY_PAYLOAD_DIR:PATH={film_inline_ray_payload_dir}")
     for command in (
         configure,
         ["cmake", "--build", str(build_root), "--target", "nw05_generated_player"],
@@ -1629,6 +1665,7 @@ _PACKAGE_UPLOAD_OPERATORS = {
 
 _PACKAGE_RENDER_OPERATORS = {
     "nw.render.fullscreen",
+    "nw.render.film",
     "nw.render.gbuffer",
     "nw.render.composite",
     "nw.render.present",
@@ -1948,9 +1985,12 @@ def _build_graph_derived_package(
             "nw.texture.procedural",
             "nw.residency.upload_texture",
             "nw.render.fullscreen",
+            "nw.render.film",
             "nw.render.present",
         }
     )
+    if "nw.shader.film" in used_operators:
+        supported.update(operator for operator in used_operators if operator.startswith("nw.geom."))
     unsupported = sorted(used_operators - supported)
     if unsupported:
         raise ExportError(
@@ -2723,10 +2763,11 @@ def _compile_profile_package(
         apply_accepted_fusions=not has_composed_shader,
     )
     width, height = _graph_render_dimensions(document, optimized)
-    thread_group = (max(1, min(1024, width)), 1, 1)
+    film = any(node.operator_id == "nw.shader.film" for node in optimized.nodes)
+    thread_group = (8, 8, 1) if film else (max(1, min(1024, width)), 1, 1)
     dispatch_groups = (
         (width + thread_group[0] - 1) // thread_group[0],
-        max(1, height),
+        (height + thread_group[1] - 1) // thread_group[1],
         1,
     )
     texture_sample_roots = {
@@ -3084,9 +3125,17 @@ def export_graph(
     prepare_staging: Callable[[Path], None] | None = None,
     generated_shaders_override: Sequence[nw03.GeneratedShader] | None = None,
     audio_song_payload: bytes | None = None,
+    film_optional_provenance: Mapping[str, Any] | None = None,
 ) -> ExportResult:
     """Export one artifact per capability profile with transactional publication."""
     settings = settings or ExportSettings()
+    if bool(settings.film_inline_ray_payload_dir) != bool(film_optional_provenance):
+        raise ExportError("NW-13 inline ray exports require both an offline payload and capability provenance")
+    if film_optional_provenance and (
+        not settings.player_template or allow_test_payloads or settings.frozen_embedded_specialization
+        or settings.target_profile != nwp.COMMON_PROFILE_ID or settings.optional_profiles or settings.allow_optional_profiles
+    ):
+        raise ExportError("NW-13 inline ray requires a separate specialized Windows export using the common command ABI")
     audio_payload = b""
     if settings.audio_song_path or audio_song_payload is not None:
         if settings.frozen_embedded_specialization:
@@ -3106,6 +3155,10 @@ def export_graph(
     graph_path = Path(graph_path)
     output_directory = Path(output_directory)
     document = nw03.load_graph(graph_path)
+    if film_optional_provenance:
+        film_roots = nw03._reachable_shader_roots(document)
+        if len(film_roots) != 1 or film_roots[0].operator_id != "nw.shader.film":
+            raise ExportError("NW-13 inline ray payload must bind exactly one reachable film shader")
     digest_override = settings.requirements_digest or None
     if (
         settings.target_profile != nwp.COMMON_PROFILE_ID
@@ -3799,7 +3852,9 @@ def export_graph(
             manifest["artifact_identity"] = artifact_key(
                 profile_id, requirements_digest, emitted_requirements(package)
             )
-            manifest["optional_artifact"] = not is_common
+            manifest["optional_artifact"] = not is_common or bool(film_optional_provenance)
+            if film_optional_provenance:
+                manifest["film_lowering"] = dict(film_optional_provenance)
             _attach_audio_manifest(manifest, audio_payload)
             manifest["manifest_sha256"] = "sha256:v1:" + hashlib.sha256(
                 nwp.canonical_json_bytes(
@@ -3833,6 +3888,7 @@ def export_graph(
                         else None
                     ),
                     frozen_embedded_specialization=settings.frozen_embedded_specialization,
+                    film_inline_ray_payload_dir=settings.film_inline_ray_payload_dir,
                 )
                 actual_dependencies = _pe_runtime_dependencies(preliminary_player)
                 manifest["retained"]["dependencies"] = actual_dependencies
@@ -3860,6 +3916,7 @@ def export_graph(
                         else None
                     ),
                     frozen_embedded_specialization=settings.frozen_embedded_specialization,
+                    film_inline_ray_payload_dir=settings.film_inline_ray_payload_dir,
                 )
                 final_dependencies = _pe_runtime_dependencies(specialized_player_bytes)
                 if final_dependencies != actual_dependencies:

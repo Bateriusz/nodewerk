@@ -74,6 +74,31 @@ int main() {
     CHECK(RenderPcm(automated, stereo, 0, quiet.data(), frames));
     CHECK(Rms(quiet, 2, 0) < Rms(sine, 2, 0));
 
+    automated.automation[0].count = kMaxAutomationKeys + 1;
+    CHECK(!ValidateSong(automated));
+    CHECK(!RenderPcm(automated, stereo, 0, quiet.data(), frames));
+
+    // Cross two filter windows with odd callback sizes, then seek into the
+    // tail. The reconstructed samples equal the uninterrupted stream.
+    auto long_note = MakeSong(4);
+    long_note.duration_ticks = long_note.events[0].duration = 103101;
+    long_note.instruments[0].cutoff_hz = 20;
+    const auto channels = SongPcmFormat(long_note);
+    CHECK(channels.channels == 2);
+    std::vector<std::int16_t> full(long_note.duration_ticks * 2);
+    PcmStream stream;
+    CHECK(stream.Start(long_note, channels, 0));
+    std::size_t offset = 0;
+    while (offset < long_note.duration_ticks) {
+        const auto count = (std::min<std::size_t>)(503, long_note.duration_ticks - offset);
+        CHECK(stream.Render(full.data() + offset * 2, count));
+        offset += count;
+    }
+    std::array<std::int16_t, 1024> sought{};
+    const std::size_t late = 100123;
+    CHECK(RenderPcm(long_note, channels, late, sought.data(), sought.size() / 2));
+    CHECK(std::equal(sought.begin(), sought.end(), full.begin() + late * 2));
+
     // Preserve NWAS v1 decode and mono rendering.
     Song v1{};
     v1.duration_ticks = 2000;

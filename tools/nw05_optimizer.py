@@ -25,7 +25,7 @@ import hashlib
 import json
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import nw03_compiler as nw03
@@ -128,6 +128,7 @@ SEMANTIC_OUTPUT_OPERATORS = frozenset(
     {
         "nw.render.present",
         "nw.render.fullscreen",
+        "nw.render.film",
         "nw.render.gbuffer",
         "nw.render.composite",
         "nw.readback.scalar",
@@ -880,7 +881,7 @@ def semantic_outputs(document: nw03.GraphDocument) -> list[GraphOutput]:
             continue
         if consumers.get(node.node_id):
             continue
-        if node.operator_id == "nw.render.fullscreen":
+        if node.operator_id in {"nw.render.fullscreen", "nw.render.film"}:
             render_nodes.append(node)
         elif node.operator_id == "nw.render.gbuffer":
             render_nodes.extend(
@@ -1398,7 +1399,10 @@ def _build_ir_nodes(
     aliases: dict[str, str] = {}
     for node_id in order:
         node = document.nodes[node_id]
-        params = _normalised_params(node.params)
+        params = (
+            {name: tuple(value) for name, value in node.params.items()}
+            if node.operator_id == "nw.shader.film" else _normalised_params(node.params)
+        )
         inputs: list[IRInput] = []
         for port, (source_node, source_port) in sorted(node.inputs.items()):
             resolved_source = cse_aliases.get(source_node, source_node)
@@ -1799,6 +1803,14 @@ def lower_typed_graph(
             ],
         )
     reachable, needed_ports = reachable_node_ports(document, outputs)
+    if any(document.nodes[node_id].operator_id.startswith("nw.geom.") for node_id in reachable) or "nw13_loop_ticks" in active:
+        from nw13_pipeline import PipelineError, admission_check
+        try:
+            admission_check(replace(document, nodes={
+                node_id: document.nodes[node_id] for node_id in reachable
+            }))
+        except PipelineError as error:
+            raise OptimizationError(str(error), error.diagnostics) from error
     unsupported = sorted(
         node_id
         for node_id in reachable

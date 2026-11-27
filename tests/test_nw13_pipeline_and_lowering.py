@@ -33,7 +33,7 @@ def test_shared_optimizer_reachability_partitions_and_semantic_hash() -> None:
     assert again.node_keys == production.node_keys
 
     dead = copy.deepcopy(document)
-    dead.nodes["unreachable"] = type(document.nodes["wall_texture"])(
+    dead.nodes["unreachable"] = type(document.nodes["room_outer"])(
         node_id="unreachable",
         operator_id="nw.math.scalar_const",
         version="1.0.0",
@@ -48,15 +48,9 @@ def test_shared_optimizer_reachability_partitions_and_semantic_hash() -> None:
 
 def test_dependency_local_cache_invalidation_only_affects_dependents() -> None:
     document = pipeline.load_graph(GRAPH)
-    invalidated = pipeline.dependency_local_invalidation(document, ["wall_texture"])
-    assert "wall_texture" in invalidated
-    assert "wall_texture_gpu" in invalidated
-    assert "wall_material" in invalidated
-    assert "corridor_render" in invalidated
-    assert "hotel_screen" in invalidated
-    assert "door_mesh" not in invalidated
-    assert "lamp_light" not in invalidated
-    assert "corridor_camera" not in invalidated
+    invalidated = pipeline.dependency_local_invalidation(document, ["room_outer"])
+    assert {"room_outer", "room_shell", "film", "corridor_render", "hotel_screen"} <= invalidated
+    assert {"door", "arch", "room_inner"}.isdisjoint(invalidated)
 
 
 def test_admission_rejects_excessive_steps_instances_geometry_and_memory() -> None:
@@ -67,8 +61,13 @@ def test_admission_rejects_excessive_steps_instances_geometry_and_memory() -> No
         pipeline.admission_check(document, budget={"max_nodes": 1})
     assert any(item["code"] == "pipeline_node_budget_exceeded" for item in exc.value.diagnostics)
 
+    oversized = copy.deepcopy(document)
+    oversized.nodes["oversized"] = type(document.nodes["room_outer"])(
+        "oversized", "nw.scene.instances", "1.0.0", "initialization", "cpu",
+        params={"count": ["4097"]},
+    )
     with pytest.raises(pipeline.PipelineError) as exc:
-        pipeline.admission_check(document, budget={"max_instances": 1})
+        pipeline.optimize_document(oversized)
     assert any(item["code"] == "pipeline_instance_budget_exceeded" for item in exc.value.diagnostics)
 
     with pytest.raises(pipeline.PipelineError) as exc:
@@ -109,7 +108,7 @@ def test_frequency_residency_profile_and_seed_identities_change_hash() -> None:
     document = pipeline.load_graph(GRAPH)
     baseline = pipeline.semantic_hash(document)
     changed_frequency = copy.deepcopy(document)
-    changed_frequency.nodes["wall_material"].frequency = "initialization"
+    changed_frequency.nodes["film"].frequency = "initialization"
     assert pipeline.semantic_hash(changed_frequency) != baseline
     changed_residency = copy.deepcopy(document)
     changed_residency.nodes["hotel_screen"].residency = "cpu"
@@ -390,3 +389,15 @@ def test_production_graph_exports_reproducibly_through_shared_offline_compiler(
 def nw13_evidence_common_id() -> str:
     return evidence.COMMON_PROFILE_ID
 
+
+
+@pytest.mark.parametrize("status,returncode", [("fail", 70), ("error", None), ("pass", 70)])
+def test_native_smoke_gate_rejects_executed_failure(status, returncode) -> None:
+    bundle = evidence.export_artifacts(
+        {"id": "test", "revision": "abcdef"},
+        common_observation={"distribution_bytes": 100, "shader_bytes": 50, "smoke": {
+            "executed": True, "status": status, "headless": True, "returncode": returncode,
+        }},
+    )
+    assert bundle["common"]["measurement_status"] == "failed"
+    assert any(item["code"] == "nw13_smoke_failed" for item in evidence.validate_bundle(bundle))

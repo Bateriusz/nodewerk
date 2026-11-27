@@ -4,6 +4,7 @@ import json
 import math
 import os
 import shutil
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -219,38 +220,28 @@ def test_audiovisual_cues_align_within_one_frame_without_duplicate_transport_cue
 
 
 def _compile_native(tmp_path: Path, source: str, name: str) -> Path:
-    compiler = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
+    compiler = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++") or shutil.which("cl")
     if compiler is None:
         pytest.skip("shared procedural-audio contract requires a C++20 compiler")
-    output = tmp_path / name
-    subprocess.run(
-        [
-            compiler,
-            "-std=c++20",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-fno-exceptions",
-            "-fno-rtti",
-            "-O2",
-            "-I",
-            str(REPO_ROOT / "src"),
-            str(REPO_ROOT / "src" / "audio" / "procedural_audio.cpp"),
-            str(REPO_ROOT / "tests" / source),
-            "-o",
-            str(output),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    output = tmp_path / (name + ".exe" if os.name == "nt" else name)
+    inputs = [
+        str(REPO_ROOT / "src/audio/procedural_audio.cpp"),
+        str(REPO_ROOT / source),
+    ]
+    if Path(compiler).stem.lower() == "cl":
+        command = [compiler, "/nologo", "/std:c++20", "/O2", f"/I{REPO_ROOT / 'src'}",
+                   *inputs, f"/Fe:{output}"]
+    else:
+        command = [compiler, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-fno-exceptions",
+                   "-fno-rtti", "-O2", "-I", str(REPO_ROOT / "src"), *inputs, "-o", str(output)]
+    subprocess.run(command, cwd=tmp_path, check=True, capture_output=True, text=True)
     return output
 
 
 def test_shared_cpp_decoder_reaches_v2_instruments_filter_pan_bus_and_automation(
     tmp_path: Path,
 ) -> None:
-    executable = _compile_native(tmp_path, "nw13_audio_payload.cpp", "nw13_audio_payload")
+    executable = _compile_native(tmp_path, "tests/nw13_audio_payload.cpp", "nw13_audio_payload")
     sequence = audio.compile_sequence(json.loads(SONG_PATH.read_text(encoding="utf-8")))
     payload = tmp_path / "hotel.nwas"
     payload.write_bytes(audio.compile_to_nwas(sequence))
@@ -266,7 +257,7 @@ def test_shared_cpp_decoder_reaches_v2_instruments_filter_pan_bus_and_automation
 def test_shared_cpp_contract_selects_waveforms_pan_envelope_filter_and_automation(
     tmp_path: Path,
 ) -> None:
-    executable = _compile_native(tmp_path, "nw13_audio_contract.cpp", "nw13_audio_contract")
+    executable = _compile_native(tmp_path, "tests/nw13_audio_contract.cpp", "nw13_audio_contract")
     completed = subprocess.run([str(executable)], capture_output=True, text=True, check=False)
     assert completed.returncode == 0, completed.stderr
 
@@ -295,6 +286,7 @@ def test_nwas_v2_travels_through_the_shared_package_and_export_path(
     artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
     decoded = nwp.decode_package(artifact.package_bytes)
     assert decoded.audio_song == payload
+    assert artifact.manifest["audio"]["channels"] == 2
     assert audio_song.decode_song(decoded.audio_song)["version"] == 2
     assert nwp.encode_package(decoded) == artifact.package_bytes
 
@@ -376,3 +368,22 @@ def test_cpp_package_reader_accepts_nwas_v2_when_compiler_available(
     assert completed.returncode == 0, completed.stderr
     assert output_path.read_bytes() == package_bytes
 
+
+
+def test_offline_writer_preserves_v2_stereo_pan(tmp_path: Path) -> None:
+    import wave
+
+    instrument = _instrument("lead", "sine", pan=-1.0)
+    sequence = _sequence([instrument], [_note("first", "lead", duration=4800)], duration=4800)
+    payload = tmp_path / "song.nwas"
+    payload.write_bytes(audio.compile_to_nwas(sequence))
+    executable = _compile_native(tmp_path, "fixtures/audio/offline.cpp", "nw13_offline")
+    wav_path = tmp_path / "song.wav"
+    subprocess.run([str(executable), str(payload), str(wav_path), str(tmp_path / "frame-plan.csv")],
+                   check=True, timeout=20)
+    with wave.open(str(wav_path), "rb") as output:
+        assert (output.getnchannels(), output.getframerate(), output.getnframes()) == (2, 48000, 4800)
+        pcm = output.readframes(4800)
+    samples = struct.unpack("<9600h", pcm)
+    assert any(samples[::2])
+    assert not any(samples[1::2])

@@ -149,6 +149,7 @@ KNOWN_OPERATORS = {
     "nw.material.describe",
     "nw.shader.vec4_const",
     "nw.shader.expr",
+    "nw.shader.film",
     "nw.shader.add",
     "nw.shader.mul",
     "nw.shader.mix",
@@ -174,6 +175,7 @@ KNOWN_OPERATORS = {
     "nw.residency.gpu_to_cpu",
     "nw.readback.scalar",
     "nw.render.fullscreen",
+    "nw.render.film",
     "nw.render.gbuffer",
     "nw.render.composite",
     "nw.render.present",
@@ -185,6 +187,7 @@ KNOWN_OPERATORS = {
     "nw.feedback.image",
     # NW-13 bounded procedural geometry recipes.
     "nw.geom.sphere",
+    "nw.geom.library",
     "nw.geom.box",
     "nw.geom.cylinder",
     "nw.geom.capsule",
@@ -237,6 +240,7 @@ OPERATOR_INPUTS = {
     "nw.residency.gpu_to_cpu": {"image"},
     "nw.readback.scalar": {"image"},
     "nw.render.fullscreen": {"shader", "texture"},
+    "nw.render.film": {"shader"},
     "nw.render.gbuffer": {"mesh", "material", "camera", "light", "shader"},
     "nw.render.composite": {"color", "normal"},
     "nw.render.present": {"image"},
@@ -255,6 +259,8 @@ OPERATOR_INPUTS = {
     "nw.geom.rotate": {"child"},
     "nw.geom.scale": {"child"},
     "nw.geom.union": {"a", "b"},
+    "nw.geom.library": {"a", "b"},
+    "nw.shader.film": {"geometry"},
     "nw.geom.intersection": {"a", "b"},
     "nw.geom.subtract": {"a", "b"},
     "nw.geom.smooth_union": {"a", "b"},
@@ -288,6 +294,8 @@ OUTPUT_PORTS = {
     "nw.material.standard": {"out"},
     "nw.shader.vec4_const": {"out"},
     "nw.shader.expr": {"out"},
+    "nw.shader.film": {"out"},
+    "nw.geom.library": {"out"},
     "nw.shader.add": {"out"},
     "nw.shader.mul": {"out"},
     "nw.shader.mix": {"out"},
@@ -312,6 +320,7 @@ OUTPUT_PORTS = {
     "nw.residency.gpu_to_cpu": {"out"},
     "nw.readback.scalar": {"value"},
     "nw.render.fullscreen": {"image"},
+    "nw.render.film": {"image"},
     "nw.render.gbuffer": {"color", "normals"},
     "nw.render.composite": {"out"},
     "nw.render.present": {"out"},
@@ -338,6 +347,7 @@ OUTPUT_PORTS = {
 SHADER_OPERATORS = {
     "nw.shader.vec4_const",
     "nw.shader.expr",
+    "nw.shader.film",
     "nw.shader.add",
     "nw.shader.mul",
     "nw.shader.mix",
@@ -437,6 +447,14 @@ PORT_SPECS: dict[str, dict[str, dict[str, tuple[str, int, str]]]] = {
         "outputs": {"out": ("material", 1, "cpu")},
     },
     "nw.shader.vec4_const": {"outputs": {"out": ("shader_expr", 1, "logical")}},
+    "nw.shader.film": {
+        "inputs": {"geometry": ("geometry", 1, "logical")},
+        "outputs": {"out": ("shader_expr", 1, "logical")},
+    },
+    "nw.geom.library": {
+        "inputs": {"a": ("geometry", 1, "logical"), "b": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
     "nw.shader.expr": {"outputs": {"out": ("shader_expr", 1, "logical")}},
     "nw.shader.add": {
         "inputs": {
@@ -522,6 +540,10 @@ PORT_SPECS: dict[str, dict[str, dict[str, tuple[str, int, str]]]] = {
     "nw.readback.scalar": {
         "inputs": {"image": ("image", 1, "gpu")},
         "outputs": {"value": ("scalar", 1, "cpu")},
+    },
+    "nw.render.film": {
+        "inputs": {"shader": ("shader_expr", 1, "logical")},
+        "outputs": {"image": ("image", 1, "gpu")},
     },
     "nw.render.fullscreen": {
         "inputs": {
@@ -617,6 +639,7 @@ PORT_SPECS: dict[str, dict[str, dict[str, tuple[str, int, str]]]] = {
 }
 
 PARAM_RULES: dict[str, dict[str, dict[str, Any]]] = {
+    "nw.shader.film": {"scene": {"kind": "string"}, "production": {"kind": "string"}},
     "nw.shader.mix": {"factor": {"kind": "float", "min": 0.0, "max": 1.0, "clamp01": True}},
     "nw.material.describe": {
         "metallic": {"kind": "float", "min": 0.0, "max": 1.0, "clamp01": True},
@@ -2251,6 +2274,28 @@ def _shader_dependencies(document: GraphDocument, root: GraphNode) -> set[str]:
     return reachable
 
 
+def _lower_film_shader(document, root, entry_point, target, thread_group, dispatch_groups,
+                       image_width, image_height):
+    import nw13_film
+    dependencies = tuple(sorted(_shader_dependencies(document, root)))
+    try:
+        hlsl = nw13_film.emit(
+            document, root, entry_point=entry_point, thread_group=thread_group,
+            width=image_width or thread_group[0] * dispatch_groups[0],
+            height=image_height or thread_group[1] * dispatch_groups[1],
+        )
+    except (KeyError, ValueError, TypeError, OSError) as error:
+        diagnostics = getattr(error, "diagnostics", []) or [
+            _diagnostic("invalid_film", str(error), node_id=root.node_id, operator_id=root.operator_id)
+        ]
+        raise CompilerError(f"film node {root.node_id}: {error}", diagnostics) from error
+    return GeneratedShader(
+        specialization_id=root.node_id, entry_point=entry_point, target=target,
+        family=PASS_FAMILY, hlsl=hlsl, source_map=(), root_expression="",
+        root_node_ids=dependencies, thread_group=thread_group, execution_root=root.node_id,
+    )
+
+
 def lower_to_fused_hlsl(
     document: GraphDocument,
     *,
@@ -2276,6 +2321,15 @@ def lower_to_fused_hlsl(
     generated: list[GeneratedShader] = []
     seen_keys: set[str] = set()
     for root in roots:
+        if root.operator_id == "nw.shader.film":
+            try:
+                generated.append(_lower_film_shader(
+                    document, root, entry_point, target, thread_group, dispatch_groups,
+                    image_width, image_height,
+                ))
+            except CompilerError as error:
+                diagnostics.extend(error.diagnostics)
+            continue
         try:
             expression_text = _shader_expression_text(document, root)
             parsed = nw03_oracle.parse_expression(expression_text)
@@ -2518,6 +2572,15 @@ def lower_to_selective_hlsl(
     texture_roots = set(texture_sample_roots)
     generated: list[GeneratedShader] = []
     for root in roots:
+        if root.operator_id == "nw.shader.film":
+            try:
+                generated.append(_lower_film_shader(
+                    document, root, entry_point, target, thread_group, dispatch_groups,
+                    image_width, image_height,
+                ))
+            except CompilerError as error:
+                diagnostics.extend(error.diagnostics)
+            continue
         try:
             members = _shader_topological_members(document, root)
             if root.node_id in fused or len(members) == 1:

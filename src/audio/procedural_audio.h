@@ -54,6 +54,30 @@ struct Song {
     std::uint32_t automation_count = 0;
     std::array<Automation, kMaxAutomationBuses> automation{};
 };
+constexpr PcmFormat SongPcmFormat(const Song& song) noexcept {
+    return {48'000, song.version == 2u ? 2u : 1u};
+}
+
+// One stream per consumer. The source song must remain alive and unchanged.
+// Start bounds seek work to two filter windows per active note. Render carries
+// those windows across contiguous callbacks and allocates no memory.
+class PcmStream {
+public:
+    bool Start(const Song& song, PcmFormat format, std::uint64_t first_sample) noexcept;
+    bool Render(std::int16_t* output, std::size_t count) noexcept;
+
+private:
+    struct Voice {
+        std::uint64_t start = 0, end = 0;
+        double left_gain = 0.0, right_gain = 0.0;
+        double alpha = 0.0, filter = 0.0, warming_filter = 0.0;
+    };
+    double Advance(Voice& voice, const Event& event, std::uint64_t sample) const noexcept;
+    const Song* song_ = nullptr;
+    PcmFormat format_{};
+    std::uint64_t cursor_ = 0, window_ = 0;
+    std::array<Voice, kMaxEvents> voices_{};
+};
 // NWAS v1 (read-only) and v2 are little-endian and independent of the GPU
 // package ABI.  v1 remains decodable; v2 carries the instrument, pan, filter,
 // bus and automation fields used by the shared procedural-audio renderer.
@@ -64,7 +88,7 @@ bool SampleToTick(std::uint64_t sample, std::uint32_t rate,
                   std::uint64_t& tick) noexcept;
 bool TickToSample(std::uint64_t tick, std::uint32_t rate,
                   std::uint64_t& sample) noexcept;
-// Pure, absolute-sample synthesis; seeking needs no replay or allocation.
+// Absolute-sample synthesis with bounded seek reconstruction.
 // `count` is a frame count; stereo output writes two PCM16 values per frame.
 bool RenderPcm(const Song& song, PcmFormat format, std::uint64_t first_sample,
                std::int16_t* output, std::size_t count) noexcept;

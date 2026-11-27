@@ -2,38 +2,290 @@
   "format": "nw13-semantic-coverage",
   "version": 1,
   "links": [
-    {"catalog_entry":"wk3.mesh","candidate":"nw.geom.sphere","relation":"informs_primitive_workflow"},
-    {"catalog_entry":"wk3.mesh","candidate":"nw.geom.box","relation":"informs_primitive_workflow"},
-    {"catalog_entry":"wk3.mesh","candidate":"nw.geom.torus","relation":"informs_primitive_workflow"},
-    {"catalog_entry":"wk3.mesh","candidate":"nw.mesh.torus","relation":"existing_aggregation_path"},
-    {"catalog_entry":"wk4.mesh","candidate":"nw.geom.capsule","relation":"informs_primitive_workflow"},
-    {"catalog_entry":"wk4.mesh","candidate":"nw.geom.cylinder","relation":"informs_primitive_workflow"},
-    {"catalog_entry":"wk3.transform","candidate":"nw.geom.translate","relation":"informs_transform_control"},
-    {"catalog_entry":"wk3.transform","candidate":"nw.geom.rotate","relation":"informs_transform_control"},
-    {"catalog_entry":"wk3.transform","candidate":"nw.geom.scale","relation":"informs_transform_control"},
-    {"catalog_entry":"wk4.transform","candidate":"nw.scene.object","relation":"informs_hierarchy_workflow"},
-    {"catalog_entry":"wk4.transform","candidate":"nw.geom.rotate","relation":"informs_hinged_motion"},
-    {"catalog_entry":"wk3.group","candidate":"nw.scene.object","relation":"informs_hierarchy_workflow"},
-    {"catalog_entry":"wk4.group","candidate":"nw.scene.object","relation":"informs_hierarchy_workflow"},
-    {"catalog_entry":"wk3.scene","candidate":"nw.scene.object","relation":"informs_scene_composition"},
-    {"catalog_entry":"wk4.scene","candidate":"nw.scene.camera","relation":"informs_camera_composition"},
-    {"catalog_entry":"wk3.camera","candidate":"nw.scene.camera","relation":"informs_camera_control"},
-    {"catalog_entry":"wk4.camera","candidate":"nw.scene.camera","relation":"informs_camera_control"},
-    {"catalog_entry":"wk3.light","candidate":"nw.scene.object","relation":"informs_local_light_binding"},
-    {"catalog_entry":"wk4.light","candidate":"nw.scene.camera","relation":"informs_light_aware_camera"},
-    {"catalog_entry":"wk3.material","candidate":"nw.scene.object","relation":"informs_material_binding"},
-    {"catalog_entry":"wk4.material","candidate":"nw.scene.object","relation":"informs_material_binding"},
-    {"catalog_entry":"wk3.noise","candidate":"nw.geom.displace","relation":"informs_seeded_surface"},
-    {"catalog_entry":"wk4.noise","candidate":"nw.geom.displace","relation":"informs_seeded_surface"},
-    {"catalog_entry":"wk3.feedback","candidate":"nw.feedback.image","relation":"informs_feedback_semantics"},
-    {"catalog_entry":"wk4.feedback","candidate":"nw.feedback.image","relation":"informs_feedback_semantics"},
-    {"catalog_entry":"wk3.particles","candidate":"nw.particles.system","relation":"informs_particle_workflow"},
-    {"catalog_entry":"wk4.particles","candidate":"nw.particles.system","relation":"informs_particle_workflow"},
-    {"catalog_entry":"kkrieger.game_scene","candidate":"nw.scene.object","relation":"variant_scene_reference_only"},
-    {"catalog_entry":"kkrieger.weapon","candidate":"nw.scene.object","relation":"prop_follows_parent_review"},
-    {"catalog_entry":"kkrieger.trigger","candidate":"nw.scene.camera","relation":"cue_policy_review"},
-    {"catalog_entry":"wk4.render","candidate":"nw.mesh.torus","relation":"existing_render_path"},
-    {"catalog_entry":"wk3.legacy_blur","candidate":"nw.legacy.wave_ops","relation":"obsolete_review_only"},
-    {"catalog_entry":"wk4.legacy_output","candidate":"nw.legacy.wave_ops","relation":"obsolete_review_only"}
-  ]
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x0084",
+      "candidate": "nw.geom.sphere",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L3693",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.Sphere",
+      "candidate": "nw.geom.sphere",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops#L290",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x0081",
+      "candidate": "nw.geom.box",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L3665",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.Cube",
+      "candidate": "nw.geom.box",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops#L315",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x0083",
+      "candidate": "nw.geom.torus",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L3684",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.Torus",
+      "candidate": "nw.geom.torus",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops#L186",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x0088",
+      "candidate": "nw.geom.translate",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L3731",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.Transform",
+      "candidate": "nw.geom.translate",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops#L807",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x0088",
+      "candidate": "nw.geom.rotate",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L3731",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.Transform",
+      "candidate": "nw.geom.rotate",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops#L807",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x0088",
+      "candidate": "nw.geom.scale",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L3731",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.Transform",
+      "candidate": "nw.geom.scale",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops#L807",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x0095",
+      "candidate": "nw.geom.repeat",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L3848",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.Multiply",
+      "candidate": "nw.geom.repeat",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops#L1000",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.TransformNonLinear",
+      "candidate": "nw.geom.twist",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops#L1264",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x00a0",
+      "candidate": "nw.geom.bend",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L3912",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.Bend",
+      "candidate": "nw.geom.bend",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops#L1358",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x0091",
+      "candidate": "nw.geom.displace",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L3812",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.Noise",
+      "candidate": "nw.geom.displace",
+      "relation": "related authoring workflow",
+      "shot": "room and corridor geometry",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops#L534",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x00c0",
+      "candidate": "nw.scene.object",
+      "relation": "scene binding and hierarchy",
+      "shot": "corridor approach and room turn",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L4483",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x00c1",
+      "candidate": "nw.scene.object",
+      "relation": "scene binding and hierarchy",
+      "shot": "corridor approach and room turn",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L4493",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3_kkrieger:WerkClasses:0x00c3",
+      "candidate": "nw.scene.object",
+      "relation": "scene binding and hierarchy",
+      "shot": "corridor approach and room turn",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3_kkrieger/werkops.cpp#L3909",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/altona/main/wz4lib/basic_ops.ops:GroupType.Group3D",
+      "candidate": "nw.scene.object",
+      "relation": "scene binding and hierarchy",
+      "shot": "corridor approach and room turn",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/altona/main/wz4lib/basic_ops.ops#L214",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/wz4/wz4frlib/wz4_demo2_ops.ops:Wz4Render.TransformPivot",
+      "candidate": "nw.scene.object",
+      "relation": "scene binding and hierarchy",
+      "shot": "corridor approach and room turn",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/wz4/wz4frlib/wz4_demo2_ops.ops#L459",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x00c4",
+      "candidate": "nw.scene.object",
+      "relation": "scene binding and hierarchy",
+      "shot": "corridor approach and room turn",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L4522",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x00d3",
+      "candidate": "nw.scene.object",
+      "relation": "scene binding and hierarchy",
+      "shot": "corridor approach and room turn",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L4733",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/wz4/wz4frlib/wz4_mtrl_ops.ops:Wz4Material.Material",
+      "candidate": "nw.scene.object",
+      "relation": "scene binding and hierarchy",
+      "shot": "corridor approach and room turn",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/wz4/wz4frlib/wz4_mtrl_ops.ops#L118",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/wz4/wz4frlib/wz4_modmtrl_ops.ops:Wz4Render.ModLight",
+      "candidate": "nw.scene.object",
+      "relation": "scene binding and hierarchy",
+      "shot": "corridor approach and room turn",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/wz4/wz4frlib/wz4_modmtrl_ops.ops#L227",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x00c6",
+      "candidate": "nw.scene.camera",
+      "relation": "camera authoring controls",
+      "shot": "both shots",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L4550",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/wz4/wz4frlib/wz4_demo2_ops.ops:Wz4Render.Camera",
+      "candidate": "nw.scene.camera",
+      "relation": "camera authoring controls",
+      "shot": "both shots",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/wz4/wz4frlib/wz4_demo2_ops.ops#L177",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x00c5",
+      "candidate": "nw.particles.system",
+      "relation": "spatial emitter workflow",
+      "shot": "corridor dust",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L4540",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/wz4/wz4frlib/fxparticle_ops.ops:Wz4Particles.SplinedParticles",
+      "candidate": "nw.particles.system",
+      "relation": "spatial emitter workflow",
+      "shot": "corridor dust",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/wz4/wz4frlib/fxparticle_ops.ops#L370",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x0083",
+      "candidate": "nw.mesh.torus",
+      "relation": "indexed mesh generation",
+      "shot": "NW-06 fixture only",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L3684",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.Torus",
+      "candidate": "nw.mesh.torus",
+      "relation": "indexed mesh generation",
+      "shot": "NW-06 fixture only",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops#L186",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    },
+    {
+      "catalog_entry": "werkkzeug3:WerkClasses:0x00e3",
+      "candidate": "nw.legacy.wave_ops",
+      "relation": "legacy image effect reviewed and omitted",
+      "shot": "outside production",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L4760",
+      "license": "upstream declaration metadata; independent nodewerk implementation"
+    }
+  ],
+  "inventories": [
+    "werkkzeug3.json",
+    "werkkzeug4.json"
+  ],
+  "candidate_catalog": "implementation-candidates.v1.json"
 }

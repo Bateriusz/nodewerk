@@ -210,3 +210,28 @@ def test_shared_nwgraph_reader_accepts_all_public_geometry_operators() -> None:
     assert len(document.nodes) == 16
     assert {node.operator_id for node in document.nodes.values()} == set(geometry.OPERATOR_CONTRACTS)
 
+
+
+def test_nested_repetition_admission_and_analytic_march() -> None:
+    sphere = _node("nw.geom.sphere", radius=1)
+    prepared = geometry.prepare(_document(sphere))
+    hit = geometry.ray_march(prepared, (0, 0, 5), (0, 0, -1))
+    assert hit.distance == pytest.approx(4.0, abs=1e-4)
+    nested = sphere
+    for i in range(3):
+        nested = {"id": f"repeat{i}", "operator": "nw.geom.repeat", "version": "1.0.0",
+                  "parameters": {"spacing": [2, 1, 1], "counts": [32, 1, 1]}, "children": [nested]}
+    doc = _document(nested)
+    doc.pop("budget")
+    with pytest.raises(geometry.GeometryError, match="repetition"):
+        geometry.prepare(doc)
+
+
+def test_displacement_bounds_after_nonuniform_scaling() -> None:
+    sphere = _node("nw.geom.sphere", radius=1)
+    scaled = {**_node("nw.geom.scale", scale=[100, 1, 1]), "children": [sphere]}
+    displaced = {**_node("nw.geom.displace", amplitude=0.1, frequency=1, seed=5), "children": [scaled]}
+    prepared = geometry.prepare(_document(displaced))
+    assert prepared.evaluate((105, 0, 0)) < 0
+    assert prepared.bounds.contains((105, 0, 0))
+    assert prepared.bounds.maximum[0] == pytest.approx(110)
