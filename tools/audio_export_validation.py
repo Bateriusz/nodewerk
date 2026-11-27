@@ -51,7 +51,13 @@ def validate(template: Path, dxc: str, root: Path) -> dict:
                 assert "src/audio/" not in commands
                 assert "nw_wasapi_output" not in commands and "nw_procedural_audio" not in commands
                 assert "nw_package_audio=0" in commands
-                assert b"NWAS" not in executable.read_bytes()
+                binary = executable.read_bytes()
+                for marker in (
+                    b"NWAS", b"package_audio_invalid", b"package_audio_unsupported",
+                    b"audio capability not linked", b"audio_transport_required",
+                    b"AUDIO_PLAYBACK_EVIDENCE_V1", b"NW_AUDIO_INITIALIZATION_FAILED",
+                ):
+                    assert marker not in binary, f"audio marker in silent player: {marker!r}"
             else:
                 assert "src/audio/procedural_audio.cpp" in commands
                 assert "src/audio/wasapi_output.cpp" in commands
@@ -147,9 +153,10 @@ def validate(template: Path, dxc: str, root: Path) -> dict:
     }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     physical = evidence_reference(
         "physical WASAPI/display observation is not part of the Windows CI build gate",
+        playback_artifact_matches=True,
         verified=load_verified_evidence(
             package_bytes=audio.package_bytes, song_bytes=audio.package.audio_song,
-            executable_bytes=audio_exe.read_bytes(),
+            executable_bytes=audio_exe.read_bytes(), source_head_sha=source_commit,
         ),
     )
     return {

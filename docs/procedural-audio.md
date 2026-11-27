@@ -63,9 +63,18 @@ session with a real WASAPI endpoint and binds the observation to:
 
 - the exact `common.nwp` package and generated player SHA-256;
 - the exact NWAS song SHA-256 and duration;
-- the queried Windows build, active audio endpoint, and display adapter/refresh;
-- the protocol (48 kHz timebase, 60 fps fixture, one-frame tolerance
-  `48000 / refresh_hz` ticks) and the same-run `AUDIO_*` telemetry.
+- the actual WASAPI render endpoint opened by the player and the active display
+  path carrying its presentation window, identified by hashes rather than raw device IDs;
+- the Windows build and the protocol (48 kHz timebase, 60 fps offline fixture,
+  one-frame tolerance `48000 * refresh_denominator / refresh_numerator` ticks)
+  and the same-run `AUDIO_*` telemetry.
+
+The player observes that its client area stays on the same monitor and reads
+the active path and exact refresh ratio at the start and end. Use one fixed-
+refresh, non-mirrored display; leave the window on that display and do not
+change the display mode or audio routing during capture. Remote, cloned,
+dynamic-refresh or otherwise ambiguous outputs cannot certify physical alignment.
+No display qualification or GPU capability is inferred from this observation.
 
 The existing Windows build gate uploads a separate
 `audio-physical-inputs-<github.sha>` artifact containing the exact production
@@ -74,26 +83,25 @@ The existing Windows build gate uploads a separate
 the tracked source tree and check out the recorded `source_commit` (which may
 be the CI PR merge commit). Pass `--identity <bundle>/identity.json` to the
 `run` command along with the three files from that bundle; the harness rejects
-different source commits, source trees or artifact hashes. Keep the original
-CI artifact and raw capture with the evidence. The upload is not itself a
-physical observation.
+different source commits, source trees or artifact hashes. Without independent
+build identity a run is diagnostic only and cannot certify a source head.
+Keep the original CI artifact, run JSON, measured onsets and raw capture with
+the evidence. The upload is not itself a physical observation.
 
 Start a simultaneous external A/V capture, then run the player once using
 the harness (the run ID is printed before playback):
 ```sh
 python tools/audio_physical_validation.py run \
-  --player build/audio/nw_common_d3d12_fl12_0_sm6_0_v1.exe \
-  --package build/audio/nw_common_d3d12_fl12_0_sm6_0_v1.nwp \
-  --song song.nwas --output run.json
+  --identity bundle/identity.json --player bundle/player.exe \
+  --package bundle/audio.nwp --song bundle/song.nwas --output run.json
 ```
 
 Analyze that capture, then record its observation without launching the player again:
 
 ```sh
 python tools/audio_physical_validation.py record \
-  --player build/audio/nw_common_d3d12_fl12_0_sm6_0_v1.exe \
-  --package build/audio/nw_common_d3d12_fl12_0_sm6_0_v1.nwp \
-  --song song.nwas --run run.json --observation capture.json \
+  --player bundle/player.exe --package bundle/audio.nwp --song bundle/song.nwas \
+  --run run.json --observation capture.json \
   --capture-audio recording.mp4 --capture-video recording.mp4 --output evidence.json
 ```
 
@@ -111,13 +119,19 @@ and clock discontinuities from that exact run. Exact audible glitch counts have
 no OS source; they stay `unavailable` rather than being inferred from stream
 coordinates.
 
-A record only becomes `verified_physical` when the environment, observation and
-required telemetry are all present; otherwise it stays `pending_physical` with
-explicit `unavailable` reasons. `tools/audio_export_validation.py` and
+A record only becomes `verified_physical` after a successful full playback with
+bound build identity, an unambiguous environment, capture and required telemetry.
+Otherwise it stays `pending_physical` or records a failed playback, with explicit
+reasons. The recorder, importer and schema gate recompute alignment from the
+measured onsets and exact refresh ratio, and validate counts and provenance.
+To rehash the original archived files, pass `--run`, `--capture-audio` and
+`--capture-video` to `verify`; add `--executable`, `--package` and `--song`
+to recheck artifact bytes. `tools/audio_export_validation.py` and
 `tools/audio_capture.py` never fabricate this result: they report a structured
-unavailable reference to the evidence record and merge a verified record only
-when `NW12_PHYSICAL_EVIDENCE` names one that matches the exported package and
-song. The aggregate status lives in
+unavailable reference to the evidence record and can attach a verified
+production-player reference when `NW12_PHYSICAL_EVIDENCE` matches the package
+and song. Only the report that also matches the production executable can
+verify the current playback artifact. The aggregate status lives in
 [`benchmarks/nw12/audio-physical-evidence.v1.json`](../benchmarks/nw12/audio-physical-evidence.v1.json)
 and is validated by `schemas/nw12-audio-physical-evidence.schema.json`.
 Hosted CI exercises the deterministic binding/alignment logic only and does not

@@ -46,6 +46,7 @@ VERSION_MINOR_AUDIO = 2
 AUDIO_EXTENSION_FLAG = 4
 SECTION_AUDIO = "AUDI"
 STATEFUL_EXTENSION_FLAG = 2
+SUPPORTED_PACKAGE_FLAGS = 1 | STATEFUL_EXTENSION_FLAG | AUDIO_EXTENSION_FLAG
 HEADER_SIZE = 64
 SECTION_ENTRY_SIZE = 32
 CHECKSUM_SIZE = 32
@@ -3671,6 +3672,8 @@ def _validate_cross_references(
 def validate_package_model(package: NwpPackage) -> list[dict[str, Any]]:
     """Validate a package model and return package-validation diagnostics."""
     diagnostics: list[dict[str, Any]] = []
+    if package.flags & ~SUPPORTED_PACKAGE_FLAGS:
+        diagnostics.append(package_diagnostic("package_header_flags", "unsupported package header flags", offset=16))
     if package.audio_song is not None:
         import audio_song
         try:
@@ -4443,6 +4446,10 @@ def decode_package(
                 f"{VERSION_MINOR_STATEFUL} or audio extension {VERSION_MINOR_AUDIO}",
                 offset=10,
             )
+        )
+    if flags & ~SUPPORTED_PACKAGE_FLAGS:
+        raise PackageValidationError(
+            package_diagnostic("package_header_flags", "unsupported package header flags", offset=16)
         )
     if header_size != HEADER_SIZE:
         raise PackageValidationError(

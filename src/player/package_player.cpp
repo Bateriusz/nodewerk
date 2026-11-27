@@ -7104,6 +7104,12 @@ ExitCode PackagePlayer::initializeFromFile(const char* package_path) {
     return code;
 }
 
+#if NW_PACKAGE_AUDIO
+void* PackagePlayer::playback_window_handle() const noexcept {
+    return platform_ ? platform_->window.NativeHandle() : nullptr;
+}
+#endif
+
 ExitCode PackagePlayer::renderAtTick(std::uint64_t tick) {
     if (!initialized_) {
         return Fail(ExitCode::InvalidArguments, "lifecycle",

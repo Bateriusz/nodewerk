@@ -1051,63 +1051,12 @@ def validate_semantic_invariants(instance: dict[str, Any], schema_name: str, doc
                 )
 
     elif schema_name == "nw12-audio-physical-evidence.schema.json":
-        status = instance.get("verification_status")
-        artifact = instance.get("artifact") or {}
-        unavailable = instance.get("unavailable") or []
-        if status == "verified_physical":
-            if re.fullmatch(r"[0-9a-f]{40}", str(instance.get("source_head_sha") or "")) is None:
-                raise SchemaValidationError(
-                    f"{doc_path}: verified NW-12 physical evidence requires a source-head binding"
-                )
-            if unavailable:
-                raise SchemaValidationError(
-                    f"{doc_path}: verified NW-12 physical evidence cannot list unavailable coverage"
-                )
-            alignment = instance.get("alignment") or {}
-            if alignment.get("within_one_displayed_frame") is not True:
-                raise SchemaValidationError(
-                    f"{doc_path}: verified NW-12 evidence requires in-frame alignment"
-                )
-            if artifact.get("package_sha256") is None or artifact.get("executable_sha256") is None:
-                raise SchemaValidationError(
-                    f"{doc_path}: verified NW-12 evidence requires artifact identities"
-                )
-            measurements = instance.get("measurements") or {}
-            for field in (
-                "synthesis_cpu_100ns",
-                "worker_cpu_100ns",
-                "observed_underruns",
-                "clock_discontinuities",
-            ):
-                if measurements.get(field) is None:
-                    raise SchemaValidationError(
-                        f"{doc_path}: verified NW-12 evidence requires measurements.{field}"
-                    )
-            if instance.get("satisfies_completion") is not True:
-                raise SchemaValidationError(
-                    f"{doc_path}: verified NW-12 evidence must satisfy completion"
-                )
-            if instance.get("physical_evidence") != "verified":
-                raise SchemaValidationError(
-                    f"{doc_path}: verified NW-12 physical evidence field disagrees"
-                )
-        else:
-            if instance.get("source_head_sha") is not None:
-                raise SchemaValidationError(
-                    f"{doc_path}: pending NW-12 evidence must not bind a source head"
-                )
-            if instance.get("satisfies_completion") is not False:
-                raise SchemaValidationError(
-                    f"{doc_path}: pending NW-12 evidence cannot satisfy completion"
-                )
-            if status == "pending_physical" and not unavailable:
-                raise SchemaValidationError(
-                    f"{doc_path}: pending NW-12 evidence must list unavailable observations"
-                )
-            if instance.get("physical_evidence") == "verified":
-                raise SchemaValidationError(
-                    f"{doc_path}: pending NW-12 evidence cannot claim verified physical evidence"
-                )
+        from audio_physical_validation import verify_evidence
+
+        try:
+            verify_evidence(instance)
+        except (TypeError, ValueError) as exc:
+            raise SchemaValidationError(f"{doc_path}: {exc}") from exc
 
 
 ARTIFACT_SCHEMA_MAPPINGS: list[tuple[str, str]] = [

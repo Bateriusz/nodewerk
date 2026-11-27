@@ -27,10 +27,12 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import uuid
 from pathlib import Path
+from fractions import Fraction
 from typing import Any, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +41,7 @@ if str(ROOT / "tools") not in sys.path:
 
 import hardware_evidence_host  # noqa: E402
 import nwp_package as nwp  # noqa: E402
-from audio_song import decode_song  # noqa: E402
+from audio_song import compile_song, decode_song  # noqa: E402
 
 FORMAT = "nodewerk-nw12-audio-physical-evidence"
 VERSION = 1
@@ -88,6 +90,7 @@ PROTOCOL = {
         "AUDIO_MISSING_SAMPLES_LOWER_BOUND",
         "AUDIO_CLOCK_DISCONTINUITIES",
         "AUDIO_PHYSICAL_UNDERRUNS",
+        "AUDIO_PLAYBACK_EVIDENCE_V1",
     ],
 }
 
@@ -103,7 +106,7 @@ BUILD_INPUTS = (
 REQUIRED_ENVIRONMENT = {
     "platform": "Windows 11 x64 desktop session on the ordinary validation host",
     "audio": "real WASAPI render endpoint queried and active during playback",
-    "display": "real windowed Present at the recorded refresh rate (60 Hz fixture tolerance)",
+    "display": "real windowed Present on the unambiguous monitor at its recorded refresh",
     "gpu": "no audio-specific GPU predicate; existing common-renderer representative coverage only",
 }
 
@@ -147,7 +150,8 @@ def provenance_snapshot(
 
 
 def evidence_reference(
-    reason: str, *, verified: Mapping[str, Any] | None = None
+    reason: str, *, verified: Mapping[str, Any] | None = None,
+    playback_artifact_matches: bool = False,
 ) -> dict[str, Any]:
     """Describe the physical observation an offline/headless check cannot make."""
     reference: dict[str, Any] = {
@@ -162,7 +166,8 @@ def evidence_reference(
         "alignment_definition": PROTOCOL["alignment_definition"],
     }
     if verified is not None:
-        reference["status"] = "verified"
+        reference["status"] = ("verified" if playback_artifact_matches
+                               else "verified_production_reference")
         reference["evidence"] = dict(verified)
     return reference
 
@@ -173,6 +178,7 @@ def load_verified_evidence(
     package_bytes: bytes | None = None,
     song_bytes: bytes | None = None,
     executable_bytes: bytes | None = None,
+    source_head_sha: str | None = None,
 ) -> dict[str, Any] | None:
     """Load a verified physical record, matching the selected artifact if given."""
     candidate = path or os.environ.get("NW12_PHYSICAL_EVIDENCE", "")
@@ -186,7 +192,8 @@ def load_verified_evidence(
         evidence, package_bytes=package_bytes, song_bytes=song_bytes,
         executable_bytes=executable_bytes,
     )
-    if evidence.get("verification_status") != "verified_physical":
+    if (evidence.get("verification_status") != "verified_physical"
+            or (source_head_sha is not None and evidence["source_head_sha"] != source_head_sha)):
         return None
     return evidence
 
@@ -206,6 +213,7 @@ def sha256_file(path: Path) -> str:
 def parse_player_telemetry(stdout: str) -> dict[str, Any]:
     """Parse the exact ``AUDIO_*`` lines printed by the generated player."""
     raw: dict[str, Any] = {}
+    seen = set()
     for line in stdout.splitlines():
         name, separator, value = line.partition("=")
         if not separator:
@@ -213,14 +221,15 @@ def parse_player_telemetry(stdout: str) -> dict[str, Any]:
         name = name.strip()
         value = value.strip()
         if name in _INT_TELEMETRY:
-            try:
-                raw[_INT_TELEMETRY[name]] = int(value)
-            except ValueError:
-                raw[_INT_TELEMETRY[name]] = None
+            raw[_INT_TELEMETRY[name]] = (
+                int(value) if name not in seen and re.fullmatch(r"[0-9]{1,20}", value)
+                and int(value) < 1 << 64 else None
+            )
         elif name in _FLAG_TELEMETRY:
-            raw[_FLAG_TELEMETRY[name]] = value == "1"
+            raw[_FLAG_TELEMETRY[name]] = name not in seen and value == "1"
         elif name == "AUDIO_PHYSICAL_UNDERRUNS":
             raw["physical_underruns"] = value
+        seen.add(name)
     result: dict[str, Any] = {
         "synthesis_cpu_100ns": None,
         "synthesis_cpu_available": raw.get("synthesis_cpu_available") is True,
@@ -250,7 +259,7 @@ def _as_ticks(value: Any, field: str) -> int:
 def evaluate_alignment(
     observation: Mapping[str, Any],
     song: Mapping[str, Any],
-    display_frame_rate: int = DEFAULT_DISPLAY_FRAME_RATE,
+    display_frame_rate: int | Fraction = DEFAULT_DISPLAY_FRAME_RATE,
 ) -> dict[str, Any]:
     """Compute absolute impulse/flash alignment from a real A/V observation."""
     if display_frame_rate <= 0 or display_frame_rate > 480:
@@ -265,9 +274,13 @@ def evaluate_alignment(
     impulses = observation.get("impulses")
     if not isinstance(impulses, list) or len(impulses) != len(events):
         raise ValueError("observation must contain one impulse per song event")
-    tolerance = TICKS_PER_SECOND / display_frame_rate
+    rate = Fraction(display_frame_rate)
+    tolerance = Fraction(TICKS_PER_SECOND, 1) / rate
     deltas: list[int] = []
+    normalized = []
     for index, (event, impulse) in enumerate(zip(events, impulses)):
+        if not isinstance(impulse, Mapping):
+            raise ValueError("each impulse must contain its measured onsets")
         event_tick = _as_ticks(impulse.get("event_tick"), f"impulses[{index}].event_tick")
         audio_tick = _as_ticks(impulse.get("audio_tick"), f"impulses[{index}].audio_tick")
         display_tick = _as_ticks(
@@ -281,11 +294,15 @@ def evaluate_alignment(
         if index and (audio_tick <= previous_audio or display_tick <= previous_display):
             raise ValueError("observed audio and display onsets must be strictly increasing")
         previous_audio, previous_display = audio_tick, display_tick
+        normalized.append({"event_tick": event_tick, "audio_tick": audio_tick,
+                           "display_tick": display_tick})
         deltas.append(display_tick - audio_tick)
     maximum = max((abs(delta) for delta in deltas), default=0)
     return {
-        "display_refresh_hz": display_frame_rate,
-        "tolerance_ticks": tolerance,
+        "display_refresh_hz": float(rate),
+        "tolerance_ticks": float(tolerance),
+        "sample_rate": TICKS_PER_SECOND,
+        "impulses": normalized,
         "deltas_ticks": deltas,
         "max_abs_delta_ticks": maximum,
         "within_one_displayed_frame": maximum <= tolerance,
@@ -294,108 +311,88 @@ def evaluate_alignment(
     }
 
 
+def _valid_hash(value: Any, length: int = 64) -> bool:
+    return (isinstance(value, str) and len(value) == length
+            and re.fullmatch(r"[0-9a-f]+", value) is not None)
+
+
+def _positive_int(value: Any, maximum: int = (1 << 64) - 1) -> bool:
+    return type(value) is int and 1 <= value <= maximum
+
+
+def _refresh(display: Mapping[str, Any]) -> Fraction:
+    numerator, denominator = display.get("refresh_numerator"), display.get("refresh_denominator")
+    if not _positive_int(numerator, (1 << 32) - 1) or not _positive_int(denominator, (1 << 32) - 1):
+        raise ValueError("invalid display refresh ratio")
+    rate = Fraction(numerator, denominator)
+    if not 1 <= rate <= 480:
+        raise ValueError("display refresh must be in 1..480 Hz")
+    return rate
+
+
+def _windows_11(os_info: Any) -> bool:
+    return (isinstance(os_info, Mapping)
+            and re.fullmatch(r"[0-9]{5,7}", str(os_info.get("build", ""))) is not None
+            and int(os_info["build"]) >= 22000
+            and type(os_info.get("product_type")) is int and os_info["product_type"] == 1)
+
+
 def probe_environment() -> dict[str, Any]:
-    """Record the real Windows audio/display environment, or say unavailable."""
+    """Query host identity only. Playback determines the endpoint and display."""
+    result: dict[str, Any] = {
+        "status": "unavailable",
+        "reason": "physical WASAPI/display evidence requires a Windows 11 desktop session",
+        "os": None, "audio_endpoint": None, "display": None,
+    }
     if os.name != "nt":
-        return {
-            "status": "unavailable",
-            "reason": (
-                "physical WASAPI/display evidence requires a Windows 11 desktop "
-                f"session; this host reports os.name={os.name!r}"
-            ),
-            "os": None,
-            "audio_endpoint": None,
-            "display": None,
-        }
+        return result
     script = (
         "$ErrorActionPreference='Stop';"
         "$os=Get-CimInstance Win32_OperatingSystem;"
-        "$audio=@(Get-CimInstance Win32_SoundDevice | "
-        "Select-Object Name,Status,DeviceID);"
-        "$video=@(Get-CimInstance Win32_VideoController | "
-        "Select-Object Name,DriverVersion,CurrentHorizontalResolution,"
-        "CurrentVerticalResolution,CurrentRefreshRate);"
-        "[pscustomobject]@{"
-        "Caption=$os.Caption;Version=$os.Version;BuildNumber=$os.BuildNumber;"
-        "Audio=$audio;Video=$video}|ConvertTo-Json -Depth 5 -Compress"
+        "[pscustomobject]@{version=$os.Version;build=$os.BuildNumber;"
+        "product_type=$os.ProductType}|ConvertTo-Json -Compress"
     )
     try:
         completed = hardware_evidence_host.run_windows_text(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
             timeout=30,
         )
-    except (OSError, subprocess.TimeoutExpired, UnicodeError) as exc:
-        return {
-            "status": "unavailable",
-            "reason": f"environment probe failed: {exc}",
-            "os": None,
-            "audio_endpoint": None,
-            "display": None,
-        }
-    if completed.returncode != 0:
-        return {
-            "status": "unavailable",
-            "reason": f"environment probe failed: {completed.stderr.strip()}",
-            "os": None,
-            "audio_endpoint": None,
-            "display": None,
-        }
+        if completed.returncode == 0:
+            os_info = json.loads(completed.stdout)
+            if _windows_11(os_info):
+                result["os"] = os_info
+                result["reason"] = "selected outputs are available only from the playback process"
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+    return result
+
+
+def playback_environment(host: Mapping[str, Any], stdout: str,
+                         returncode: int | None) -> dict[str, Any]:
+    result = dict(host)
+    prefix = "AUDIO_PLAYBACK_EVIDENCE_V1="
+    rows = [line[len(prefix):] for line in stdout.splitlines() if line.startswith(prefix)]
+    result.update(status="unavailable", audio_endpoint=None, display=None,
+                  reason="successful full playback did not identify one stable display and endpoint")
+    if type(returncode) is not int or returncode != 0 or not _windows_11(host.get("os")) or len(rows) != 1:
+        return result
+    cols = rows[0].split(",")
+    if (len(cols) != 6 or not all(_valid_hash(item) for item in cols[:2])
+            or not all(re.fullmatch(r"[0-9]{1,20}", item) for item in cols[2:])):
+        return result
+    numerator, denominator, presents, final_tick = map(int, cols[2:])
+    display = {"id_sha256": cols[1], "refresh_numerator": numerator,
+               "refresh_denominator": denominator, "present_count": presents}
     try:
-        value = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        return {
-            "status": "unavailable",
-            "reason": f"environment probe returned invalid JSON: {exc}",
-            "os": None,
-            "audio_endpoint": None,
-            "display": None,
-        }
-    audio = [
-        {
-            "name": str(item.get("Name") or ""),
-            "status": str(item.get("Status") or ""),
-            "device_id": str(item.get("DeviceID") or ""),
-        }
-        for item in value.get("Audio", [])
-        if isinstance(item, Mapping)
-    ]
-    video = [
-        {
-            "name": str(item.get("Name") or ""),
-            "driver_version": str(item.get("DriverVersion") or ""),
-            "width": item.get("CurrentHorizontalResolution"),
-            "height": item.get("CurrentVerticalResolution"),
-            "refresh_hz": item.get("CurrentRefreshRate"),
-        }
-        for item in value.get("Video", [])
-        if isinstance(item, Mapping)
-    ]
-    active_audio = [
-        item for item in audio if item["status"].lower() in {"ok", "enabled"}
-    ]
-    if not active_audio or not video:
-        return {
-            "status": "unavailable",
-            "reason": "no active WASAPI endpoint or display adapter was queried",
-            "os": {
-                "caption": str(value.get("Caption") or ""),
-                "version": str(value.get("Version") or ""),
-                "build": str(value.get("BuildNumber") or ""),
-            },
-            "audio_endpoint": None,
-            "display": None,
-        }
-    return {
-        "status": "available",
-        "reason": "",
-        "os": {
-            "caption": str(value.get("Caption") or ""),
-            "version": str(value.get("Version") or ""),
-            "build": str(value.get("BuildNumber") or ""),
-        },
-        "audio_endpoint": active_audio,
-        "display": video,
-    }
+        _refresh(display)
+    except ValueError:
+        return result
+    if not _positive_int(presents) or not _positive_int(final_tick):
+        return result
+    result.update(status="available", reason="", display=display,
+                  audio_endpoint={"id_sha256": cols[0], "data_flow": "eRender", "role": "eConsole",
+                                  "clock": "wasapi_endpoint", "final_tick": final_tick})
+    return result
 
 
 def _convert_cpu_ms(value: int | None) -> float | None:
@@ -413,8 +410,11 @@ def build_evidence(
     telemetry_text: str = "",
     observation: Mapping[str, Any] | None = None,
     environment: Mapping[str, Any] | None = None,
-    display_frame_rate: int = DEFAULT_DISPLAY_FRAME_RATE,
     provenance: Mapping[str, Any] | None = None,
+    build_identity: Mapping[str, Any] | None = None,
+    run_id: str | None = None,
+    run_sha256: str | None = None,
+    player_returncode: int | None = None,
 ) -> dict[str, Any]:
     """Build a physical evidence record without inventing any observation."""
     package = nwp.decode_package(package_bytes)
@@ -424,7 +424,20 @@ def build_evidence(
     song = decode_song(song_bytes)
     unavailable: list[dict[str, str]] = []
     unavailable_telemetry: list[dict[str, str]] = []
-    environment = environment or probe_environment()
+    environment = playback_environment(environment or probe_environment(), telemetry_text,
+                                       player_returncode)
+    artifact = {
+        "package_sha256": sha256_bytes(package_bytes),
+        "executable_sha256": sha256_bytes(executable_bytes) if executable_bytes else None,
+        "song_sha256": sha256_bytes(song_bytes), "song_bytes": len(song_bytes),
+        "duration_ticks": song["duration_ticks"],
+    }
+    provenance = dict(provenance or provenance_snapshot(include_source=False))
+    if build_identity is None:
+        unavailable.append({"field": "build_identity",
+                            "reason": "no independently recorded artifact build identity was supplied"})
+    else:
+        validate_physical_inputs(build_identity, _identity_hashes(artifact), provenance)
     if environment.get("status") != "available":
         unavailable.append(
             {
@@ -494,8 +507,8 @@ def build_evidence(
                 "reason": "no real displayed impulse/flash observation was supplied",
             }
         )
-    else:
-        alignment = evaluate_alignment(observation, song, display_frame_rate)
+    elif environment["status"] == "available":
+        alignment = evaluate_alignment(observation, song, _refresh(environment["display"]))
         if not alignment["within_one_displayed_frame"]:
             unavailable.append(
                 {
@@ -514,36 +527,26 @@ def build_evidence(
         and alignment["within_one_displayed_frame"]
         and not unavailable
     )
-    if verified:
-        if not source_head_sha or len(source_head_sha) != 40:
-            raise ValueError("verified physical evidence requires a 40-hex source head")
-    else:
-        # A pending record must not claim to certify a particular source head.
-        source_head_sha = None
-    return {
+    evidence = {
         "format": FORMAT,
         "version": VERSION,
         "task": "NW-12",
         "implementation_base": IMPLEMENTATION_BASE,
         "nw11_incorporated": True,
-        "provenance": dict(provenance or provenance_snapshot(include_source=False)),
-        "source_head_sha": source_head_sha,
+        "provenance": provenance,
+        "source_head_sha": source_head_sha if verified else None,
+        "build_identity": build_identity,
+        "run_id": run_id,
+        "run_sha256": run_sha256,
+        "song": song,
         "verification_status": "verified_physical" if verified else "pending_physical",
         "physical_evidence": "verified" if verified else "pending",
         "contract_evidence": "verified_by_pytest",
         "satisfies_completion": verified,
-        "artifact": {
-            "package_sha256": sha256_bytes(package_bytes),
-            "executable_sha256": (
-                sha256_bytes(executable_bytes) if executable_bytes else None
-            ),
-            "song_sha256": sha256_bytes(song_bytes),
-            "song_bytes": len(song_bytes),
-            "duration_ticks": song["duration_ticks"],
-        },
+        "artifact": artifact,
         "environment": dict(environment),
         "required_environment": dict(REQUIRED_ENVIRONMENT),
-        "protocol": dict(PROTOCOL, display_frame_rate=display_frame_rate),
+        "protocol": dict(PROTOCOL),
         "measurements": measurements,
         "alignment": alignment,
         "unavailable": unavailable,
@@ -556,6 +559,101 @@ def build_evidence(
         ),
     }
 
+    if player_returncode is not None:
+        mark_player_result(evidence, player_returncode)
+    verify_evidence(evidence)
+    return evidence
+
+
+def _identity_hashes(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: artifact.get(key) for key in
+            ("executable_sha256", "package_sha256", "song_sha256")}
+
+
+def _verify_measured_evidence(evidence: Mapping[str, Any]) -> None:
+    artifact = evidence["artifact"]
+    provenance = evidence.get("provenance")
+    if not isinstance(provenance, Mapping):
+        raise ValueError("verified evidence requires build provenance")
+    source = evidence.get("source_head_sha")
+    if (not _valid_hash(source, 40) or source != provenance.get("source_revision")
+            or provenance.get("tracked_files_clean") is not True
+            or provenance.get("nw11_incorporated") is not True
+            or provenance.get("implementation_base") != IMPLEMENTATION_BASE
+            or provenance.get("nw11_merge_revision") != IMPLEMENTATION_BASE
+            or provenance.get("implementation_base_tree") != IMPLEMENTATION_BASE_TREE):
+        raise ValueError("verified evidence requires a clean source head binding")
+    digest_fields = _identity_hashes(artifact)
+    if not all(_valid_hash(value) for value in digest_fields.values()):
+        raise ValueError("verified evidence requires executable, package and song hashes")
+    identity = evidence.get("build_identity")
+    if not isinstance(identity, Mapping):
+        raise ValueError("verified evidence requires the artifact build identity")
+    validate_physical_inputs(identity, digest_fields, provenance)
+    if (type(evidence.get("player_returncode")) is not int or evidence["player_returncode"] != 0
+            or evidence.get("physical_evidence") != "verified"
+            or evidence.get("satisfies_completion") is not True):
+        raise ValueError("verified evidence requires successful playback and matching status")
+
+    song = evidence.get("song")
+    compiled = compile_song(song)
+    if (digest_fields["song_sha256"] != sha256_bytes(compiled)
+            or artifact.get("song_bytes") != len(compiled)
+            or artifact.get("duration_ticks") != song["duration_ticks"]):
+        raise ValueError("measured song schedule does not match artifact identity")
+
+    environment = evidence.get("environment")
+    if not isinstance(environment, Mapping):
+        raise ValueError("verified evidence requires the active playback environment")
+    endpoint = environment.get("audio_endpoint")
+    display = environment.get("display")
+    if (environment.get("status") != "available" or not _windows_11(environment.get("os"))
+            or not isinstance(endpoint, Mapping) or not isinstance(display, Mapping)
+            or not _valid_hash(endpoint.get("id_sha256"))
+            or not _valid_hash(display.get("id_sha256"))
+            or endpoint.get("data_flow") != "eRender" or endpoint.get("role") != "eConsole"
+            or endpoint.get("clock") != "wasapi_endpoint"
+            or not _positive_int(endpoint.get("final_tick"))
+            or endpoint["final_tick"] < song["duration_ticks"]
+            or not _positive_int(display.get("present_count"))):
+        raise ValueError("verified evidence requires the active playback endpoint and display")
+    protocol = evidence.get("protocol") or {}
+    if (not isinstance(protocol, Mapping) or protocol.get("clock") != "wasapi_endpoint"
+            or protocol.get("sample_rate") != TICKS_PER_SECOND):
+        raise ValueError("verified evidence requires the fixed WASAPI timebase")
+
+    alignment = evidence.get("alignment")
+    if not isinstance(alignment, Mapping):
+        raise ValueError("verified evidence requires measured alignment")
+    capture = alignment.get("capture")
+    run_id, run_sha256 = evidence.get("run_id"), evidence.get("run_sha256")
+    if (not _valid_hash(run_id, 32) or not _valid_hash(run_sha256)
+            or not isinstance(capture, Mapping) or capture.get("run_id") != run_id or capture.get("run_sha256") != run_sha256
+            or not all(_valid_hash(capture.get(f"{kind}_sha256")) for kind in ("audio", "video"))):
+        raise ValueError("verified evidence requires the same playback run and both raw capture hashes")
+    recomputed = evaluate_alignment(
+        {"format": OBSERVATION_FORMAT, "version": 1, **alignment}, song, _refresh(display)
+    )
+    if alignment != recomputed or recomputed["within_one_displayed_frame"] is not True:
+        raise ValueError("verified evidence requires measured in-frame alignment")
+
+    m = evidence.get("measurements") or {}
+    if (not isinstance(m, Mapping) or
+            any(type(m.get(key)) is not int or not 0 <= m[key] < 1 << 64
+                for key in _INT_TELEMETRY.values())):
+        raise ValueError("verified evidence requires the actual non-negative integer telemetry")
+    if m.get("physical_underruns") != "unavailable":
+        raise ValueError("exact audible glitch telemetry must remain unavailable")
+    if (m["synthesis_cpu_100ns"] > m["worker_cpu_100ns"]
+            or m["observed_underruns"] > m["starvation_observations"]
+            or m["observed_underruns"] > m["clock_discontinuities"]
+            or m["observed_underruns"] > m["missing_samples_lower_bound"]
+            or m.get("synthesis_cpu_ms") != _convert_cpu_ms(m["synthesis_cpu_100ns"])
+            or m.get("worker_cpu_ms") != _convert_cpu_ms(m["worker_cpu_100ns"])
+            or m.get("observed_underrun_rate_per_second") !=
+            m["observed_underruns"] / (song["duration_ticks"] / TICKS_PER_SECOND)):
+        raise ValueError("reported CPU or underrun summary contradicts run telemetry")
+
 
 def verify_evidence(
     evidence: Mapping[str, Any],
@@ -565,59 +663,35 @@ def verify_evidence(
     executable_bytes: bytes | None = None,
 ) -> dict[str, Any]:
     """Validate evidence structure and artifact binding without hardware."""
-    if evidence.get("format") != FORMAT or evidence.get("version") != VERSION:
+    if (not isinstance(evidence, Mapping) or evidence.get("format") != FORMAT
+            or type(evidence.get("version")) is not int or evidence["version"] != VERSION):
         raise ValueError("unexpected NW-12 physical evidence format")
-    if evidence.get("task") != "NW-12" or evidence.get("nw11_incorporated") is not True:
+    if (evidence.get("task") != "NW-12" or evidence.get("nw11_incorporated") is not True
+            or evidence.get("implementation_base") != IMPLEMENTATION_BASE):
         raise ValueError("evidence must identify NW-12 on the NW-11 implementation base")
     status = evidence.get("verification_status")
     if status not in {"pending_physical", "verified_physical", "failed"}:
         raise ValueError("invalid verification status")
-    artifact = evidence.get("artifact") or {}
-    for field in ("package_sha256", "song_sha256"):
-        value = artifact.get(field)
-        if value is not None and (
-            not isinstance(value, str)
-            or len(value) != 64
-            or any(c not in "0123456789abcdef" for c in value)
-        ):
+    artifact = evidence.get("artifact")
+    if not isinstance(artifact, Mapping):
+        raise ValueError("evidence requires artifact identities")
+    for field, value in _identity_hashes(artifact).items():
+        if value is not None and not _valid_hash(value):
             raise ValueError(f"invalid artifact.{field}")
     unavailable = evidence.get("unavailable") or []
-    alignment = evidence.get("alignment")
-    measurements = evidence.get("measurements") or {}
     if status == "verified_physical":
-        if not isinstance(evidence.get("source_head_sha"), str) or len(
-            evidence["source_head_sha"]
-        ) != 40:
-            raise ValueError("verified evidence requires a source head binding")
-        if artifact.get("package_sha256") is None or artifact.get("song_sha256") is None:
-            raise ValueError("verified evidence requires artifact hashes")
         if unavailable:
             raise ValueError("verified evidence cannot contain unavailable fields")
-        if not alignment or alignment.get("within_one_displayed_frame") is not True:
-            raise ValueError("verified evidence requires in-frame alignment")
-        for field in (
-            "synthesis_cpu_100ns",
-            "worker_cpu_100ns",
-            "observed_underruns",
-            "clock_discontinuities",
-        ):
-            if measurements.get(field) is None:
-                raise ValueError(f"verified evidence requires measurements.{field}")
-        provenance = evidence.get("provenance") or {}
-        bound_source = provenance.get("source_revision")
-        if bound_source is not None and bound_source != evidence["source_head_sha"]:
-            raise ValueError(
-                "verified evidence source head does not match its provenance"
-            )
+        _verify_measured_evidence(evidence)
     else:
-        # Pending/failed evidence must not certify a source head and must say
-        # exactly which observations are missing.
         if evidence.get("source_head_sha") is not None:
             raise ValueError("pending evidence cannot bind a source head")
         if status == "pending_physical" and not unavailable:
             raise ValueError("pending evidence must list unavailable observations")
         if evidence.get("satisfies_completion") is not False:
             raise ValueError("pending/failed evidence cannot satisfy completion")
+        if evidence.get("physical_evidence") != ("pending" if status == "pending_physical" else "failed"):
+            raise ValueError("physical evidence status fields disagree")
     if package_bytes is not None:
         if artifact.get("package_sha256") != sha256_bytes(package_bytes):
             raise ValueError("package bytes do not match the evidence binding")
@@ -658,9 +732,12 @@ def _artifact_identity(player: Path, package: Path, song: Path) -> dict[str, str
 def validate_physical_inputs(identity: Mapping[str, Any], artifact: Mapping[str, str],
                              provenance: Mapping[str, Any]) -> None:
     """Bind downloaded CI artifacts to their actual build checkout and bytes."""
-    if identity.get("format") != "nodewerk-audio-physical-inputs" or identity.get("version") != 1:
+    if (not isinstance(identity, Mapping)
+            or identity.get("format") != "nodewerk-audio-physical-inputs"
+            or type(identity.get("version")) is not int or identity["version"] != 1):
         raise ValueError("invalid physical input manifest")
-    if identity.get("artifact") != artifact:
+    if (not all(_valid_hash(value) for value in _identity_hashes(artifact).values())
+            or identity.get("artifact") != artifact):
         raise ValueError("physical input artifact SHA-256 mismatch")
     for field, key in (("source_commit", "source_revision"), ("source_tree", "source_tree")):
         value = identity.get(field)
@@ -689,20 +766,30 @@ def run_playback(*, player: Path, package: Path, song: Path, output: Path,
     provenance = provenance_snapshot()
     if not provenance.get("tracked_files_clean") or not provenance.get("source_revision"):
         raise ValueError("physical playback requires a clean tracked source checkout")
-    if identity_path is not None:
-        validate_physical_inputs(json.loads(identity_path.read_text(encoding="utf-8")),
-                                 artifact, provenance)
-    environment = probe_environment()
+    identity = (json.loads(identity_path.read_text(encoding="utf-8"))
+                if identity_path is not None else None)
+    if identity is not None:
+        validate_physical_inputs(identity, artifact, provenance)
+        ancestry = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", IMPLEMENTATION_BASE, "HEAD"],
+            cwd=ROOT, capture_output=True,
+        )
+        if ancestry.returncode != 0:
+            raise ValueError("build source must contain the NW-11 implementation base")
+    host = probe_environment()
     run_id = uuid.uuid4().hex
     print(f"Audio capture run ID: {run_id}", flush=True)
-    completed = subprocess.run([str(player)], capture_output=True, text=True, timeout=timeout)
+    completed = subprocess.run([str(player), "--audio-evidence"], capture_output=True,
+                               timeout=timeout)
     if _artifact_identity(player, package, song) != artifact:
         raise ValueError("playback artifacts changed during execution")
     if provenance_snapshot() != provenance:
         raise ValueError("source checkout changed during execution")
     result = {"format": "nodewerk-audio-physical-run", "version": 1, "run_id": run_id,
-              "artifact": artifact, "provenance": provenance, "environment": environment,
-              "stdout": completed.stdout, "stderr": completed.stderr,
+              "artifact": artifact, "provenance": provenance, "build_identity": identity,
+              "environment": host,
+              "stdout": hardware_evidence_host.decode_windows_output(completed.stdout),
+              "stderr": hardware_evidence_host.decode_windows_output(completed.stderr),
               "returncode": completed.returncode}
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("x", encoding="utf-8") as stream:
@@ -715,7 +802,7 @@ def validate_capture_binding(run: Mapping[str, Any], observation: Mapping[str, A
     if run.get("format") != "nodewerk-audio-physical-run" or run.get("version") != 1:
         raise ValueError("invalid physical run format")
     run_id = run.get("run_id")
-    if not isinstance(run_id, str) or len(run_id) != 32 or observation.get("run_id") != run_id:
+    if not _valid_hash(run_id, 32) or observation.get("run_id") != run_id:
         raise ValueError("observation does not identify the recorded playback run")
     capture = observation.get("capture") or {}
     if capture.get("audio_sha256") != sha256_file(audio_capture):
@@ -726,10 +813,11 @@ def validate_capture_binding(run: Mapping[str, Any], observation: Mapping[str, A
 
 def record(*, player: Path, package: Path, song: Path, output: Path,
            run_path: Path, observation_path: Path, audio_capture: Path,
-           video_capture: Path, display_frame_rate: int = DEFAULT_DISPLAY_FRAME_RATE
+           video_capture: Path
            ) -> dict[str, Any]:
     """Bind a capture to the saved telemetry; never launch a second playback."""
-    run = json.loads(run_path.read_text(encoding="utf-8"))
+    raw_run = run_path.read_bytes()
+    run = json.loads(raw_run)
     observation = json.loads(observation_path.read_text(encoding="utf-8"))
     validate_capture_binding(run, observation, audio_capture, video_capture)
     if run.get("artifact") != _artifact_identity(player, package, song):
@@ -737,24 +825,44 @@ def record(*, player: Path, package: Path, song: Path, output: Path,
     provenance = run["provenance"]
     if not provenance.get("tracked_files_clean"):
         raise ValueError("physical run source checkout was not clean")
-    environment = run["environment"]
-    if not any(row.get("refresh_hz") == display_frame_rate
-               for row in (environment.get("display") or [])):
-        raise ValueError("declared refresh rate does not match the recorded display")
+    run_sha256 = sha256_bytes(raw_run)
     observation["capture"] = dict(observation["capture"], run_id=run["run_id"],
-                                  run_sha256=sha256_file(run_path))
+                                  run_sha256=run_sha256)
     evidence = build_evidence(
         package_bytes=package.read_bytes(), song_bytes=song.read_bytes(),
         source_head_sha=provenance.get("source_revision"),
         executable_bytes=player.read_bytes(), telemetry_text=run["stdout"],
-        observation=observation, environment=environment,
-        display_frame_rate=display_frame_rate, provenance=provenance,
+        observation=observation, environment=run["environment"], provenance=provenance,
+        build_identity=run.get("build_identity"), run_id=run["run_id"],
+        run_sha256=run_sha256, player_returncode=run["returncode"],
     )
-    mark_player_result(evidence, run["returncode"])
-    verify_evidence(evidence)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    with output.open("x", encoding="utf-8") as stream:
+        json.dump(evidence, stream, indent=2, sort_keys=True)
+        stream.write("\n")
     return evidence
+
+
+def verify_run_files(evidence: Mapping[str, Any], run_path: Path,
+                     audio_capture: Path, video_capture: Path) -> None:
+    """Optionally recheck the archived run and original media against the record."""
+    data = run_path.read_bytes()
+    run = json.loads(data)
+    if (evidence.get("verification_status") != "verified_physical"
+            or evidence.get("run_sha256") != sha256_bytes(data)
+            or evidence.get("run_id") != run.get("run_id")
+            or evidence.get("build_identity") != run.get("build_identity")
+            or evidence.get("provenance") != run.get("provenance")
+            or _identity_hashes(evidence["artifact"]) != run.get("artifact")):
+        raise ValueError("archived run does not match the verified evidence")
+    validate_capture_binding(run, {"run_id": evidence["run_id"],
+                                   "capture": evidence["alignment"]["capture"]},
+                             audio_capture, video_capture)
+    if playback_environment(run["environment"], run["stdout"], run["returncode"]) != evidence["environment"]:
+        raise ValueError("archived run does not match the active playback environment")
+    telemetry = parse_player_telemetry(run["stdout"])
+    if any(telemetry[key] != evidence["measurements"][key] for key in _INT_TELEMETRY.values()):
+        raise ValueError("archived run does not match the measured audio telemetry")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -769,7 +877,6 @@ def _parser() -> argparse.ArgumentParser:
     record_parser.add_argument("--observation", type=Path, required=True)
     record_parser.add_argument("--capture-audio", type=Path, required=True)
     record_parser.add_argument("--capture-video", type=Path, required=True)
-    record_parser.add_argument("--display-frame-rate", type=int, default=DEFAULT_DISPLAY_FRAME_RATE)
     run_parser = sub.add_parser("run", help="launch a single physical playback while capturing A/V")
     for name in ("player", "package", "song", "output"):
         run_parser.add_argument("--" + name, type=Path, required=True)
@@ -780,6 +887,8 @@ def _parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("--package", type=Path)
     verify_parser.add_argument("--song", type=Path)
     verify_parser.add_argument("--executable", type=Path)
+    for name in ("run", "capture-audio", "capture-video"):
+        verify_parser.add_argument("--" + name, type=Path)
     probe_parser = sub.add_parser("environment", help="print the detected environment")
     probe_parser.add_argument("--output", type=Path)
     return parser
@@ -807,7 +916,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             output=args.output,
             run_path=args.run, observation_path=args.observation,
             audio_capture=args.capture_audio, video_capture=args.capture_video,
-            display_frame_rate=args.display_frame_rate,
         )
         print(json.dumps({"verification_status": evidence["verification_status"]}))
         return 0
@@ -818,7 +926,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         song_bytes=args.song.read_bytes() if args.song else None,
         executable_bytes=args.executable.read_bytes() if args.executable else None,
     )
-    print(json.dumps({"valid": True, "verification_status": verified["verification_status"]}))
+    run_files = (args.run, args.capture_audio, args.capture_video)
+    if any(run_files):
+        if not all(run_files):
+            raise ValueError("verify requires --run, --capture-audio and --capture-video together")
+        verify_run_files(verified, *run_files)
+    print(json.dumps({"valid": True, "verification_status": verified["verification_status"],
+                      "archive_rechecked": all(run_files)}))
     return 0
 
 

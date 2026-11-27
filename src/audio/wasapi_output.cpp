@@ -4,6 +4,9 @@
 #include <audioclient.h>
 #include <mmdeviceapi.h>
 #include <limits>
+#include <algorithm>
+#include <cwchar>
+#include <iterator>
 
 namespace nw::audio {
 namespace {
@@ -28,12 +31,88 @@ bool CpuTime(HANDLE thread, std::uint64_t& result) noexcept {
     return true;
 }
 }
+bool IsWindowOnPlaybackMonitor(HWND window, HMONITOR expected) noexcept {
+    if (!window || !expected || !IsWindowVisible(window) || IsIconic(window) ||
+        MonitorFromWindow(window, MONITOR_DEFAULTTONULL) != expected) return false;
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    RECT client{};
+    if (!GetMonitorInfoW(expected, &info) || !GetClientRect(window, &client) ||
+        client.right <= client.left || client.bottom <= client.top) return false;
+    POINT first{client.left, client.top};
+    POINT last{client.right, client.bottom};
+    return ClientToScreen(window, &first) && ClientToScreen(window, &last) &&
+           first.x >= info.rcMonitor.left && first.y >= info.rcMonitor.top &&
+           last.x <= info.rcMonitor.right && last.y <= info.rcMonitor.bottom;
+}
+
+PlaybackDisplay GetPlaybackDisplay(HWND window) noexcept {
+    if (!window || GetSystemMetrics(SM_REMOTESESSION)) return {};
+    const auto monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONULL);
+    if (!IsWindowOnPlaybackMonitor(window, monitor)) return {};
+    MONITORINFOEXW info{};
+    info.cbSize = sizeof(info);
+    if (!GetMonitorInfoW(monitor, reinterpret_cast<MONITORINFO*>(&info))) return {};
+
+    // QDC_VIRTUAL_REFRESH_RATE_AWARE (Windows 11); reject dynamic refresh,
+    // clones and indirect/virtual targets instead of choosing a plausible mode.
+    constexpr UINT32 flags = QDC_ONLY_ACTIVE_PATHS | 0x40u;
+    constexpr UINT32 dynamic_refresh = 0x10u; // DISPLAYCONFIG_PATH_BOOST_REFRESH_RATE
+    UINT32 path_count = 0, mode_count = 0;
+    std::array<DISPLAYCONFIG_PATH_INFO, 64> paths{};
+    std::array<DISPLAYCONFIG_MODE_INFO, 192> modes{};
+    if (GetDisplayConfigBufferSizes(flags, &path_count, &mode_count) != ERROR_SUCCESS ||
+        path_count == 0 || path_count > paths.size() || mode_count > modes.size() ||
+        QueryDisplayConfig(flags, &path_count, paths.data(), &mode_count, modes.data(),
+                           nullptr) != ERROR_SUCCESS) return {};
+    const DISPLAYCONFIG_PATH_INFO* selected = nullptr;
+    for (UINT32 i = 0; i < path_count; ++i) {
+        const auto& path = paths[i];
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME source{};
+        source.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        source.header.size = sizeof(source);
+        source.header.adapterId = path.sourceInfo.adapterId;
+        source.header.id = path.sourceInfo.id;
+        if (DisplayConfigGetDeviceInfo(&source.header) != ERROR_SUCCESS) return {};
+        if (std::wcscmp(source.viewGdiDeviceName, info.szDevice) != 0) continue;
+        if (selected) return {};
+        selected = &path;
+    }
+    if (!selected || !selected->targetInfo.targetAvailable ||
+        (selected->flags & dynamic_refresh)) return {};
+    const auto& target_info = selected->targetInfo;
+    const auto tech = target_info.outputTechnology;
+    if (tech == DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER ||
+        tech == DISPLAYCONFIG_OUTPUT_TECHNOLOGY_MIRACAST ||
+        tech == DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INDIRECT_WIRED ||
+        tech == DISPLAYCONFIG_OUTPUT_TECHNOLOGY_INDIRECT_VIRTUAL) return {};
+    DISPLAYCONFIG_TARGET_DEVICE_NAME target{};
+    target.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+    target.header.size = sizeof(target);
+    target.header.adapterId = target_info.adapterId;
+    target.header.id = target_info.id;
+    const auto rate = target_info.refreshRate;
+    if (!rate.Numerator || !rate.Denominator ||
+        DisplayConfigGetDeviceInfo(&target.header) != ERROR_SUCCESS ||
+        !target.monitorDevicePath[0]) return {};
+    PlaybackDisplay result{};
+    result.monitor = monitor;
+    result.refresh_numerator = rate.Numerator;
+    result.refresh_denominator = rate.Denominator;
+    static_assert(std::size(target.monitorDevicePath) == result.device_path.size());
+    std::copy_n(target.monitorDevicePath, result.device_path.size(), result.device_path.data());
+    if (result.device_path.back() != L'\0') return {};
+    return result;
+}
+
 WasapiOutput::~WasapiOutput() { stop(); }
-bool WasapiOutput::start(const Song& song, std::uint64_t tick) {
+bool WasapiOutput::start(const Song& song, std::uint64_t tick, bool collect_evidence) {
     stop();
     if (!ValidateSong(song) || tick >= song.duration_ticks) return false;
     song_ = song;
     origin_ = tick;
+    collect_evidence_ = collect_evidence;
+    endpoint_id_[0] = L'\0';
     tick_.store(tick);
     failed_.store(false);
     ready_.store(false);
@@ -89,6 +168,17 @@ void WasapiOutput::run() noexcept {
         FAILED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
                                 reinterpret_cast<void**>(&client.value)))) {
         fail(); return;
+    }
+    if (collect_evidence_) {
+        LPWSTR id = nullptr;
+        DWORD state = 0;
+        if (SUCCEEDED(device->GetState(&state)) && state == DEVICE_STATE_ACTIVE &&
+            SUCCEEDED(device->GetId(&id)) && id) {
+            const auto length = std::wcslen(id);
+            if (length < endpoint_id_.size())
+                std::copy_n(id, length + 1u, endpoint_id_.data());
+        }
+        CoTaskMemFree(id);
     }
     WAVEFORMATEX format{};
     format.wFormatTag = WAVE_FORMAT_PCM;
@@ -154,6 +244,12 @@ void WasapiOutput::run() noexcept {
         UINT32 padding = 0;
         std::uint64_t tick = 0;
         if (FAILED(client->GetCurrentPadding(&padding)) || !clock_tick(tick)) {
+            discontinuities_.fetch_add(1); fail(); break;
+        }
+        // No submissions occur between samples. The first padding sample
+        // can legally become zero while the thread is waiting for the clock.
+        if (progress.needs_padding_refresh(tick, padding, capacity) &&
+            FAILED(client->GetCurrentPadding(&padding))) {
             discontinuities_.fetch_add(1); fail(); break;
         }
         if (!padding) starvation_.fetch_add(1);

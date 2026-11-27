@@ -12,6 +12,13 @@ struct StreamProgress {
     std::uint64_t submitted_until = 0;
     std::uint64_t observed_underruns = 0;
     std::uint64_t missing_samples = 0;
+    // The first padding sample precedes the clock read. Confirm a positive
+    // padding sample again if the cursor advanced past the submitted frontier.
+    bool needs_padding_refresh(std::uint64_t position, std::uint32_t padding,
+                               std::uint32_t capacity) const noexcept {
+        return position >= last && position > submitted_until && padding != 0 &&
+               padding <= capacity;
+    }
     StreamAction observe(std::uint64_t position, std::uint32_t padding,
                          std::uint32_t capacity) noexcept {
         if (position < last || padding > capacity) return StreamAction::Discontinuity;

@@ -3002,19 +3002,29 @@ static bool ValidAudioPayload(const std::uint8_t* bytes, std::size_t size) {
 }
 #endif
 
+namespace {
+constexpr std::uint32_t kSupportedPackageFlags = 1u
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+    | kStatefulExtensionFlag
+#endif
+#if NW_PACKAGE_AUDIO
+    | kAudioExtensionFlag
+#endif
+    ;
+}
+
 bool ValidatePackage(const Package& package,
                      std::vector<Diagnostic>& diagnostics,
                      bool allow_dev) {
+    if ((package.flags & ~kSupportedPackageFlags) != 0u) {
+        AddDiagnostic(diagnostics, "package_header_flags", "unsupported package header flags");
+    }
 #if NW_PACKAGE_AUDIO
     if ((package.audio_song.has_value() &&
          !ValidAudioPayload(package.audio_song->data(), package.audio_song->size())) ||
         (!package.audio_song.has_value() && (package.flags & kAudioExtensionFlag))) {
         AddDiagnostic(diagnostics, "package_audio_invalid", "invalid NWAS payload or flag",
                       std::string(kSectionAudio));
-    }
-#else
-    if (package.flags & kAudioExtensionFlag) {
-        AddDiagnostic(diagnostics, "package_audio_unsupported", "audio capability not linked");
     }
 #endif
     ValidateCapability(package.capability, package.resources,
@@ -3588,9 +3598,11 @@ bool DecodePackage(const std::uint8_t* data, std::size_t size_bytes,
                       "unknown .nwp version", {}, 8, true);
         return false;
     }
-#if !NW_PACKAGE_AUDIO
-    if ((flags & kAudioExtensionFlag) != 0u) return false;
-#endif
+    if ((flags & ~kSupportedPackageFlags) != 0u) {
+        NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_header_flags",
+                                "unsupported package header flags", {}, 16, true);
+        return false;
+    }
     if (header_size != kHeaderSize) {
         NW_NWP_DECODE_DIAGNOSTIC(diagnostics, "package_header_size",
                       "header_size is not 64", {}, 12, true);

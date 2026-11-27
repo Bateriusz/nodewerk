@@ -29,7 +29,13 @@ int main() {
     progress.submitted_until = 1080;
     CHECK(progress.observe(650, 430, 480) == StreamAction::Continue);
     CHECK(progress.observe(649, 430, 480) == StreamAction::Discontinuity);
-    CHECK(progress.observe(1200, 1, 480) == StreamAction::Discontinuity);
+    CHECK(progress.needs_padding_refresh(1200, 1, 480));
+    CHECK(!progress.needs_padding_refresh(1200, 0, 480));
+    CHECK(!progress.needs_padding_refresh(649, 1, 480));
+    CHECK(!progress.needs_padding_refresh(1200, 481, 480));
+    auto still_queued = progress;
+    CHECK(still_queued.observe(1200, 1, 480) == StreamAction::Discontinuity);
+    // A positive earlier snapshot can drain before the later clock sample.
     CHECK(progress.observe(1200, 0, 480) == StreamAction::Recover);
     CHECK(progress.observed_underruns == 2 && progress.missing_samples == 240);
     Song song{};

@@ -701,6 +701,10 @@ class RuntimePackageExporter:
         self.optimization = optimization
         self._export_function = export_function or nw05_export.export_graph
 
+    def selected_audio_payload(self) -> bytes | None:
+        path = self.settings.audio_song_path
+        return nw05_export.read_audio_song(path) if path else None
+
     def export(
         self,
         document: nw03_compiler.GraphDocument,
@@ -708,6 +712,7 @@ class RuntimePackageExporter:
         *,
         width: int,
         height: int,
+        audio_song_payload: bytes | None = None,
     ) -> PreviewExportBundle:
         work_directory.mkdir(parents=True, exist_ok=True)
         graph_path = work_directory / "edited-preview.nwgraph"
@@ -728,6 +733,8 @@ class RuntimePackageExporter:
             optimization=self.optimization,
             cache_dir=str(self.cache_dir) if self.cache_dir is not None else None,
             allow_test_payloads=self.allow_test_payloads,
+            **({"audio_song_payload": audio_song_payload}
+               if audio_song_payload is not None else {}),
         )
         artifact = result.artifacts[nwp_package.COMMON_PROFILE_ID]
         package_sha = hashlib.sha256(artifact.package_bytes).hexdigest()
@@ -1571,10 +1578,13 @@ class WindowsRuntimePreviewBackend:
         *,
         width: int,
         height: int,
+        audio_song_payload: bytes | None = None,
     ) -> str:
         return sha256_value(
             {
                 "domain": "nw08.preview.session-document.v1",
+                **({"song_sha256": hashlib.sha256(audio_song_payload).hexdigest()}
+                   if audio_song_payload is not None else {}),
                 "semantic_digest": editor_semantic_digest(document)[0],
                 "settings": dict(document.settings),
                 "width": width,
@@ -1591,7 +1601,13 @@ class WindowsRuntimePreviewBackend:
         width: int,
         height: int,
     ) -> tuple[str, PreviewExportBundle, float]:
-        key = self._document_key(document, width=width, height=height)
+        try:
+            song = (self._exporter.selected_audio_payload()
+                    if isinstance(self._exporter, RuntimePackageExporter) else None)
+        except (OSError, ValueError) as exc:
+            raise PreviewError(f"invalid audio song: {exc}") from exc
+        key = self._document_key(document, width=width, height=height,
+                                 audio_song_payload=song)
         existing = self._bundles.get(key)
         if existing is not None:
             return key, existing, 0.0
@@ -1604,7 +1620,8 @@ class WindowsRuntimePreviewBackend:
         export_start = time.perf_counter()
         try:
             bundle = self._exporter.export(
-                document, work_directory, width=width, height=height
+                document, work_directory, width=width, height=height,
+                **({"audio_song_payload": song} if song is not None else {}),
             )
         except (nw05_export.ExportError, nw03_compiler.CompilerError) as exc:
             raise PreviewError(str(exc), getattr(exc, "diagnostics", [])) from exc

@@ -126,6 +126,9 @@ public:
                         std::size_t size_bytes);
     ExitCode initializeFromFile(const char* package_path);
     ExitCode renderAtTick(std::uint64_t tick);
+#if NW_PACKAGE_AUDIO
+    void* playback_window_handle() const noexcept;
+#endif
     // Reads back the exact resource target of frame.present.  Diagnostic/
     // qualification only; returns the bytes written by the package shader.
     ExitCode readbackPresentedOutput(std::vector<std::uint8_t>* bytes);

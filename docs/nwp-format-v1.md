@@ -26,7 +26,7 @@ offset  size  field
 8       2     version_major = 1
 10      2     version_minor = 0
 12      4     header_size = 64
-16      4     flags (bit 0: release package)
+16      4     flags (bit 0: release package; other bits only as defined by extensions)
 20      4     reserved = 0
 24      8     section_directory_offset = 64
 32      8     total_size

@@ -784,8 +784,13 @@ def _audio_playback_source(audio: Mapping[str, Any]) -> str:
         checksum = checksum * 1099511628211ULL + static_cast<std::uint16_t>(sample);
     std::printf("AUDIO_SYNTHESIS_PROBE=%llu\\n", static_cast<unsigned long long>(checksum));
 #else
+    auto window = static_cast<HWND>(player.playback_window_handle());
+    const auto display = audio_evidence ? nw::audio::GetPlaybackDisplay(window)
+                                        : nw::audio::PlaybackDisplay{{}};
+    bool same_display = display.monitor != nullptr;
+    bool finished_song = false;
     nw::audio::WasapiOutput audio_output;
-    if (!audio_output.start(song)) {{
+    if (!audio_output.start(song, 0, audio_evidence)) {{
         std::fprintf(stderr, "NW_AUDIO_INITIALIZATION_FAILED\\n");
         return 80;
     }}
@@ -793,14 +798,31 @@ def _audio_playback_source(audio: Mapping[str, Any]) -> str:
     std::uint64_t previous = UINT64_MAX;
     while (!player.window_closed() && !audio_output.failed()) {{
         const auto tick = audio_output.now_ticks();
-        if (tick >= song.duration_ticks) break;
+        if (tick >= song.duration_ticks) {{ finished_song = true; break; }}
         if (tick == previous) {{ ::Sleep(1); continue; }}
         previous = tick;
         const auto frame = player.renderAtTick(tick);
         if (frame != nw::player::ExitCode::Success) return static_cast<int>(frame);
+        if (same_display && !nw::audio::IsWindowOnPlaybackMonitor(window, display.monitor))
+            same_display = false;
         if (max_frames != 0 && ++frames >= max_frames) break;
     }}
     audio_output.stop();
+    const auto endpoint = audio_output.selected_endpoint_id();
+    const auto presents = player.allocation_stats().frames_presented;
+    if (audio_evidence && !audio_output.failed() && finished_song && presents != 0 &&
+        !endpoint.empty() && same_display && display == nw::audio::GetPlaybackDisplay(window)) {{
+        const auto digest = [](std::wstring_view value) {{
+            return nw::package::Sha256Hex(
+                reinterpret_cast<const std::uint8_t*>(value.data()),
+                value.size() * sizeof(wchar_t));
+        }};
+        std::printf("AUDIO_PLAYBACK_EVIDENCE_V1=%s,%s,%u,%u,%llu,%llu\\n",
+            digest(endpoint).c_str(), digest(display.device_path.data()).c_str(),
+            display.refresh_numerator, display.refresh_denominator,
+            static_cast<unsigned long long>(presents),
+            static_cast<unsigned long long>(audio_output.now_ticks()));
+    }}
     std::printf("AUDIO_STARVATION_OBSERVATIONS=%llu\\nAUDIO_CLOCK_DISCONTINUITIES=%llu\\nAUDIO_SYNTHESIS_CPU_100NS=%llu\\n",
         static_cast<unsigned long long>(audio_output.starvation_observations()),
         static_cast<unsigned long long>(audio_output.clock_discontinuities()),
@@ -1091,6 +1113,8 @@ def generate_player_source(
         "    unsigned long long max_frames = 0;\n"
         "    unsigned long long explicit_tick = 0;\n"
         "    bool has_explicit_tick = false;\n"
+        + ("#if !NW_AUDIO_MEASURE_SYNTHESIS_ONLY\n"
+           "    bool audio_evidence = false;\n#endif\n" if manifest.get("audio") else "") +
         "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
         "    bool emit_image_hash = false;\n"
         "#if NW07_CAPTURE_CONTROLS\n"
@@ -1118,6 +1142,9 @@ def generate_player_source(
         "            config.enable_validation = true;\n"
         "        } else if (std::string(argv[index]) == \"--emit-image-hash\") {\n"
         "            emit_image_hash = true;\n"
+        + ("#if !NW_AUDIO_MEASURE_SYNTHESIS_ONLY\n"
+           "        } else if (std::strcmp(argv[index], \"--audio-evidence\") == 0) {\n"
+           "            audio_evidence = true;\n#endif\n" if manifest.get("audio") else "") +
         "#if NW07_CAPTURE_CONTROLS\n"
         "        } else if (std::string(argv[index]) == \"--capture-dir\" && index + 1 < argc) {\n"
         "            capture_directory = argv[++index];\n"
@@ -3028,6 +3055,10 @@ def _finalize_size_accounting(
             )
 
 
+def read_audio_song(path: str) -> bytes:
+    return audio_song.compile_song(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
 def export_graph(
     graph_path: str | os.PathLike[str],
     output_directory: str | os.PathLike[str],
@@ -3045,17 +3076,20 @@ def export_graph(
     adapter_identity: str = "unavailable-native-adapter",
     prepare_staging: Callable[[Path], None] | None = None,
     generated_shaders_override: Sequence[nw03.GeneratedShader] | None = None,
+    audio_song_payload: bytes | None = None,
 ) -> ExportResult:
     """Export one artifact per capability profile with transactional publication."""
     settings = settings or ExportSettings()
     audio_payload = b""
-    if settings.audio_song_path:
+    if settings.audio_song_path or audio_song_payload is not None:
         if settings.frozen_embedded_specialization:
             raise ExportError("audio requires the full versioned package reader")
         try:
-            audio_payload = audio_song.compile_song(json.loads(
-                Path(settings.audio_song_path).read_text(encoding="utf-8")
-            ))
+            if audio_song_payload is None:
+                audio_payload = read_audio_song(settings.audio_song_path)
+            else:
+                audio_song.decode_song(audio_song_payload)
+                audio_payload = audio_song_payload
         except (ValueError, OSError) as exc:
             raise ExportError(f"invalid audio song: {exc}") from exc
         if not settings.player_template and not allow_test_payloads:
