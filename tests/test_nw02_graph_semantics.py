@@ -406,6 +406,7 @@ def test_operator_registry_declarations_are_complete(cli_binary: Path) -> None:
                 "texture_recipe",
                 "buffer_recipe",
                 "mesh_recipe",
+                "geometry_recipe",
                 "render_image",
             }:
                 assert port["resource"] is not None, (operator["id"], port)
@@ -439,6 +440,7 @@ def test_operator_registry_declarations_are_complete(cli_binary: Path) -> None:
         "texture_recipe",
         "buffer_recipe",
         "mesh_recipe",
+        "geometry_recipe",
         "material",
         "scene_table",
         "camera",
