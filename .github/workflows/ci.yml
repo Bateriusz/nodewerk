@@ -223,6 +223,20 @@ jobs:
           python tools/nw09_ci_examples.py --player-template $env:NW05_REAL_PLAYER_TEMPLATE --output-dir $examplesDir --dxc $dxc --skip-smoke-launch
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+          $demoDir = Join-Path $root "nw12a-demo"
+          python tools/audio_demo.py build --player-template $template --dxc $dxc --output $demoDir --build-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          # A separate diagnostic player reads exactly the shipped package.
+          # Capture controls and development dependencies never enter the demo.
+          cmake --preset nw07-diagnostics
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build --preset nw07-diagnostics --target nw_procedural_image_player --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $captureTemplate = (Resolve-Path "build/nw07-diagnostics/staging/procedural_image_player/nw_procedural_image_player.exe").Path
+          python tools/audio_demo_capture.py build --release (Join-Path $demoDir "neon-breach.exe") --player-template $captureTemplate --output (Join-Path $root "nw12a-capture") --build-root (Join-Path $env:RUNNER_TEMP "nw12a-capture-build")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           $manifestFiles = @()
           foreach ($file in @(Get-ChildItem $root -File -Recurse | Sort-Object FullName)) {
             $manifestFiles += [ordered]@{
@@ -333,6 +347,37 @@ jobs:
 
           python tools/nw09_ci_examples.py --player-template (Join-Path $root "player/nw_procedural_image_player.exe") --output-dir (Join-Path $root "examples") --smoke-only
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Smoke-test exact NW-12A Windows demo package (headless WARP)
+        shell: pwsh
+        run: |
+          $bundle = Join-Path $env:RUNNER_TEMP "nw01-runtime-smoke-inputs/nw12a-demo"
+          python tools/audio_demo.py smoke --bundle $bundle
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Capture NW-12A story previews from the exact release package
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP "nw01-runtime-smoke-inputs"
+          python tools/audio_demo_capture.py capture --bundle (Join-Path $root "nw12a-capture") --release (Join-Path $root "nw12a-demo/neon-breach.exe") --output (Join-Path $env:RUNNER_TEMP "nw12a-preview")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload NW-12A offline story previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodewerk-nw12a-demo-preview
+          path: ${{ runner.temp }}/nw12a-preview/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload runnable NW-12A Windows demo
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodewerk-nw12a-demo-windows
+          path: ${{ runner.temp }}/nw01-runtime-smoke-inputs/nw12a-demo/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload runnable NW-09 examples and Asteroid Tunnel
         uses: actions/upload-artifact@v4

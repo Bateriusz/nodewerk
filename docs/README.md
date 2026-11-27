@@ -59,6 +59,7 @@ graph semantics and `.nwgraph` schema.
 - NW-07 Export Report Schema: [`schemas/nw07-export-report.schema.json`](../schemas/nw07-export-report.schema.json)
 - NW-07 Clean-System Report Schema: [`schemas/nw07-clean-system-report.schema.json`](../schemas/nw07-clean-system-report.schema.json)
 - NW-07 Diagnostic Sibling-Build Overhead: [`benchmarks/nw07/diagnostic-overhead.v1.json`](../benchmarks/nw07/diagnostic-overhead.v1.json) (validated by [`schemas/nw07-diagnostic-overhead.schema.json`](../schemas/nw07-diagnostic-overhead.schema.json)); pending separate diagnostic measurement
+- NW-12A Concept Demo: [Neon Breach / Room 07](nw12a-neon-breach.md) (procedural artwork, operator inventory, cue/audio and Windows package workflow)
 - NW-12 Physical Audio/Display Evidence: [`benchmarks/nw12/audio-physical-evidence.v1.json`](../benchmarks/nw12/audio-physical-evidence.v1.json) (validated by [`schemas/nw12-audio-physical-evidence.schema.json`](../schemas/nw12-audio-physical-evidence.schema.json)); physical observation pending until the exact artifact is recorded on a Windows 11 WASAPI/display session
 - NW-08 Studio Report Schema: [`schemas/nw08-studio-report.schema.json`](../schemas/nw08-studio-report.schema.json)
 - NW-08 Verification Summary Schema: [`schemas/nw08-verification.schema.json`](../schemas/nw08-verification.schema.json)

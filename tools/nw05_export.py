@@ -1117,6 +1117,7 @@ def generate_player_source(
            "    bool audio_evidence = false;\n#endif\n" if manifest.get("audio") else "") +
         "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
         "    bool emit_image_hash = false;\n"
+        "    bool emit_first_pixel = false;\n"
         "#if NW07_CAPTURE_CONTROLS\n"
         "    std::string capture_directory;\n"
         "    std::vector<std::uint64_t> capture_ticks;\n"
@@ -1141,6 +1142,13 @@ def generate_player_source(
         "        } else if (std::string(argv[index]) == \"--validation\") {\n"
         "            config.enable_validation = true;\n"
         "        } else if (std::string(argv[index]) == \"--emit-image-hash\") {\n"
+        "            emit_image_hash = true;\n"
+        "        } else if (std::strcmp(argv[index], \"--headless\") == 0) {\n"
+        "            config.headless = true;\n"
+        "            config.create_window = false;\n"
+        "            config.visible_window = false;\n"
+        "        } else if (std::strcmp(argv[index], \"--probe-first-pixel\") == 0) {\n"
+        "            emit_first_pixel = true;\n"
         "            emit_image_hash = true;\n"
         + ("#if !NW_AUDIO_MEASURE_SYNTHESIS_ONLY\n"
            "        } else if (std::strcmp(argv[index], \"--audio-evidence\") == 0) {\n"
@@ -1168,6 +1176,12 @@ def generate_player_source(
         "            config.borderless_window = false;\n"
 
         "        }\n"
+        "    }\n"
+        "#endif\n"
+        "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+        "    if ((config.headless && !has_explicit_tick) || (emit_first_pixel && !config.headless)) {\n"
+        "        std::fprintf(stderr, \"NW05_HEADLESS_REQUIRES_FIXED_TICK\\n\");\n"
+        "        return 10;\n"
         "    }\n"
         "#endif\n"
         "    nw::player::PackagePlayer player(config);\n"
@@ -1198,10 +1212,16 @@ def generate_player_source(
         "#endif\n"
         "        }\n"
         "        std::printf(\"NW05_EXPLICIT_TICK=%llu\\n\", static_cast<unsigned long long>(explicit_tick));\n"
+        "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+        "        if (!config.headless) {\n"
+        "#endif\n"
         "#ifdef _WIN32\n"
         "        ::Sleep(1500u);\n"
         "#else\n"
         "        std::this_thread::sleep_for(std::chrono::milliseconds(1500));\n"
+        "#endif\n"
+        "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+        "        }\n"
         "#endif\n"
         "    } else {\n"
         + playback_loop +
@@ -1226,6 +1246,12 @@ def generate_player_source(
         "        std::printf(\"NW05_IMAGE_BYTES=%llu\\n\", static_cast<unsigned long long>(image.size()));\n"
         "        std::printf(\"NW05_IMAGE_NONZERO_BYTES=%llu\\n\", static_cast<unsigned long long>(nonzero_bytes));\n"
         "        std::printf(\"NW05_IMAGE_FNV64=%016llx\\n\", static_cast<unsigned long long>(hash));\n"
+        "        if (emit_first_pixel) {\n"
+        "            std::uint32_t rgba[4]{};\n"
+        "            if (image.size() < sizeof(rgba)) return 70;\n"
+        "            std::memcpy(rgba, image.data(), sizeof(rgba));\n"
+        "            std::printf(\"NW05_FIRST_PIXEL=%08x,%08x,%08x,%08x\\n\", rgba[0], rgba[1], rgba[2], rgba[3]);\n"
+        "        }\n"
         "    }\n"
         "#endif\n"
         "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
@@ -2860,7 +2886,11 @@ def _compile_profile_package(
             f"profile '{profile_id}' digest mismatch",
             dependency_path=["capability_profile", profile_id, "requirements_digest"],
         )
-    report["image_oracle_sha256"] = _graph_image_oracle_sha256(document)
+    # An explicit specialization is not the graph expression interpreted by
+    # the CPU oracle. Never label that placeholder's image as its reference.
+    report["image_oracle_sha256"] = (
+        _graph_image_oracle_sha256(document) if generated_shaders_override is None else ""
+    )
     report["image_oracle_status"] = (
         "available" if report["image_oracle_sha256"] else "unavailable"
     )

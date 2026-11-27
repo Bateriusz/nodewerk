@@ -55,6 +55,7 @@
         "tools/presentation_metrics.py",
         "tools/audio_*.py",
         "tests/test_nw12_*.py",
+        "tests/test_nw12a_*.py",
         "tests/audio_contract.cpp"
       ],
       "propagates_to": [
