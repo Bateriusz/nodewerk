@@ -1,0 +1,119 @@
+{
+  "format": "nw13.transport-evidence",
+  "version": 1,
+  "production_id": "nw13.hotel_corridor",
+  "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+  "fixed_ticks": [
+    0,
+    96000,
+    120000,
+    144000,
+    192000,
+    240000,
+    264000,
+    288000
+  ],
+  "declared_states": [
+    "resume",
+    "freeze",
+    "cut",
+    "reverse",
+    "resume"
+  ],
+  "trace": [
+    {
+      "tick": 0,
+      "frozen": false,
+      "direction": 1,
+      "generation": 0,
+      "events": []
+    },
+    {
+      "tick": 96000,
+      "frozen": false,
+      "direction": 1,
+      "generation": 0,
+      "events": [
+        {
+          "kind": "cue",
+          "cue_id": "door_hinge",
+          "tick": 96000,
+          "policy": "one-shot",
+          "generation": 0
+        }
+      ]
+    },
+    {
+      "tick": 120000,
+      "frozen": false,
+      "direction": 1,
+      "generation": 0,
+      "events": [
+        {
+          "kind": "freeze",
+          "tick": 96000
+        },
+        {
+          "kind": "resume",
+          "tick": 96000
+        }
+      ]
+    },
+    {
+      "tick": 144000,
+      "frozen": false,
+      "direction": 1,
+      "generation": 0,
+      "events": [
+        {
+          "kind": "cue",
+          "cue_id": "flash",
+          "tick": 144000,
+          "policy": "one-shot",
+          "generation": 0
+        }
+      ]
+    },
+    {
+      "tick": 192000,
+      "frozen": false,
+      "direction": 1,
+      "generation": 0,
+      "events": [
+        {
+          "kind": "cut",
+          "cut_tick": 192000,
+          "tick": 192000
+        },
+        {
+          "kind": "cue",
+          "cue_id": "corridor_cut",
+          "tick": 192000,
+          "policy": "one-shot",
+          "generation": 0
+        }
+      ]
+    },
+    {
+      "tick": 240000,
+      "frozen": false,
+      "direction": 1,
+      "generation": 0,
+      "events": []
+    },
+    {
+      "tick": 264000,
+      "frozen": false,
+      "direction": 1,
+      "generation": 0,
+      "events": []
+    },
+    {
+      "tick": 288000,
+      "frozen": false,
+      "direction": 1,
+      "generation": 0,
+      "events": []
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "format": "nw13.geometry",
+  "schema_version": 1,
+  "budget": {
+    "max_nodes": 96,
+    "max_depth": 12,
+    "max_repetition_instances": 512,
+    "max_generated_primitives": 4096,
+    "max_evaluation_steps": 65536,
+    "max_memory_bytes": 8388608
+  },
+  "root": {
+    "id": "hotel_root",
+    "operator": "nw.geom.union",
+    "version": "1.0.0",
+    "children": [
+      {
+        "id": "room_group",
+        "operator": "nw.geom.union",
+        "version": "1.0.0",
+        "children": [
+          {"id":"room_shell","operator":"nw.geom.subtract","version":"1.0.0","children":[{"id":"room_outer","operator":"nw.geom.box","version":"1.0.0","parameters":{"half_extents":[5.2,2.8,8.2]}},{"id":"room_inner","operator":"nw.geom.box","version":"1.0.0","parameters":{"half_extents":[5.0,2.6,8.0]}}]},
+          {"id":"lamp","operator":"nw.geom.translate","version":"1.0.0","parameters":{"offset":[2.4,1.6,1.5]},"children":[{"id":"lamp_sphere","operator":"nw.geom.sphere","version":"1.0.0","parameters":{"radius":0.18}}]},
+          {"id":"lamp_ring","operator":"nw.geom.translate","version":"1.0.0","parameters":{"offset":[2.4,1.6,1.5]},"children":[{"id":"lamp_ring_torus","operator":"nw.geom.torus","version":"1.0.0","parameters":{"major_radius":0.32,"minor_radius":0.035}}]},
+          {"id":"arch","operator":"nw.geom.twist","version":"1.0.0","parameters":{"half_height":1.2,"max_degrees":25},"children":[{"id":"arch_cylinder","operator":"nw.geom.translate","version":"1.0.0","parameters":{"offset":[-4.2,1.2,1.5]},"children":[{"id":"arch_cylinder_local","operator":"nw.geom.cylinder","version":"1.0.0","parameters":{"radius":0.22,"half_height":1.2}}]}]}
+        ]
+      },
+      {
+        "id": "corridor_group",
+        "operator": "nw.geom.union",
+        "version": "1.0.0",
+        "children": [
+          {"id":"corridor_wall","operator":"nw.geom.translate","version":"1.0.0","parameters":{"offset":[0,1.3,-5]},"children":[{"id":"corridor_wall_local","operator":"nw.geom.box","version":"1.0.0","parameters":{"half_extents":[1.6,1.3,4.5]}}]},
+          {"id":"corridor_windows","operator":"nw.geom.repeat","version":"1.0.0","parameters":{"spacing":[2.4,1,1],"counts":[4,1,1]},"children":[{"id":"window_slab","operator":"nw.geom.box","version":"1.0.0","parameters":{"half_extents":[0.38,0.55,0.08]}}]},
+          {"id":"bent_wall","operator":"nw.geom.bend","version":"1.0.0","parameters":{"half_width":2.0,"max_degrees":18},"children":[{"id":"bent_wall_box","operator":"nw.geom.box","version":"1.0.0","parameters":{"half_extents":[2.0,0.12,0.5]}}]},
+          {"id":"displaced_wall","operator":"nw.geom.displace","version":"1.0.0","parameters":{"seed":1337,"amplitude":0.04,"frequency":3.0},"children":[{"id":"displaced_wall_box","operator":"nw.geom.box","version":"1.0.0","parameters":{"half_extents":[1.8,0.1,0.5]}}]}
+        ]
+      },
+      {
+        "id": "door_group",
+        "operator": "nw.geom.union",
+        "version": "1.0.0",
+        "children": [
+          {"id":"door_frame","operator":"nw.geom.subtract","version":"1.0.0","children":[{"id":"frame_outer","operator":"nw.geom.translate","version":"1.0.0","parameters":{"offset":[0,1.1,-2]},"children":[{"id":"frame_outer_box","operator":"nw.geom.box","version":"1.0.0","parameters":{"half_extents":[0.9,1.15,0.08]}}]},{"id":"frame_inner","operator":"nw.geom.translate","version":"1.0.0","parameters":{"offset":[0,1.05,-2]},"children":[{"id":"frame_inner_box","operator":"nw.geom.box","version":"1.0.0","parameters":{"half_extents":[0.72,1.0,0.1]}}]}]},
+          {"id":"door","operator":"nw.geom.box","version":"1.0.0","parameters":{"half_extents":[0.7,1.0,0.045]}},
+          {"id":"door_panel","operator":"nw.geom.box","version":"1.0.0","parameters":{"half_extents":[0.5,0.35,0.01]}},
+          {"id":"handle","operator":"nw.geom.torus","version":"1.0.0","parameters":{"major_radius":0.08,"minor_radius":0.018}}
+        ]
+      },
+      {
+        "id": "character_group",
+        "operator": "nw.geom.union",
+        "version": "1.0.0",
+        "children": [
+          {"id":"character_body","operator":"nw.geom.smooth_union","version":"1.0.0","parameters":{"k":0.06},"children":[{"id":"body_torso","operator":"nw.geom.capsule","version":"1.0.0","parameters":{"radius":0.22,"half_height":0.45}},{"id":"body_legs","operator":"nw.geom.capsule","version":"1.0.0","parameters":{"radius":0.16,"half_height":0.3}}]},
+          {"id":"character_head","operator":"nw.geom.sphere","version":"1.0.0","parameters":{"radius":0.19}},
+          {"id":"held_prop","operator":"nw.geom.box","version":"1.0.0","parameters":{"half_extents":[0.12,0.18,0.05]}},
+          {"id":"occluder","operator":"nw.geom.box","version":"1.0.0","parameters":{"half_extents":[0.35,0.35,0.06]}},
+          {"id":"reflected_object","operator":"nw.geom.box","version":"1.0.0","parameters":{"half_extents":[0.4,0.4,0.4]}}
+        ]
+      }
+    ]
+  }
+}

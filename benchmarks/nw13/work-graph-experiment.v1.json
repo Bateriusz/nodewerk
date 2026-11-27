@@ -1,0 +1,10 @@
+{
+  "format": "nw13.work-graph-experiment",
+  "version": 1,
+  "criterion": "runtime_size_or_workload_feasibility",
+  "conventional_metric": 1.0,
+  "work_graph_metric": null,
+  "decision": "defer",
+  "reason": "matched Work Graphs measurement unavailable",
+  "satisfies_completion": false
+}

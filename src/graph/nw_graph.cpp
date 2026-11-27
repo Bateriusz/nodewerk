@@ -685,6 +685,7 @@ std::string_view ToString(LogicalType type) noexcept {
     case LogicalType::TextureRecipe: return "texture_recipe";
     case LogicalType::BufferRecipe: return "buffer_recipe";
     case LogicalType::MeshRecipe: return "mesh_recipe";
+    case LogicalType::GeometryRecipe: return "geometry_recipe";
     case LogicalType::Material: return "material";
     case LogicalType::SceneTable: return "scene_table";
     case LogicalType::Camera: return "camera";
@@ -704,6 +705,7 @@ std::optional<LogicalType> ParseLogicalType(std::string_view text) {
         {"texture_recipe", LogicalType::TextureRecipe},
         {"buffer_recipe", LogicalType::BufferRecipe},
         {"mesh_recipe", LogicalType::MeshRecipe},
+        {"geometry_recipe", LogicalType::GeometryRecipe},
         {"material", LogicalType::Material},
         {"scene_table", LogicalType::SceneTable},
         {"camera", LogicalType::Camera},
@@ -1233,6 +1235,17 @@ ResourceDescriptor MeshDescriptor() {
     return descriptor;
 }
 
+ResourceDescriptor GeometryDescriptor() {
+    ResourceDescriptor descriptor;
+    descriptor.kind = "geometry_sdf";
+    descriptor.max_vertices = 262144u;
+    descriptor.max_indices = 0u;
+    descriptor.max_bytes = 32ull * 1024ull * 1024ull;
+    descriptor.format_class = "signed_distance_recipe";
+    descriptor.bounded = true;
+    return descriptor;
+}
+
 ResourceDescriptor RenderImageDescriptor() {
     ResourceDescriptor descriptor;
     descriptor.kind = "render_target";
@@ -1574,6 +1587,119 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
             FloatParam("minor_radius", 0.3, true, 0.000001, 1000000.0)};
         schema.resource_descriptor = MeshDescriptor();
         registry.Register(std::move(schema));
+    }
+
+    // ---- NW-13 bounded procedural geometry --------------------------------
+    // Geometry recipes are distinct from mesh aggregation and scene tables:
+    // they describe solid signed-distance operators whose conservative bounds
+    // are checked before evaluation.  CSG composition is not scene parenting.
+    {
+        auto geometry_leaf = [&](const char* id, const char* summary,
+                                 std::vector<ParamSpec> params) {
+            OperatorSchema schema = BaseOperator(
+                id, OperatorKind::CpuControl, summary, AllFrequencies(),
+                Frequency::Frame, "nw.lower.cpu.geometry");
+            schema.outputs = {ResourcePort(
+                "out", LogicalType::GeometryRecipe, Residency::Logical,
+                GeometryDescriptor())};
+            schema.params = std::move(params);
+            schema.resource_descriptor = GeometryDescriptor();
+            registry.Register(std::move(schema));
+        };
+        auto geometry_unary = [&](const char* id, const char* summary,
+                                  std::vector<ParamSpec> params) {
+            OperatorSchema schema = BaseOperator(
+                id, OperatorKind::CpuControl, summary, AllFrequencies(),
+                Frequency::Frame, "nw.lower.cpu.geometry");
+            schema.inputs = {ResourcePort(
+                "child", LogicalType::GeometryRecipe, Residency::Logical,
+                GeometryDescriptor())};
+            schema.outputs = {ResourcePort(
+                "out", LogicalType::GeometryRecipe, Residency::Logical,
+                GeometryDescriptor())};
+            schema.params = std::move(params);
+            schema.resource_descriptor = GeometryDescriptor();
+            registry.Register(std::move(schema));
+        };
+        auto geometry_binary = [&](const char* id, const char* summary,
+                                   std::vector<ParamSpec> params) {
+            OperatorSchema schema = BaseOperator(
+                id, OperatorKind::CpuControl, summary, AllFrequencies(),
+                Frequency::Frame, "nw.lower.cpu.geometry");
+            schema.inputs = {
+                ResourcePort("a", LogicalType::GeometryRecipe,
+                             Residency::Logical, GeometryDescriptor()),
+                ResourcePort("b", LogicalType::GeometryRecipe,
+                             Residency::Logical, GeometryDescriptor())};
+            schema.outputs = {ResourcePort(
+                "out", LogicalType::GeometryRecipe, Residency::Logical,
+                GeometryDescriptor())};
+            schema.params = std::move(params);
+            schema.resource_descriptor = GeometryDescriptor();
+            registry.Register(std::move(schema));
+        };
+
+        geometry_leaf(
+            "nw.geom.sphere", "Bounded sphere signed-distance primitive",
+            {FloatParam("radius", 1.0, true, 0.000001, 1000000.0)});
+        geometry_leaf(
+            "nw.geom.box", "Bounded axis-aligned box signed-distance primitive",
+            {VectorParam("half_extents", ParamType::Vec3)});
+        geometry_leaf(
+            "nw.geom.cylinder",
+            "Bounded Y-axis cylinder signed-distance primitive",
+            {FloatParam("radius", 1.0, true, 0.000001, 1000000.0),
+             FloatParam("half_height", 1.0, true, 0.000001, 1000000.0)});
+        geometry_leaf(
+            "nw.geom.capsule",
+            "Bounded Y-axis capsule signed-distance primitive",
+            {FloatParam("radius", 1.0, true, 0.000001, 1000000.0),
+             FloatParam("half_height", 1.0, true, 0.0, 1000000.0)});
+        geometry_leaf(
+            "nw.geom.torus", "Bounded torus signed-distance primitive",
+            {FloatParam("major_radius", 1.0, true, 0.000001, 1000000.0),
+             FloatParam("minor_radius", 0.25, true, 0.000001, 1000000.0)});
+
+        geometry_unary(
+            "nw.geom.translate", "Translate a bounded geometry recipe",
+            {VectorParam("offset", ParamType::Vec3)});
+        geometry_unary(
+            "nw.geom.rotate", "Rotate a bounded geometry recipe",
+            {EnumParam("axis", "y", {"x", "y", "z"}),
+             FloatParam("degrees", 0.0, true, -3600.0, 3600.0)});
+        geometry_unary(
+            "nw.geom.scale", "Scale a bounded geometry recipe",
+            {VectorParam("scale", ParamType::Vec3)});
+
+        geometry_binary("nw.geom.union",
+                        "Solid union of two bounded geometry recipes", {});
+        geometry_binary("nw.geom.intersection",
+                        "Solid intersection of two bounded geometry recipes",
+                        {});
+        geometry_binary("nw.geom.subtract",
+                        "Solid subtraction of two bounded geometry recipes",
+                        {});
+        geometry_binary(
+            "nw.geom.smooth_union",
+            "Bounded smooth union of two geometry recipes",
+            {FloatParam("k", 0.1, true, 0.0, 1000000.0)});
+        geometry_unary(
+            "nw.geom.repeat", "Finite bounded lattice repetition",
+            {VectorParam("spacing", ParamType::Vec3),
+             VectorParam("counts", ParamType::Vec3)});
+        geometry_unary(
+            "nw.geom.twist", "Bounded twist deformation",
+            {FloatParam("half_height", 1.0, true, 0.000001, 1000000.0),
+             FloatParam("max_degrees", 0.0, true, -3600.0, 3600.0)});
+        geometry_unary(
+            "nw.geom.bend", "Bounded bend deformation",
+            {FloatParam("half_width", 1.0, true, 0.000001, 1000000.0),
+             FloatParam("max_degrees", 0.0, true, -180.0, 180.0)});
+        geometry_unary(
+            "nw.geom.displace", "Seeded bounded displacement deformation",
+            {IntParam("seed", 0, true, 0.0, 4294967295.0),
+             FloatParam("amplitude", 0.0, true, 0.0, 1000000.0),
+             FloatParam("frequency", 1.0, true, 0.000001, 1000000.0)});
     }
     {
         OperatorSchema schema = BaseOperator(
@@ -5490,6 +5616,33 @@ EvaluationValue ImageOracle(const GraphSnapshot& snapshot,
     return image;
 }
 
+EvaluationValue GeometryRecipe(
+    const NodeDefinition& node,
+    const std::vector<const EvaluationValue*>& inputs) {
+    CanonicalWriter writer;
+    writer.String("nwgraph.geometry-recipe.v1");
+    writer.String(node.operator_id);
+    writer.String(node.operator_version.ToString());
+    for (const auto& [name, value] : node.params) {
+        writer.String(name);
+        writer.String(ParamCanonicalText(value));
+    }
+    for (const EvaluationValue* input : inputs) {
+        writer.String(input == nullptr ? std::string()
+                                       : input->CanonicalText());
+    }
+    const auto digest = Sha256Bytes(writer.bytes().data(),
+                                    writer.bytes().size());
+    EvaluationValue out = MakeText(
+        LogicalType::GeometryRecipe,
+        "geometry-recipe:" + node.operator_id + ":sha256:v1:" +
+            HexBytes(digest.data(), digest.size()),
+        Residency::Logical);
+    out.component_count = 1u;
+    out.numbers[0] = UnitFromBytes(digest, 0u);
+    return out;
+}
+
 double SampleCurve(const std::vector<double>& samples, double t, bool step) {
     if (samples.size() < 2u) {
         return 0.0;
@@ -6369,6 +6522,22 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         if (context.next_history_state != nullptr) {
             (*context.next_history_state)[node.id] = current;
         }
+        return true;
+    }
+    if (op.rfind("nw.geom.", 0) == 0) {
+        // Geometry evaluation is an authoring/compiler oracle.  The concrete
+        // signed-distance surface is produced by the backend-neutral recipe;
+        // this reference path records a deterministic structural fingerprint
+        // so seed and CSG identity tests can compare complete recipes.
+        std::vector<const EvaluationValue*> inputs;
+        if (op == "nw.geom.union" || op == "nw.geom.intersection" ||
+            op == "nw.geom.subtract" || op == "nw.geom.smooth_union") {
+            if (const EvaluationValue* a = input("a")) inputs.push_back(a);
+            if (const EvaluationValue* b = input("b")) inputs.push_back(b);
+        } else if (const EvaluationValue* child = input("child")) {
+            inputs.push_back(child);
+        }
+        outputs["out"] = GeometryRecipe(node, inputs);
         return true;
     }
 

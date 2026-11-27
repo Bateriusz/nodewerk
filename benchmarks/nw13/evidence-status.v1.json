@@ -1,0 +1,47 @@
+{
+  "format": "nw13-evidence-status",
+  "version": 1,
+  "production_id": "nw13.hotel_corridor",
+  "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+  "observations": {
+    "functional_execution": {
+      "status": "contract_implemented",
+      "detail": "shared reader/optimizer/export path and CPU reference renderer exercised by hosted tests"
+    },
+    "correctness_proofs": {
+      "status": "reference_tests_passed",
+      "detail": "reference points, CSG identity, seeds, hierarchy, tracks, camera, transport, particles, audio chunking and cue alignment"
+    },
+    "numerical_differences": {
+      "status": "declared_tolerances",
+      "detail": "common/optional reference arms declare max_abs_channel_error and RMSE; matched physical arms remain unavailable"
+    },
+    "performance": {
+      "status": "unavailable",
+      "detail": "no physical GPU CPU-submit/GPU-time/startup observation in this worktree"
+    },
+    "adoption": {
+      "status": "pending",
+      "detail": "optional lowering decisions are separate per technique and per device"
+    },
+    "startup": {
+      "status": "unavailable"
+    },
+    "telemetry": {
+      "status": "unavailable"
+    }
+  },
+  "optional_decisions": {
+    "dxr_inline_ray_query": "capability_qualified_optional",
+    "mesh_shader": "defer",
+    "work_graphs": "defer_until_measured",
+    "ser": "defer",
+    "omm": "omit",
+    "micromesh": "defer"
+  },
+  "hardware": {
+    "desktop_ada_representative": "pending",
+    "desktop_blackwell_representative": "pending"
+  },
+  "pending_is_not_pass": true
+}

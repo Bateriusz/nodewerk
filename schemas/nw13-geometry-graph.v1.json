@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw13-geometry-graph.v1.json",
+  "title": "Nodewerk NW-13 bounded procedural geometry document v1",
+  "description": "Backend-neutral signed-distance geometry graph. Primitive and CSG bounds are conservative axis-aligned boxes and are validated before evaluation. Scene composition and mesh aggregation are separate documents.",
+  "type": "object",
+  "required": ["format", "schema_version", "root", "budget"],
+  "properties": {
+    "format": { "const": "nw13.geometry" },
+    "schema_version": { "const": 1 },
+    "root": { "$ref": "#/$defs/node" },
+    "budget": {
+      "type": "object",
+      "required": [
+        "max_nodes",
+        "max_depth",
+        "max_repetition_instances",
+        "max_generated_primitives",
+        "max_evaluation_steps",
+        "max_memory_bytes"
+      ],
+      "properties": {
+        "max_nodes": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "max_depth": { "type": "integer", "minimum": 1, "maximum": 128 },
+        "max_repetition_instances": { "type": "integer", "minimum": 1, "maximum": 262144 },
+        "max_generated_primitives": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+        "max_evaluation_steps": { "type": "integer", "minimum": 1 },
+        "max_memory_bytes": { "type": "integer", "minimum": 1024 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number" }
+    },
+    "ivec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "integer", "minimum": 1, "maximum": 64 }
+    },
+    "node": {
+      "type": "object",
+      "required": ["id", "operator", "version"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "operator": {
+          "enum": [
+            "nw.geom.sphere",
+            "nw.geom.box",
+            "nw.geom.cylinder",
+            "nw.geom.capsule",
+            "nw.geom.torus",
+            "nw.geom.translate",
+            "nw.geom.rotate",
+            "nw.geom.scale",
+            "nw.geom.union",
+            "nw.geom.intersection",
+            "nw.geom.subtract",
+            "nw.geom.smooth_union",
+            "nw.geom.repeat",
+            "nw.geom.twist",
+            "nw.geom.bend",
+            "nw.geom.displace"
+          ]
+        },
+        "version": { "const": "1.0.0" },
+        "parameters": {
+          "type": "object",
+          "description": "Operator-specific parameters. See references/operator_catalog/nw13-geometry-contracts.v1.json for exact bounded ranges.",
+          "additionalProperties": true
+        },
+        "children": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/node" }
+        },
+        "provenance": {
+          "type": "object",
+          "description": "Optional clean-room provenance. Farbrausch-derived suggestions remain review metadata and never copy code or assets.",
+          "properties": {
+            "kind": { "enum": ["independently_authored", "catalog_review"] },
+            "catalog_entry": { "type": "string" },
+            "source_page": { "type": "string" },
+            "shot": { "type": "string" },
+            "license": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

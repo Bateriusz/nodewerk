@@ -183,6 +183,23 @@ KNOWN_OPERATORS = {
     # never an ordinary author-supplied graph edge.
     "nw.particles.system",
     "nw.feedback.image",
+    # NW-13 bounded procedural geometry recipes.
+    "nw.geom.sphere",
+    "nw.geom.box",
+    "nw.geom.cylinder",
+    "nw.geom.capsule",
+    "nw.geom.torus",
+    "nw.geom.translate",
+    "nw.geom.rotate",
+    "nw.geom.scale",
+    "nw.geom.union",
+    "nw.geom.intersection",
+    "nw.geom.subtract",
+    "nw.geom.smooth_union",
+    "nw.geom.repeat",
+    "nw.geom.twist",
+    "nw.geom.bend",
+    "nw.geom.displace",
 }
 
 # Operators whose schema admits the NW-09 `history` frequency.  Ordinary
@@ -234,6 +251,17 @@ OPERATOR_INPUTS = {
     },
     "nw.post.bloom": {"image"},
     "nw.post.tonemap": {"image"},
+    "nw.geom.translate": {"child"},
+    "nw.geom.rotate": {"child"},
+    "nw.geom.scale": {"child"},
+    "nw.geom.union": {"a", "b"},
+    "nw.geom.intersection": {"a", "b"},
+    "nw.geom.subtract": {"a", "b"},
+    "nw.geom.smooth_union": {"a", "b"},
+    "nw.geom.repeat": {"child"},
+    "nw.geom.twist": {"child"},
+    "nw.geom.bend": {"child"},
+    "nw.geom.displace": {"child"},
 }
 
 OUTPUT_PORTS = {
@@ -289,6 +317,22 @@ OUTPUT_PORTS = {
     "nw.render.present": {"out"},
     "nw.particles.system": {"out"},
     "nw.feedback.image": {"out"},
+    "nw.geom.sphere": {"out"},
+    "nw.geom.box": {"out"},
+    "nw.geom.cylinder": {"out"},
+    "nw.geom.capsule": {"out"},
+    "nw.geom.torus": {"out"},
+    "nw.geom.translate": {"out"},
+    "nw.geom.rotate": {"out"},
+    "nw.geom.scale": {"out"},
+    "nw.geom.union": {"out"},
+    "nw.geom.intersection": {"out"},
+    "nw.geom.subtract": {"out"},
+    "nw.geom.smooth_union": {"out"},
+    "nw.geom.repeat": {"out"},
+    "nw.geom.twist": {"out"},
+    "nw.geom.bend": {"out"},
+    "nw.geom.displace": {"out"},
 }
 
 SHADER_OPERATORS = {
@@ -518,6 +562,58 @@ PORT_SPECS: dict[str, dict[str, dict[str, tuple[str, int, str]]]] = {
     "nw.feedback.image": {
         "outputs": {"out": ("image", 1, "gpu")},
     },
+    # NW-13 geometry recipes are a distinct logical type from mesh recipes and
+    # scene tables.  They remain compiler/authoring data; the C++ registry is
+    # the authoritative implementation contract.
+    "nw.geom.sphere": {"outputs": {"out": ("geometry", 1, "logical")}},
+    "nw.geom.box": {"outputs": {"out": ("geometry", 1, "logical")}},
+    "nw.geom.cylinder": {"outputs": {"out": ("geometry", 1, "logical")}},
+    "nw.geom.capsule": {"outputs": {"out": ("geometry", 1, "logical")}},
+    "nw.geom.torus": {"outputs": {"out": ("geometry", 1, "logical")}},
+    "nw.geom.translate": {
+        "inputs": {"child": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.rotate": {
+        "inputs": {"child": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.scale": {
+        "inputs": {"child": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.union": {
+        "inputs": {"a": ("geometry", 1, "logical"), "b": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.intersection": {
+        "inputs": {"a": ("geometry", 1, "logical"), "b": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.subtract": {
+        "inputs": {"a": ("geometry", 1, "logical"), "b": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.smooth_union": {
+        "inputs": {"a": ("geometry", 1, "logical"), "b": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.repeat": {
+        "inputs": {"child": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.twist": {
+        "inputs": {"child": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.bend": {
+        "inputs": {"child": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.displace": {
+        "inputs": {"child": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
 }
 
 PARAM_RULES: dict[str, dict[str, dict[str, Any]]] = {
@@ -639,6 +735,54 @@ PARAM_RULES: dict[str, dict[str, dict[str, Any]]] = {
         "seed": {"kind": "int", "min": 0, "max": 4294967295},
         "decay": {"kind": "float", "min": 0.0, "max": 1.0},
         "gain": {"kind": "float", "min": 0.0},
+    },
+    "nw.geom.sphere": {
+        "radius": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+    },
+    "nw.geom.box": {
+        "half_extents": {"kind": "vec3"},
+    },
+    "nw.geom.cylinder": {
+        "radius": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+        "half_height": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+    },
+    "nw.geom.capsule": {
+        "radius": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+        "half_height": {"kind": "float", "min": 0.0, "max": 1000000.0},
+    },
+    "nw.geom.torus": {
+        "major_radius": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+        "minor_radius": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+    },
+    "nw.geom.translate": {
+        "offset": {"kind": "vec3"},
+    },
+    "nw.geom.rotate": {
+        "axis": {"kind": "enum", "values": {"x", "y", "z"}},
+        "degrees": {"kind": "float", "min": -3600.0, "max": 3600.0},
+    },
+    "nw.geom.scale": {
+        "scale": {"kind": "vec3"},
+    },
+    "nw.geom.smooth_union": {
+        "k": {"kind": "float", "min": 0.0, "max": 1000000.0},
+    },
+    "nw.geom.repeat": {
+        "spacing": {"kind": "vec3"},
+        "counts": {"kind": "vec3"},
+    },
+    "nw.geom.twist": {
+        "half_height": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+        "max_degrees": {"kind": "float", "min": -3600.0, "max": 3600.0},
+    },
+    "nw.geom.bend": {
+        "half_width": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+        "max_degrees": {"kind": "float", "min": -180.0, "max": 180.0},
+    },
+    "nw.geom.displace": {
+        "seed": {"kind": "int", "min": 0, "max": 4294967295},
+        "amplitude": {"kind": "float", "min": 0.0, "max": 1000000.0},
+        "frequency": {"kind": "float", "min": 0.000001, "max": 1000000.0},
     },
 }
 

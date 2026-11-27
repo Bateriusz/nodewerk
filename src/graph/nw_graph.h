@@ -40,6 +40,7 @@ enum class LogicalType {
     TextureRecipe,
     BufferRecipe,
     MeshRecipe,
+    GeometryRecipe,
     Material,
     SceneTable,
     Camera,

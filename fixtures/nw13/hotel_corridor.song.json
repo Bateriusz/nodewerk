@@ -1,0 +1,57 @@
+{
+  "format": "nw13.instrument-sequence",
+  "version": 2,
+  "tick_rate_hz": 48000,
+  "duration_ticks": 288000,
+  "instruments": [
+    {"id":"lead","waveform":"saw","seed":11,"gain":0.34,"pan":-0.25,"envelope":{"attack_ticks":480,"decay_ticks":2400,"sustain":0.62,"release_ticks":4800},"filter":{"type":"one_pole_lowpass","cutoff_hz":4200.0}},
+    {"id":"bass","waveform":"square","seed":23,"gain":0.30,"pan":0.0,"envelope":{"attack_ticks":240,"decay_ticks":1200,"sustain":0.75,"release_ticks":2400},"filter":{"type":"one_pole_lowpass","cutoff_hz":900.0}},
+    {"id":"percussion","waveform":"noise","seed":41,"gain":0.26,"pan":0.35,"envelope":{"attack_ticks":60,"decay_ticks":960,"sustain":0.0,"release_ticks":480},"filter":{"type":"one_pole_lowpass","cutoff_hz":7200.0}},
+    {"id":"event","waveform":"sine","seed":73,"gain":0.28,"pan":0.0,"envelope":{"attack_ticks":120,"decay_ticks":480,"sustain":0.3,"release_ticks":960},"filter":{"type":"one_pole_lowpass","cutoff_hz":12000.0}}
+  ],
+  "tracks": [
+    {"id":"music.lead","bus":"music","notes":[
+      {"id":"lead.1","tick":0,"duration":12000,"frequency_millihz":440000,"velocity":0.8,"instrument":"lead"},
+      {"id":"lead.2","tick":24000,"duration":12000,"frequency_millihz":523251,"velocity":0.7,"instrument":"lead"},
+      {"id":"lead.3","tick":48000,"duration":12000,"frequency_millihz":659255,"velocity":0.75,"instrument":"lead"},
+      {"id":"lead.4","tick":72000,"duration":12000,"frequency_millihz":587330,"velocity":0.7,"instrument":"lead"},
+      {"id":"lead.5","tick":96000,"duration":12000,"frequency_millihz":440000,"velocity":0.8,"instrument":"lead"},
+      {"id":"lead.6","tick":144000,"duration":12000,"frequency_millihz":783991,"velocity":0.72,"instrument":"lead"},
+      {"id":"lead.7","tick":192000,"duration":12000,"frequency_millihz":659255,"velocity":0.7,"instrument":"lead"},
+      {"id":"lead.8","tick":240000,"duration":12000,"frequency_millihz":523251,"velocity":0.75,"instrument":"lead"}
+    ]},
+    {"id":"music.bass","bus":"music","notes":[
+      {"id":"bass.1","tick":0,"duration":24000,"frequency_millihz":110000,"velocity":0.8,"instrument":"bass"},
+      {"id":"bass.2","tick":48000,"duration":24000,"frequency_millihz":130813,"velocity":0.75,"instrument":"bass"},
+      {"id":"bass.3","tick":96000,"duration":24000,"frequency_millihz":164814,"velocity":0.8,"instrument":"bass"},
+      {"id":"bass.4","tick":144000,"duration":24000,"frequency_millihz":130813,"velocity":0.75,"instrument":"bass"},
+      {"id":"bass.5","tick":192000,"duration":24000,"frequency_millihz":110000,"velocity":0.8,"instrument":"bass"},
+      {"id":"bass.6","tick":240000,"duration":24000,"frequency_millihz":98000,"velocity":0.7,"instrument":"bass"}
+    ]},
+    {"id":"music.percussion","bus":"music","notes":[
+      {"id":"perc.1","tick":0,"duration":2400,"frequency_millihz":120000,"velocity":0.6,"instrument":"percussion"},
+      {"id":"perc.2","tick":24000,"duration":2400,"frequency_millihz":90000,"velocity":0.5,"instrument":"percussion"},
+      {"id":"perc.3","tick":48000,"duration":2400,"frequency_millihz":120000,"velocity":0.6,"instrument":"percussion"},
+      {"id":"perc.4","tick":72000,"duration":2400,"frequency_millihz":90000,"velocity":0.5,"instrument":"percussion"},
+      {"id":"perc.5","tick":96000,"duration":2400,"frequency_millihz":120000,"velocity":0.65,"instrument":"percussion"},
+      {"id":"perc.6","tick":120000,"duration":2400,"frequency_millihz":90000,"velocity":0.5,"instrument":"percussion"},
+      {"id":"perc.7","tick":144000,"duration":2400,"frequency_millihz":120000,"velocity":0.7,"instrument":"percussion"},
+      {"id":"perc.8","tick":168000,"duration":2400,"frequency_millihz":90000,"velocity":0.5,"instrument":"percussion"},
+      {"id":"perc.9","tick":192000,"duration":2400,"frequency_millihz":120000,"velocity":0.6,"instrument":"percussion"},
+      {"id":"perc.10","tick":216000,"duration":2400,"frequency_millihz":90000,"velocity":0.5,"instrument":"percussion"},
+      {"id":"perc.11","tick":240000,"duration":2400,"frequency_millihz":120000,"velocity":0.6,"instrument":"percussion"},
+      {"id":"perc.12","tick":264000,"duration":2400,"frequency_millihz":90000,"velocity":0.5,"instrument":"percussion"}
+    ]},
+    {"id":"effect.events","bus":"effect","notes":[
+      {"id":"doorslam","tick":96000,"duration":7200,"frequency_millihz":210000,"velocity":0.9,"instrument":"event"},
+      {"id":"flash","tick":144000,"duration":4800,"frequency_millihz":1760000,"velocity":0.8,"instrument":"event"},
+      {"id":"cutwhoosh","tick":192000,"duration":9600,"frequency_millihz":320000,"velocity":0.7,"instrument":"event"},
+      {"id":"doorclose","tick":264000,"duration":7200,"frequency_millihz":180000,"velocity":0.8,"instrument":"event"}
+    ]}
+  ],
+  "automation": [
+    {"bus":"music","keys":[{"tick":0,"value":0.9},{"tick":144000,"value":0.7},{"tick":192000,"value":1.0},{"tick":288000,"value":0.85}]},
+    {"bus":"effect","keys":[{"tick":0,"value":0.8},{"tick":144000,"value":1.0},{"tick":192000,"value":0.9},{"tick":288000,"value":0.8}]}
+  ],
+  "budget": {"max_voices":32,"max_memory_bytes":1048576}
+}

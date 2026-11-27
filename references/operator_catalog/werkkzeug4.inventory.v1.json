@@ -1,0 +1,783 @@
+{
+  "format": "nw13-operator-inventory",
+  "version": 1,
+  "engine": "werkkzeug4",
+  "pinned_source": "fr_public",
+  "source_commit": "8c8f82c2ae01133370e649bbc05916e7aceecadd",
+  "inventory_complete_against": "pinned-declaration-export",
+  "entry_count": 15,
+  "variants": [
+    "werkkzeug4"
+  ],
+  "entries": [
+    {
+      "id": "wk4.bloom",
+      "engine": "werkkzeug4",
+      "variant": "werkkzeug4",
+      "engine_scope": {
+        "engine": "werkkzeug4",
+        "separately_scoped": true,
+        "identifiable": true,
+        "description": "successor editor operator inventory"
+      },
+      "declaration_identity": "Werkkzeug4::Bloom",
+      "declaration_hash": "sha256:493c427ac47bc334a54ab1ea02a4b335017059df21beccffd6e074a3a8a47232",
+      "kind": "operator",
+      "types": [
+        "texture"
+      ],
+      "ports": {
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "texture"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Output",
+            "type": "texture"
+          }
+        ]
+      },
+      "extractable_parameters": [
+        {
+          "name": "Threshold",
+          "type": "float"
+        },
+        {
+          "name": "Intensity",
+          "type": "float"
+        }
+      ],
+      "source_location": {
+        "file": "Werkkzeug4/System/Operator/Bloom.cpp",
+        "symbol": "BloomOperator",
+        "line_start": 1,
+        "line_end": 1
+      },
+      "hidden": false,
+      "obsolete": false,
+      "extraction_limits": [
+        "filter kernel independently authored"
+      ],
+      "review_state": "unreviewed",
+      "license": "upstream_unknown"
+    },
+    {
+      "id": "wk4.camera",
+      "engine": "werkkzeug4",
+      "variant": "werkkzeug4",
+      "engine_scope": {
+        "engine": "werkkzeug4",
+        "separately_scoped": true,
+        "identifiable": true,
+        "description": "successor editor operator inventory"
+      },
+      "declaration_identity": "Werkkzeug4::Camera",
+      "declaration_hash": "sha256:bdcbfbd0a7bf69e19587c55ca8ab2c79bb1a88df389b52303f8f95f35d84fed0",
+      "kind": "operator",
+      "types": [
+        "camera"
+      ],
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Output",
+            "type": "camera"
+          }
+        ]
+      },
+      "extractable_parameters": [
+        {
+          "name": "Fov",
+          "type": "float"
+        },
+        {
+          "name": "Near",
+          "type": "float"
+        },
+        {
+          "name": "Far",
+          "type": "float"
+        }
+      ],
+      "source_location": {
+        "file": "Werkkzeug4/System/Operator/Camera.cpp",
+        "symbol": "CameraOperator",
+        "line_start": 1,
+        "line_end": 1
+      },
+      "hidden": false,
+      "obsolete": false,
+      "extraction_limits": [
+        "clipping validation independently authored"
+      ],
+      "review_state": "unreviewed",
+      "license": "upstream_unknown"
+    },
+    {
+      "id": "wk4.feedback",
+      "engine": "werkkzeug4",
+      "variant": "werkkzeug4",
+      "engine_scope": {
+        "engine": "werkkzeug4",
+        "separately_scoped": true,
+        "identifiable": true,
+        "description": "successor editor operator inventory"
+      },
+      "declaration_identity": "Werkkzeug4::Feedback",
+      "declaration_hash": "sha256:f00f3ca2fffe3eb9fb7a476c75729c6b582290eb712513611d5af52f1626df73",
+      "kind": "operator",
+      "types": [
+        "texture"
+      ],
+      "ports": {
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "texture"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Output",
+            "type": "texture"
+          }
+        ]
+      },
+      "extractable_parameters": [
+        {
+          "name": "Decay",
+          "type": "float"
+        }
+      ],
+      "source_location": {
+        "file": "Werkkzeug4/System/Operator/Feedback.cpp",
+        "symbol": "FeedbackOperator",
+        "line_start": 1,
+        "line_end": 1
+      },
+      "hidden": false,
+      "obsolete": false,
+      "extraction_limits": [
+        "temporal reset rules independently specified"
+      ],
+      "review_state": "unreviewed",
+      "license": "upstream_unknown"
+    },
+    {
+      "id": "wk4.group",
+      "engine": "werkkzeug4",
+      "variant": "werkkzeug4",
+      "engine_scope": {
+        "engine": "werkkzeug4",
+        "separately_scoped": true,
+        "identifiable": true,
+        "description": "successor editor operator inventory"
+      },
+      "declaration_identity": "Werkkzeug4::Group",
+      "declaration_hash": "sha256:5cad2e720554ceaff3b0effe16a934b8e4f69e91f50dce327f15fa238def65a1",
+      "kind": "operator",
+      "types": [
+        "scene"
+      ],
+      "ports": {
+        "inputs": [
+          {
+            "name": "Children",
+            "type": "scene"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Output",
+            "type": "scene"
+          }
+        ]
+      },
+      "extractable_parameters": [
+        {
+          "name": "Visible",
+          "type": "bool"
+        }
+      ],
+      "source_location": {
+        "file": "Werkkzeug4/System/Operator/Group.cpp",
+        "symbol": "GroupOperator",
+        "line_start": 1,
+        "line_end": 1
+      },
+      "hidden": false,
+      "obsolete": false,
+      "extraction_limits": [
+        "selection semantics unresolved"
+      ],
+      "review_state": "unreviewed",
+      "license": "upstream_unknown"
+    },
+    {
+      "id": "wk4.legacy_output",
+      "engine": "werkkzeug4",
+      "variant": "werkkzeug4",
+      "engine_scope": {
+        "engine": "werkkzeug4",
+        "separately_scoped": true,
+        "identifiable": true,
+        "description": "successor editor operator inventory"
+      },
+      "declaration_identity": "Werkkzeug4::LegacyOutput",
+      "declaration_hash": "sha256:2fcd0e54782d474d758a2e95b33c3e63c1f1b5b7c2b291e61f43acffc7992ff2",
+      "kind": "operator",
+      "types": [
+        "render"
+      ],
+      "ports": {
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "render"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Output",
+            "type": "render"
+          }
+        ]
+      },
+      "extractable_parameters": [],
+      "source_location": {
+        "file": "Werkkzeug4/System/Operator/LegacyOutput.cpp",
+        "symbol": "LegacyOutputOperator",
+        "line_start": 1,
+        "line_end": 1
+      },
+      "hidden": true,
+      "obsolete": true,
+      "extraction_limits": [
+        "hidden/obsolete declaration retained for identity only"
+      ],
+      "review_state": "unreviewed",
+      "license": "upstream_unknown"
+    },
+    {
+      "id": "wk4.light",
+      "engine": "werkkzeug4",
+      "variant": "werkkzeug4",
+      "engine_scope": {
+        "engine": "werkkzeug4",
+        "separately_scoped": true,
+        "identifiable": true,
+        "description": "successor editor operator inventory"
+      },
+      "declaration_identity": "Werkkzeug4::Light",
+      "declaration_hash": "sha256:46f1f560cb29be907bbca4aa99d05af462759432e7eb5576b311d44d31b2d72e",
+      "kind": "operator",
+      "types": [
+        "light"
+      ],
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Output",
+            "type": "light"
+          }
+        ]
+      },
+      "extractable_parameters": [
+        {
+          "name": "Color",
+          "type": "color"
+        },
+        {
+          "name": "Range",
+          "type": "float"
+        }
+      ],
+      "source_location": {
+        "file": "Werkkzeug4/System/Operator/Light.cpp",
+        "symbol": "LightOperator",
+        "line_start": 1,
+        "line_end": 1
+      },
+      "hidden": false,
+      "obsolete": false,
+      "extraction_limits": [
+        "falloff model independently authored"
+      ],
+      "review_state": "unreviewed",
+      "license": "upstream_unknown"
+    },
+    {
+      "id": "wk4.material",
+      "engine": "werkkzeug4",
+      "variant": "werkkzeug4",
+      "engine_scope": {
+        "engine": "werkkzeug4",
+        "separately_scoped": true,
+        "identifiable": true,
+        "description": "successor editor operator inventory"
+      },
+      "declaration_identity": "Werkkzeug4::Material",
+      "declaration_hash": "sha256:e4ffe5bd155ca20df0bec864fa4a62c75b1aafe23975e677d513717d6bc60ff0",
+      "kind": "operator",
+      "types": [
+        "material"
+      ],
+      "ports": {
+        "inputs": [
+          {
+            "name": "BaseColor",
+            "type": "texture"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Output",
+            "type": "material"
+          }
+        ]
+      },
+      "extractable_parameters": [
+        {
+          "name": "Roughness",
+          "type": "float"
+        },
+        {
+          "name": "Metallic",
+          "type": "float"
+        },
+        {
+          "name": "Emission",
+          "type": "color"
+        }
+      ],
+      "source_location": {
+        "file": "Werkkzeug4/System/Operator/Material.cpp",
+        "symbol": "MaterialOperator",
+        "line_start": 1,
+        "line_end": 1
+      },
+      "hidden": false,
+      "obsolete": false,
+      "extraction_limits": [
+        "PBR response independently specified"
+      ],
+      "review_state": "unreviewed",
+      "license": "upstream_unknown"
+    },
+    {
+      "id": "wk4.mesh",
+      "engine": "werkkzeug4",
+      "variant": "werkkzeug4",
+      "engine_scope": {
+        "engine": "werkkzeug4",
+        "separately_scoped": true,
+        "identifiable": true,
+        "description": "successor editor operator inventory"
+      },
+      "declaration_identity": "Werkkzeug4::Mesh",
+      "declaration_hash": "sha256:db52f68b2925ccad075cbb807243a55cd2e258f60799d645552d07871466dbbb",
+      "kind": "operator",
+      "types": [
+        "mesh"
+      ],
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Output",
+            "type": "mesh"
+          }
+        ]
+      },
+      "extractable_parameters": [
+        {
+          "name": "Primitive",
+          "type": "enum"
+        },
+        {
+          "name": "Slices",
+          "type": "int"
+        }
+      ],
+      "source_location": {
+        "file": "Werkkzeug4/System/Operator/Mesh.cpp",
+        "symbol": "MeshOperator",
+        "line_start": 1,
+        "line_end": 1
+      },
+      "hidden": false,
+      "obsolete": false,
+      "extraction_limits": [
+        "topology builder internals not extracted"
+      ],
+      "review_state": "unreviewed",
+      "license": "upstream_unknown"
+    },
+    {
+      "id": "wk4.noise",
+      "engine": "werkkzeug4",
+      "variant": "werkkzeug4",
+      "engine_scope": {
+        "engine": "werkkzeug4",
+        "separately_scoped": true,
+        "identifiable": true,
+        "description": "successor editor operator inventory"
+      },
+      "declaration_identity": "Werkkzeug4::Noise",
+      "declaration_hash": "sha256:67e7b886a4b90c8b50c16854f2b7ce0fdb75398d074baa29500e6e7894a2d263",
+      "kind": "operator",
+      "types": [
+        "texture"
+      ],
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Output",
+            "type": "texture"
+          }
+        ]
+      },
+      "extractable_parameters": [
+        {
+          "name": "Seed",
+          "type": "int"
+        },
+        {
+          "name": "Octaves",
+          "type": "int"
+        }
+      ],
+      "source_location": {
+        "file": "Werkkzeug4/System/Operator/Noise.cpp",
+        "symbol": "NoiseOperator",
+        "line_start": 1,
+        "line_end": 1
+      },
+      "hidden": false,
+      "obsolete": false,
+      "extraction_limits": [
+        "algorithm independently authored"
+      ],
+      "review_state": "unreviewed",
+      "license": "upstream_unknown"
+    },
+    {
+      "id": "wk4.particles",
+      "engine": "werkkzeug4",
+      "variant": "werkkzeug4",
+      "engine_scope": {
+        "engine": "werkkzeug4",
+        "separately_scoped": true,
+        "identifiable": true,
+        "description": "successor editor operator inventory"
+      },
+      "declaration_identity": "Werkkzeug4::Particles",
+      "declaration_hash": "sha256:1f5528296cf894873bf591e20a65e6426b8c5e15532599101e3f68370707c48a",
+      "kind": "operator",
+      "types": [
+        "particles"
+      ],
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Output",
+            "type": "particles"
+          }
+        ]
+      },
+      "extractable_parameters": [
+        {
+          "name": "Count",
+          "type": "int"
+        },
+        {
+          "name": "Lifetime",
+          "type": "float"
+        }
+      ],
+      "source_location": {
+        "file": "Werkkzeug4/System/Operator/Particles.cpp",
+        "symbol": "ParticlesOperator",
+        "line_start": 1,
+        "line_end": 1
+      },
+      "hidden": false,
+      "obsolete": false,
+      "extraction_limits": [
+        "particle layout independently authored"
+      ],
+      "review_state": "unreviewed",
+      "license": "upstream_unknown"
+    },
+    {
+      "id": "wk4.render",
+      "engine": "werkkzeug4",
+      "variant": "werkkzeug4",
+      "engine_scope": {
+        "engine": "werkkzeug4",
+        "separately_scoped": true,
+        "identifiable": true,
+        "description": "successor editor operator inventory"
+      },
+      "declaration_identity": "Werkkzeug4::Render",
+      "declaration_hash": "sha256:80ab3afaa80d7e21271fab53c843b1e76f6c7440149d53545f8620df4c3a233c",
+      "kind": "operator",
+      "types": [
+        "mesh",
+        "material",
+        "render"
+      ],
+      "ports": {
+        "inputs": [
+          {
+            "name": "Mesh",
+            "type": "mesh"
+          },
+          {
+            "name": "Material",
+            "type": "material"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Output",
+            "type": "render"
+          }
+        ]
+      },
+      "extractable_parameters": [
+        {
+          "name": "Blend",
+          "type": "enum"
+        }
+      ],
+      "source_location": {
+        "file": "Werkkzeug4/System/Operator/Render.cpp",
+        "symbol": "RenderOperator",
+        "line_start": 1,
+        "line_end": 1
+      },
+      "hidden": false,
+      "obsolete": false,
+      "extraction_limits": [
+        "shader bodies excluded"
+      ],
+      "review_state": "unreviewed",
+      "license": "upstream_unknown"
+    },
+    {
+      "id": "wk4.scene",
+      "engine": "werkkzeug4",
+      "variant": "werkkzeug4",
+      "engine_scope": {
+        "engine": "werkkzeug4",
+        "separately_scoped": true,
+        "identifiable": true,
+        "description": "successor editor operator inventory"
+      },
+      "declaration_identity": "Werkkzeug4::Scene",
+      "declaration_hash": "sha256:b355505060a31dbe6e415d4aca22bd4b5f029550099cc6fea07eee76820a7f81",
+      "kind": "operator",
+      "types": [
+        "scene"
+      ],
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Output",
+            "type": "scene"
+          }
+        ]
+      },
+      "extractable_parameters": [
+        {
+          "name": "Camera",
+          "type": "camera"
+        }
+      ],
+      "source_location": {
+        "file": "Werkkzeug4/System/Operator/Scene.cpp",
+        "symbol": "SceneOperator",
+        "line_start": 1,
+        "line_end": 1
+      },
+      "hidden": false,
+      "obsolete": false,
+      "extraction_limits": [
+        "scene ownership semantics are not compatibility claims"
+      ],
+      "review_state": "unreviewed",
+      "license": "upstream_unknown"
+    },
+    {
+      "id": "wk4.texture",
+      "engine": "werkkzeug4",
+      "variant": "werkkzeug4",
+      "engine_scope": {
+        "engine": "werkkzeug4",
+        "separately_scoped": true,
+        "identifiable": true,
+        "description": "successor editor operator inventory"
+      },
+      "declaration_identity": "Werkkzeug4::Texture",
+      "declaration_hash": "sha256:d393d4b403bc3e8044e430b800e730d0364a73e3fb5a8dc3b3b63eec9425211b",
+      "kind": "operator",
+      "types": [
+        "texture"
+      ],
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "name": "Output",
+            "type": "texture"
+          }
+        ]
+      },
+      "extractable_parameters": [
+        {
+          "name": "Resolution",
+          "type": "int2"
+        },
+        {
+          "name": "Format",
+          "type": "enum"
+        }
+      ],
+      "source_location": {
+        "file": "Werkkzeug4/System/Operator/Texture.cpp",
+        "symbol": "TextureOperator",
+        "line_start": 1,
+        "line_end": 1
+      },
+      "hidden": false,
+      "obsolete": false,
+      "extraction_limits": [
+        "line numbers normalized to symbol scope in pinned export"
+      ],
+      "review_state": "unreviewed",
+      "license": "upstream_unknown"
+    },
+    {
+      "id": "wk4.tonemap",
+      "engine": "werkkzeug4",
+      "variant": "werkkzeug4",
+      "engine_scope": {
+        "engine": "werkkzeug4",
+        "separately_scoped": true,
+        "identifiable": true,
+        "description": "successor editor operator inventory"
+      },
+      "declaration_identity": "Werkkzeug4::Tonemap",
+      "declaration_hash": "sha256:9c9ce83100302dbf83832768a1df5433583e40acf44928096093fdfe108a067e",
+      "kind": "operator",
+      "types": [
+        "texture"
+      ],
+      "ports": {
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "texture"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Output",
+            "type": "texture"
+          }
+        ]
+      },
+      "extractable_parameters": [
+        {
+          "name": "Exposure",
+          "type": "float"
+        },
+        {
+          "name": "Gamma",
+          "type": "float"
+        }
+      ],
+      "source_location": {
+        "file": "Werkkzeug4/System/Operator/Tonemap.cpp",
+        "symbol": "TonemapOperator",
+        "line_start": 1,
+        "line_end": 1
+      },
+      "hidden": false,
+      "obsolete": false,
+      "extraction_limits": [
+        "operator independently selected"
+      ],
+      "review_state": "unreviewed",
+      "license": "upstream_unknown"
+    },
+    {
+      "id": "wk4.transform",
+      "engine": "werkkzeug4",
+      "variant": "werkkzeug4",
+      "engine_scope": {
+        "engine": "werkkzeug4",
+        "separately_scoped": true,
+        "identifiable": true,
+        "description": "successor editor operator inventory"
+      },
+      "declaration_identity": "Werkkzeug4::Transform",
+      "declaration_hash": "sha256:69a75de41f1a1a1c76121aad01e1a49a3ef1d0684ebe0c8369409edce56923f5",
+      "kind": "operator",
+      "types": [
+        "transform"
+      ],
+      "ports": {
+        "inputs": [
+          {
+            "name": "Input",
+            "type": "any"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Output",
+            "type": "any"
+          }
+        ]
+      },
+      "extractable_parameters": [
+        {
+          "name": "Position",
+          "type": "vec3"
+        },
+        {
+          "name": "Rotation",
+          "type": "vec3"
+        },
+        {
+          "name": "Scale",
+          "type": "vec3"
+        }
+      ],
+      "source_location": {
+        "file": "Werkkzeug4/System/Operator/Transform.cpp",
+        "symbol": "TransformOperator",
+        "line_start": 1,
+        "line_end": 1
+      },
+      "hidden": false,
+      "obsolete": false,
+      "extraction_limits": [
+        "parent selection is editor state, not extracted"
+      ],
+      "review_state": "unreviewed",
+      "license": "upstream_unknown"
+    }
+  ],
+  "inventory_sha256": "sha256:f91ed75e57619680bd6fe1a5b082cee7c07dbb2077f225d06efb1dce36861e01"
+}

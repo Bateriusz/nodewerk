@@ -1,0 +1,426 @@
+{
+  "format": "nw13-geometry-operator-contracts",
+  "version": 1,
+  "schema": "schemas/nw13-geometry-graph.v1.json",
+  "operators": [
+    {
+      "operator_id": "nw.geom.bend",
+      "operator_version": "1.0.0",
+      "kind": "deformation",
+      "parameters": {
+        "half_width": {
+          "type": "float",
+          "minimum": 1e-06,
+          "maximum": 1000000.0
+        },
+        "max_degrees": {
+          "type": "float",
+          "minimum": -180.0,
+          "maximum": 180.0
+        }
+      },
+      "children": [
+        1,
+        1
+      ],
+      "reference_points": [],
+      "contract_digest": "sha256:v1:166dbfb11f6c8453a660fc70ffb474990ec9aaa879b73e7b2dd250bcf767f68b",
+      "semantics": "bounded position-dependent Z rotation"
+    },
+    {
+      "operator_id": "nw.geom.box",
+      "operator_version": "1.0.0",
+      "kind": "primitive",
+      "parameters": {
+        "half_extents": {
+          "type": "vec3",
+          "minimum": 1e-06,
+          "maximum": 1000000.0
+        }
+      },
+      "children": [
+        0,
+        0
+      ],
+      "reference_points": [
+        [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          -1.0
+        ],
+        [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          0.0
+        ]
+      ],
+      "contract_digest": "sha256:v1:878f22ca7b6577c20f2f214a7bfb257b130dd9d8c63015a260839bda667716b7",
+      "semantics": "length(max(abs(p)-b,0))+min(max(q),0)"
+    },
+    {
+      "operator_id": "nw.geom.capsule",
+      "operator_version": "1.0.0",
+      "kind": "primitive",
+      "parameters": {
+        "radius": {
+          "type": "float",
+          "minimum": 1e-06,
+          "maximum": 1000000.0
+        },
+        "half_height": {
+          "type": "float",
+          "minimum": 0.0,
+          "maximum": 1000000.0
+        }
+      },
+      "children": [
+        0,
+        0
+      ],
+      "reference_points": [
+        [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          -1.0
+        ],
+        [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          0.0
+        ]
+      ],
+      "contract_digest": "sha256:v1:40e3f94a7cfc2361d25f2eee5ef0369a9b925cd639e10453e75a48c21f06d0cc",
+      "semantics": "bounded Y-axis capsule"
+    },
+    {
+      "operator_id": "nw.geom.cylinder",
+      "operator_version": "1.0.0",
+      "kind": "primitive",
+      "parameters": {
+        "radius": {
+          "type": "float",
+          "minimum": 1e-06,
+          "maximum": 1000000.0
+        },
+        "half_height": {
+          "type": "float",
+          "minimum": 1e-06,
+          "maximum": 1000000.0
+        }
+      },
+      "children": [
+        0,
+        0
+      ],
+      "reference_points": [
+        [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          -1.0
+        ],
+        [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          0.0
+        ]
+      ],
+      "contract_digest": "sha256:v1:5466853831409ab961b2d8a199c9a8f59ea37678e7e1f7aa3b5fc2d243fb62ac",
+      "semantics": "bounded Y-axis cylinder"
+    },
+    {
+      "operator_id": "nw.geom.displace",
+      "operator_version": "1.0.0",
+      "kind": "deformation",
+      "parameters": {
+        "seed": {
+          "type": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "amplitude": {
+          "type": "float",
+          "minimum": 0.0,
+          "maximum": 1000000.0
+        },
+        "frequency": {
+          "type": "float",
+          "minimum": 1e-06,
+          "maximum": 1000000.0
+        }
+      },
+      "children": [
+        1,
+        1
+      ],
+      "reference_points": [],
+      "contract_digest": "sha256:v1:ecd0eba484e8f5f02b28d21a89eedaf958cf13023b138596dd8e3df2ea1775e2",
+      "semantics": "sdf + amplitude*(2*value_noise3-1)"
+    },
+    {
+      "operator_id": "nw.geom.intersection",
+      "operator_version": "1.0.0",
+      "kind": "csg",
+      "parameters": {},
+      "children": [
+        2,
+        8
+      ],
+      "reference_points": [],
+      "contract_digest": "sha256:v1:e270bda3925df724772334a7290605987521fc651cd5e9c36d31492ddaccc4cc",
+      "semantics": "max(a,b)"
+    },
+    {
+      "operator_id": "nw.geom.repeat",
+      "operator_version": "1.0.0",
+      "kind": "finite",
+      "parameters": {
+        "spacing": {
+          "type": "vec3",
+          "minimum": 1e-06,
+          "maximum": 1000000.0
+        },
+        "counts": {
+          "type": "ivec3",
+          "minimum": 1,
+          "maximum": 64
+        }
+      },
+      "children": [
+        1,
+        1
+      ],
+      "reference_points": [],
+      "contract_digest": "sha256:v1:ecf14f729fa505b7c280b6cb996de60354ff0a71fa30331d9af57f98d7001ef6",
+      "semantics": "finite nearest-lattice repetition"
+    },
+    {
+      "operator_id": "nw.geom.rotate",
+      "operator_version": "1.0.0",
+      "kind": "transform",
+      "parameters": {
+        "axis": {
+          "type": "enum",
+          "values": [
+            "x",
+            "y",
+            "z"
+          ]
+        },
+        "degrees": {
+          "type": "float",
+          "minimum": -3600.0,
+          "maximum": 3600.0
+        }
+      },
+      "children": [
+        1,
+        1
+      ],
+      "reference_points": [],
+      "contract_digest": "sha256:v1:2e57a7893ce885491d3adf47be706080383aae51a80f22fcea21f6bb328d282c",
+      "semantics": "inverse Euler-axis rotation"
+    },
+    {
+      "operator_id": "nw.geom.scale",
+      "operator_version": "1.0.0",
+      "kind": "transform",
+      "parameters": {
+        "scale": {
+          "type": "vec3",
+          "minimum": 1e-06,
+          "maximum": 1000000.0
+        }
+      },
+      "children": [
+        1,
+        1
+      ],
+      "reference_points": [],
+      "contract_digest": "sha256:v1:bb450d4d763d5116bd0323e8b9420332c01e270aa6d0a5d2b4b8e47174c92e6d",
+      "semantics": "p/scale with Lipschitz correction"
+    },
+    {
+      "operator_id": "nw.geom.smooth_union",
+      "operator_version": "1.0.0",
+      "kind": "csg",
+      "parameters": {
+        "k": {
+          "type": "float",
+          "minimum": 0.0,
+          "maximum": 1000000.0
+        }
+      },
+      "children": [
+        2,
+        8
+      ],
+      "reference_points": [],
+      "contract_digest": "sha256:v1:1c93a50a848489704cf5e6e964d0276ddd05189cad3855bd1307e363439cadfe",
+      "semantics": "bounded polynomial smin; k=0 equals union"
+    },
+    {
+      "operator_id": "nw.geom.sphere",
+      "operator_version": "1.0.0",
+      "kind": "primitive",
+      "parameters": {
+        "radius": {
+          "type": "float",
+          "minimum": 1e-06,
+          "maximum": 1000000.0
+        }
+      },
+      "children": [
+        0,
+        0
+      ],
+      "reference_points": [
+        [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          -1.0
+        ],
+        [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          0.0
+        ]
+      ],
+      "contract_digest": "sha256:v1:2fb534c21759085b6c66b654e1a0b36fcc528e61da19f0dc94ce893ee0af0b90",
+      "semantics": "|p|-r"
+    },
+    {
+      "operator_id": "nw.geom.subtract",
+      "operator_version": "1.0.0",
+      "kind": "csg",
+      "parameters": {},
+      "children": [
+        2,
+        2
+      ],
+      "reference_points": [],
+      "contract_digest": "sha256:v1:a372dc2dcf407bc15a8227fb1db5f385bdff37b3394ee085fa98f266a2220cd6",
+      "semantics": "max(a,-b)"
+    },
+    {
+      "operator_id": "nw.geom.torus",
+      "operator_version": "1.0.0",
+      "kind": "primitive",
+      "parameters": {
+        "major_radius": {
+          "type": "float",
+          "minimum": 1e-06,
+          "maximum": 1000000.0
+        },
+        "minor_radius": {
+          "type": "float",
+          "minimum": 1e-06,
+          "maximum": 1000000.0
+        }
+      },
+      "children": [
+        0,
+        0
+      ],
+      "reference_points": [
+        [
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          -1.0
+        ],
+        [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          0.0
+        ]
+      ],
+      "contract_digest": "sha256:v1:a573b8471dd927e0818dc3cf753a5d33c7d9e962e685c62cdb46b33502ab9301",
+      "semantics": "XZ ring with Y tube"
+    },
+    {
+      "operator_id": "nw.geom.translate",
+      "operator_version": "1.0.0",
+      "kind": "transform",
+      "parameters": {
+        "offset": {
+          "type": "vec3",
+          "minimum": -1000000.0,
+          "maximum": 1000000.0
+        }
+      },
+      "children": [
+        1,
+        1
+      ],
+      "reference_points": [],
+      "contract_digest": "sha256:v1:4433371377fab8f0ed7e77ca04e27cb0a8dad2066968b189ee3fc8d56c4faa53",
+      "semantics": "p-offset"
+    },
+    {
+      "operator_id": "nw.geom.twist",
+      "operator_version": "1.0.0",
+      "kind": "deformation",
+      "parameters": {
+        "half_height": {
+          "type": "float",
+          "minimum": 1e-06,
+          "maximum": 1000000.0
+        },
+        "max_degrees": {
+          "type": "float",
+          "minimum": -3600.0,
+          "maximum": 3600.0
+        }
+      },
+      "children": [
+        1,
+        1
+      ],
+      "reference_points": [],
+      "contract_digest": "sha256:v1:baddd1537c3db8b9b6a87ce15070d6158079473aaf26f102b2acee55918169a5",
+      "semantics": "bounded position-dependent Y rotation"
+    },
+    {
+      "operator_id": "nw.geom.union",
+      "operator_version": "1.0.0",
+      "kind": "csg",
+      "parameters": {},
+      "children": [
+        2,
+        8
+      ],
+      "reference_points": [],
+      "contract_digest": "sha256:v1:4cc0b743d00749cd5c629e5915ce915592e7e84eb710bba150e137b82e14607a",
+      "semantics": "min(a,b)"
+    }
+  ]
+}

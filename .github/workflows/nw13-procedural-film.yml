@@ -1,0 +1,171 @@
+name: NW-13 Procedural Film
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci-impact:
+    name: NW-13 CI impact routing
+    runs-on: ubuntu-latest
+    outputs:
+      nw13: ${{ steps.classify.outputs.nw13 }}
+      full_regression: ${{ steps.classify.outputs.full_regression }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Classify changed scope
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python tools/ci/changed_scope.py
+          --event-name "${{ github.event_name }}"
+          --base "$BASE_SHA"
+          --head "$HEAD_SHA"
+          --github-output "$GITHUB_OUTPUT"
+          --summary-file "$GITHUB_STEP_SUMMARY"
+
+  contracts-and-headless-images:
+    name: Catalog, contracts, headless images and evidence bundles
+    needs: ci-impact
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Verify pinned catalog regeneration and clean-room boundary
+        run: python tools/operator_catalog.py
+      - name: Run NW-13 contract, geometry, scene, particle, audio and pipeline tests
+        run: >-
+          python -m pytest -v
+          tests/test_nw13_geometry.py
+          tests/test_nw13_geometry_graph_cpp.py
+          tests/test_nw13_scene_animation.py
+          tests/test_nw13_particles_effects.py
+          tests/test_nw13_audio.py
+          tests/test_nw13_pipeline_and_lowering.py
+          tests/test_nw13_production_render.py
+          tests/test_nw13_provenance_and_catalog.py
+      - name: Regenerate fixed-tick frames and contact sheet
+        run: |
+          PYTHONPATH=tools python - <<'PY'
+          from pathlib import Path
+          import json
+          import nw13_production as production
+          root = Path('.').resolve()
+          document = production.load_production(root, 'fixtures/nw13/hotel_corridor.production.json')
+          manifest = production.render_evidence(root, document, output_dir='build/nw13-evidence')
+          print(json.dumps(manifest['contact_sheet'], sort_keys=True))
+          PY
+      - name: Export independent common/optional/fallback artifacts and matched ledger
+        run: |
+          PYTHONPATH=tools python - <<'PY'
+          from pathlib import Path
+          import json
+          import nw13_production as production
+          import nw13_evidence as evidence
+          root = Path('.').resolve()
+          document = production.load_production(root, 'fixtures/nw13/hotel_corridor.production.json')
+          bundle = evidence.export_artifacts(
+              document,
+              capabilities=document.get('capabilities', {}),
+              requested_features=document.get('optional_requests', []),
+          )
+          errors = evidence.validate_bundle(bundle)
+          if errors:
+              raise SystemExit(errors)
+          Path('build/nw13-evidence').mkdir(parents=True, exist_ok=True)
+          Path('build/nw13-evidence/export-bundle.v1.json').write_text(json.dumps(bundle, indent=2), encoding='utf-8')
+          print(json.dumps({'common': bundle['common']['artifact_id'], 'optional': [a['artifact_id'] for a in bundle['optional']], 'diagnostics': bundle['diagnostics']}, sort_keys=True))
+          PY
+      - name: Upload NW-13 evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw13-evidence-${{ github.sha }}
+          path: build/nw13-evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  headless-warp-and-evidence:
+    name: Windows builds, shared WARP regression, package identity and validation bundle
+    needs: ci-impact
+    if: needs.ci-impact.outputs.nw13 == 'true' || needs.ci-impact.outputs.full_regression == 'true'
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Configure host player build
+        run: cmake -S . -B build/host-player -DCMAKE_BUILD_TYPE=Release -DNW_ENFORCE_PINNED_TOOLCHAIN=OFF
+      - name: Build portable PackagePlayer and capability checker
+        run: |
+          cmake --build build/host-player --target nw_package_player_host_compile --parallel 2
+          cmake --build build/host-player --target nw06_capability_check --parallel 2
+      - name: Run NW-13 contracts on Windows
+        run: >-
+          python -m pytest -v
+          tests/test_nw13_geometry.py
+          tests/test_nw13_geometry_graph_cpp.py
+          tests/test_nw13_scene_animation.py
+          tests/test_nw13_particles_effects.py
+          tests/test_nw13_audio.py
+          tests/test_nw13_pipeline_and_lowering.py
+          tests/test_nw13_production_render.py
+          tests/test_nw13_provenance_and_catalog.py
+      - name: Preserve the shared NW-11 headless WARP command-path regression
+        run: python -m pytest -q tests/test_nw11_advanced_gpu.py -k "warp or common_regression"
+      - name: Validate independent artifact identities and unavailable observations
+        shell: bash
+        run: |
+          PYTHONPATH=tools python - <<'PY'
+          from pathlib import Path
+          import json
+          import nw13_production as production
+          import nw13_evidence as evidence
+          root = Path('.').resolve()
+          document = production.load_production(root, 'fixtures/nw13/hotel_corridor.production.json')
+          first = evidence.export_artifacts(document, capabilities=document.get('capabilities', {}), requested_features=document.get('optional_requests', []))
+          second = evidence.export_artifacts(document, capabilities=document.get('capabilities', {}), requested_features=document.get('optional_requests', []))
+          assert first['common']['profile_id'] == evidence.COMMON_PROFILE_ID
+          assert second['common']['requirements_digest'] == first['common']['requirements_digest']
+          assert evidence.validate_bundle(first) == []
+          ledger = evidence.matched_arms(
+              revision=document['revision'],
+              common={**first['common'], 'startup_ms': None, 'committed_memory_bytes': None, 'vram_bytes': None, 'cpu_submit_us': None, 'gpu_time_us': None, 'image_max_abs_error': None, 'image_rmse': None},
+              optional=first['optional'][0] if first['optional'] else None,
+          )
+          Path('build/nw13-evidence').mkdir(parents=True, exist_ok=True)
+          Path('build/nw13-evidence/matched-arms.v1.json').write_text(json.dumps(ledger, indent=2), encoding='utf-8')
+          print(json.dumps(ledger, indent=2)[:2000])
+          PY
+      - name: Upload validation bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw13-windows-validation-${{ github.sha }}
+          path: build/nw13-evidence/
+          if-no-files-found: error
+          retention-days: 14

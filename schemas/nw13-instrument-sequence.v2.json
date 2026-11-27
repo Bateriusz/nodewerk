@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw13-instrument-sequence.v2.json",
+  "title": "Nodewerk NW-13 instrument and sequence payload v2",
+  "description": "Versioned public music/effect sequencing payload compiled into the shared procedural-audio path. NWAS v1 remains the preserved transport container and 48 kHz the authoritative sample clock.",
+  "type": "object",
+  "required": [
+    "format",
+    "version",
+    "tick_rate_hz",
+    "duration_ticks",
+    "instruments",
+    "tracks",
+    "automation"
+  ],
+  "properties": {
+    "format": { "const": "nw13.instrument-sequence" },
+    "version": { "const": 2 },
+    "tick_rate_hz": { "const": 48000 },
+    "duration_ticks": { "type": "integer", "minimum": 1, "maximum": 172800000 },
+    "instruments": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/instrument" }
+    },
+    "tracks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/track" }
+    },
+    "automation": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/automation" }
+    },
+    "budget": {
+      "type": "object",
+      "properties": {
+        "max_voices": { "type": "integer", "minimum": 1, "maximum": 1024 },
+        "max_memory_bytes": { "type": "integer", "minimum": 1024 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "envelope": {
+      "type": "object",
+      "required": ["attack_ticks", "decay_ticks", "sustain", "release_ticks"],
+      "properties": {
+        "attack_ticks": { "type": "integer", "minimum": 0 },
+        "decay_ticks": { "type": "integer", "minimum": 0 },
+        "sustain": { "type": "number", "minimum": 0, "maximum": 1 },
+        "release_ticks": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "instrument": {
+      "type": "object",
+      "required": ["id", "waveform", "seed", "gain", "pan", "envelope", "filter"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "waveform": { "enum": ["sine", "square", "saw", "triangle", "noise"] },
+        "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "gain": { "type": "number", "minimum": 0, "maximum": 1 },
+        "pan": { "type": "number", "minimum": -1, "maximum": 1 },
+        "envelope": { "$ref": "#/$defs/envelope" },
+        "filter": {
+          "type": "object",
+          "required": ["type", "cutoff_hz"],
+          "properties": {
+            "type": { "const": "one_pole_lowpass" },
+            "cutoff_hz": { "type": "number", "minimum": 20, "maximum": 96000 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "note": {
+      "type": "object",
+      "required": ["tick", "duration", "frequency_millihz", "instrument"],
+      "properties": {
+        "id": { "type": "string" },
+        "tick": { "type": "integer", "minimum": 0 },
+        "duration": { "type": "integer", "minimum": 1 },
+        "frequency_millihz": { "type": "integer", "minimum": 1, "maximum": 20000000 },
+        "velocity": { "type": "number", "minimum": 0, "maximum": 8 },
+        "instrument": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "track": {
+      "type": "object",
+      "required": ["id", "bus", "notes"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "bus": { "enum": ["music", "effect"] },
+        "notes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/note" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "automation": {
+      "type": "object",
+      "required": ["bus", "keys"],
+      "properties": {
+        "bus": { "enum": ["music", "effect"] },
+        "keys": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "required": ["tick", "value"],
+            "properties": {
+              "tick": { "type": "integer", "minimum": 0 },
+              "value": { "type": "number", "minimum": 0, "maximum": 8 }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

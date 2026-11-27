@@ -1,0 +1,456 @@
+{
+  "format": "nw13.image-evidence",
+  "version": 1,
+  "production_id": "nw13.hotel_corridor",
+  "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+  "width": 48,
+  "height": 27,
+  "samples": 1,
+  "depth_convention": "positive_view_space_linear",
+  "alpha_convention": "straight",
+  "tolerances": {
+    "max_abs_channel_error": 0.02,
+    "rmse": 0.01
+  },
+  "render_cost": {
+    "objects": 12,
+    "geometry_nodes": 38,
+    "estimated_evaluation_steps": 2464,
+    "estimated_memory_bytes": 19712,
+    "estimated_acceleration_structure_bytes": 6912,
+    "startup_ms": null,
+    "startup_measurement_status": "unavailable_in_headless_reference"
+  },
+  "frames": [
+    {
+      "tick": 0,
+      "file": "frames/tick-000000.ppm",
+      "sha256": "sha256:1cb92366a42d477b9064e43927a1f0439ecfd7a804b8d34b27d05d765ddfe3ff",
+      "shot_id": "corridor_approach",
+      "cut": false,
+      "regions": {
+        "center": 0.24195900816390797,
+        "left": 0.24185839598313064,
+        "right": 0.25282783997084396
+      },
+      "region_checks": {
+        "center": true,
+        "left": true,
+        "right": true
+      }
+    },
+    {
+      "tick": 96000,
+      "file": "frames/tick-096000.ppm",
+      "sha256": "sha256:9613494f1efdeaf08885456830f636cae0814c16f43efed5805ef27e21ee12c5",
+      "shot_id": "corridor_approach",
+      "cut": false,
+      "regions": {
+        "center": 0.24537263981368665,
+        "left": 0.2425540110893962,
+        "right": 0.23503531228668098
+      },
+      "region_checks": {
+        "center": true,
+        "left": true,
+        "right": true
+      }
+    },
+    {
+      "tick": 120000,
+      "file": "frames/tick-120000.ppm",
+      "sha256": "sha256:64caac257e85b5a2c877ded123110f351a76630b1ea82722e496cf1cf93c095b",
+      "shot_id": "corridor_approach",
+      "cut": false,
+      "regions": {
+        "center": 0.24582042095256806,
+        "left": 0.2425540110893962,
+        "right": 0.23736288255830368
+      },
+      "region_checks": {
+        "center": true,
+        "left": true,
+        "right": true
+      }
+    },
+    {
+      "tick": 144000,
+      "file": "frames/tick-144000.ppm",
+      "sha256": "sha256:ef84c63b2857b65b8fda0eb7230a776582a5239232acc1a3bd5e79e99728d8c5",
+      "shot_id": "corridor_approach",
+      "cut": false,
+      "regions": {
+        "center": 0.24594254713817956,
+        "left": 0.2425540110893962,
+        "right": 0.2402396543352831
+      },
+      "region_checks": {
+        "center": true,
+        "left": true,
+        "right": true
+      }
+    },
+    {
+      "tick": 192000,
+      "file": "frames/tick-192000.ppm",
+      "sha256": "sha256:bfaa0399808934ce489979920f91b2b4303300c3e940188447654eb4bc087e58",
+      "shot_id": "room_turn",
+      "cut": true,
+      "regions": {
+        "center": 0.25744821249495553,
+        "left": 0.2555226162946138,
+        "right": 0.29955050063029853
+      },
+      "region_checks": {
+        "center": true,
+        "left": true,
+        "right": true
+      }
+    },
+    {
+      "tick": 240000,
+      "file": "frames/tick-240000.ppm",
+      "sha256": "sha256:12882fa96ef95a841e92bfe24660d81c1f5c40fe0405d41b6076244161b0ab4c",
+      "shot_id": "room_turn",
+      "cut": false,
+      "regions": {
+        "center": 0.24693730940805528,
+        "left": 0.2853866676269264,
+        "right": 0.3041840622237822
+      },
+      "region_checks": {
+        "center": true,
+        "left": true,
+        "right": true
+      }
+    },
+    {
+      "tick": 264000,
+      "file": "frames/tick-264000.ppm",
+      "sha256": "sha256:b967369e909ad8ce8fa70506fc0491866f2abdbbf84a30baf5f86c89d8045ed2",
+      "shot_id": "room_turn",
+      "cut": false,
+      "regions": {
+        "center": 0.24966318809293273,
+        "left": 0.3065104056834371,
+        "right": 0.28884384650815664
+      },
+      "region_checks": {
+        "center": true,
+        "left": true,
+        "right": true
+      }
+    },
+    {
+      "tick": 288000,
+      "file": "frames/tick-288000.ppm",
+      "sha256": "sha256:30a588e91fa624654e33de52bcec8ede9ff399143e4df09a374fac662f9927c7",
+      "shot_id": "room_turn",
+      "cut": false,
+      "regions": {
+        "center": 0.2499769897935112,
+        "left": 0.308992317854755,
+        "right": 0.29699451109528363
+      },
+      "region_checks": {
+        "center": true,
+        "left": true,
+        "right": true
+      }
+    }
+  ],
+  "region_checks": [
+    {
+      "tick": 0,
+      "region": "center",
+      "value": 0.24195900816390797,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 0,
+      "region": "left",
+      "value": 0.24185839598313064,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 0,
+      "region": "right",
+      "value": 0.25282783997084396,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 96000,
+      "region": "center",
+      "value": 0.24537263981368665,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 96000,
+      "region": "left",
+      "value": 0.2425540110893962,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 96000,
+      "region": "right",
+      "value": 0.23503531228668098,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 120000,
+      "region": "center",
+      "value": 0.24582042095256806,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 120000,
+      "region": "left",
+      "value": 0.2425540110893962,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 120000,
+      "region": "right",
+      "value": 0.23736288255830368,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 144000,
+      "region": "center",
+      "value": 0.24594254713817956,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 144000,
+      "region": "left",
+      "value": 0.2425540110893962,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 144000,
+      "region": "right",
+      "value": 0.2402396543352831,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 192000,
+      "region": "center",
+      "value": 0.25744821249495553,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 192000,
+      "region": "left",
+      "value": 0.2555226162946138,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 192000,
+      "region": "right",
+      "value": 0.29955050063029853,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 240000,
+      "region": "center",
+      "value": 0.24693730940805528,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 240000,
+      "region": "left",
+      "value": 0.2853866676269264,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 240000,
+      "region": "right",
+      "value": 0.3041840622237822,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 264000,
+      "region": "center",
+      "value": 0.24966318809293273,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 264000,
+      "region": "left",
+      "value": 0.3065104056834371,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 264000,
+      "region": "right",
+      "value": 0.28884384650815664,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 288000,
+      "region": "center",
+      "value": 0.2499769897935112,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 288000,
+      "region": "left",
+      "value": 0.308992317854755,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 288000,
+      "region": "right",
+      "value": 0.29699451109528363,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    }
+  ],
+  "region_checks_passed": true,
+  "contact_sheet": {
+    "file": "contact_sheet.ppm",
+    "sha256": "sha256:2441f0ec45364c324dc22c4f7d24dbd0881f94ddca489e33d457f37b36784223"
+  },
+  "sources": {
+    "graph": {
+      "path": "fixtures/nw13/hotel_corridor.nwgraph",
+      "sha256": "sha256:8c312bc752037fd7759d63b98ca1eac42bc96aa7d8651f1163f7d2f3feaec887",
+      "semantic_hash": "sha256:v1:98496e6dbada6943755e4145e6b9757e2ba8061182e937c365cdac1fe72a32c8"
+    },
+    "geometry": {
+      "path": "fixtures/nw13/geometry_room.json",
+      "sha256": "sha256:f8d8e843bdd6746d1be575d9d9875bcad750d6a786658de5dae2fa7e32a1ec5f",
+      "semantic_hash": "sha256:v1:d22cc129697a46000d5f8ed0f5f72112532de12b3a9217008d1e5d9340cf7478",
+      "bounds": {
+        "minimum": [
+          -5.858118672887135,
+          -5.858118672887135,
+          -9.5
+        ],
+        "maximum": [
+          5.858118672887135,
+          5.858118672887135,
+          8.2
+        ]
+      },
+      "stats": {
+        "nodes": 38,
+        "repetition_instances": 4,
+        "generated_primitives": 4,
+        "evaluation_steps": 2464,
+        "memory_bytes": 19712
+      }
+    },
+    "scene": {
+      "path": "fixtures/nw13/hotel_corridor.scene.json",
+      "sha256": "sha256:e422152ffed5ff18a4910aae84a06e5faa79e4a03e5ae643edd7ac6f2c292ad5",
+      "objects": 12,
+      "shots": [
+        "corridor_approach",
+        "room_turn"
+      ]
+    },
+    "song": {
+      "path": "fixtures/nw13/hotel_corridor.song.json",
+      "sha256": "sha256:efde0e5366b891ea33ef8d07b2c353ff3c7e4f46a92b14e66b5a5532eac04f3a",
+      "semantic_hash": "sha256:v1:33737ce61b7c7ad9fb4b195b4ec9f9b30475bc5e88f5b6e36838d491dbee714c",
+      "notes": 30,
+      "nwas_sha256": "sha256:7f5d5ae91977573a31238bf946b7d42f3631d6e143ffa9cdaebabc3bd75fbe07"
+    }
+  }
+}

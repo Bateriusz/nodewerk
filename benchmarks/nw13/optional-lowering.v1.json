@@ -1,0 +1,181 @@
+{
+  "format": "nw13.optional-lowering-matrix",
+  "version": 1,
+  "common_surface": {
+    "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
+    "requirements_digest": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
+    "surface_realization": "raster indexed/instanced",
+    "rtx_required": false,
+    "selection_basis": "matched non-RTX surface measurements; common fallback remains independently buildable"
+  },
+  "dxr_inline_ray_query": {
+    "status": "capability_qualified",
+    "profile_id": "nw.optional.d3d12.ray_query.ps6_5.v1",
+    "requirements_digest": "sha256:v1:7f18259d05889226ad52e72c36dda206a1ba58bac205417aa15ce665e78602f3",
+    "shader_model": "6_5",
+    "query": {
+      "raytracing_tier": ">=1.1"
+    },
+    "fallback_artifact_id": "nw11.fallback.ray.analytic.d3d12.fl12_0.sm6_0.v1",
+    "decision": "adopt_when_queried_capability_and_measured_arm_acceptance_hold",
+    "scope": "bounded shadows and one-bounce reflections from the current scene"
+  },
+  "mesh_shader": {
+    "status": "pending_unavailable",
+    "decision": "defer",
+    "profile_id": "nw.optional.d3d12.mesh_shaders.ms6_5.v1",
+    "requirements_digest": "sha256:v1:a522ce6f0f5163ecbcf6045ab8c52fe72ee9855c902db40b2094ffc530bc4d62",
+    "shader_model": "6_5",
+    "query": {
+      "mesh_shader_tier": ">=1"
+    },
+    "fallback_artifact_id": "nw11.fallback.mesh.indexed.d3d12.fl12_0.sm6_0.v1",
+    "reason": "NW-11 mesh-shader decisions remain pending on both representative devices; no NW-13 matched workload justifies promotion"
+  },
+  "work_graphs": {
+    "status": "experimental",
+    "profile_id": "nw13.optional.d3d12.work_graphs.experimental.v1",
+    "fallback_artifact_id": "nw13.fallback.work_graphs.conventional.v1",
+    "criterion": {
+      "kind": "runtime_size_or_workload_feasibility",
+      "accept_if": "measured total benefit exceeds the conventional equivalent without increasing distribution or dependency closure"
+    },
+    "decision": "defer_until_measured"
+  },
+  "ser": {
+    "status": "pending_unavailable",
+    "requirement": "shader model 6.9 ray generation plus runtime reordering support",
+    "decision": "defer",
+    "required_evidence": "measured divergence and end-to-end gain"
+  },
+  "omm": {
+    "status": "not_applicable",
+    "requirement": "applicable alpha-tested content",
+    "decision": "omit",
+    "reason": "the bounded production content is opaque; no alpha-tested workload is present"
+  },
+  "micromesh": {
+    "status": "pending_unavailable",
+    "requirement": "stable redistributable toolchain and measured total benefit",
+    "decision": "defer"
+  },
+  "lighting_denoising_inference": {
+    "training_free": {
+      "restir": {
+        "status": "eligible_optional",
+        "decision": "defer",
+        "requires": [
+          "temporal history reset",
+          "bounded reservoir memory"
+        ]
+      },
+      "rtxdi": {
+        "status": "eligible_optional",
+        "decision": "defer",
+        "requires": [
+          "light selection bounds",
+          "history reset"
+        ]
+      },
+      "ddgi": {
+        "status": "eligible_optional",
+        "decision": "defer",
+        "requires": [
+          "probe update bounds"
+        ]
+      },
+      "sharc": {
+        "status": "eligible_optional",
+        "decision": "defer",
+        "requires": [
+          "hash cache budget"
+        ]
+      },
+      "nrd": {
+        "status": "eligible_optional",
+        "decision": "defer",
+        "requires": [
+          "guide buffers",
+          "history reset"
+        ]
+      }
+    },
+    "pretrained_inference": {
+      "dlss_sr": {
+        "status": "assessed_not_adopted",
+        "decision": "defer",
+        "requires": [
+          "fixed externally trained model",
+          "motion/depth guides",
+          "history reset"
+        ]
+      },
+      "dlaa": {
+        "status": "assessed_not_adopted",
+        "decision": "defer",
+        "requires": [
+          "fixed model"
+        ]
+      },
+      "rr": {
+        "status": "assessed_not_adopted",
+        "decision": "defer",
+        "requires": [
+          "albedo/normal/roughness guides",
+          "history reset"
+        ]
+      },
+      "frame_generation": {
+        "status": "assessed_not_adopted",
+        "decision": "defer",
+        "requires": [
+          "preserve simulation clock",
+          "preserve audio clock"
+        ]
+      },
+      "mfg": {
+        "status": "assessed_not_adopted",
+        "decision": "defer",
+        "requires": [
+          "preserve simulation clock",
+          "preserve audio clock"
+        ]
+      }
+    },
+    "excluded": {
+      "online_nrc": "excluded",
+      "asset_specific_fitting": "excluded",
+      "nodewerk_owned_dataset_preparation": "excluded",
+      "training_fine_tuning_per_production": "excluded"
+    }
+  },
+  "production_id": "nw13.hotel_corridor",
+  "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+  "per_device_decisions": {
+    "mesh_shader": {
+      "desktop_ada_representative": "pending",
+      "desktop_blackwell_representative": "pending",
+      "decision": "defer"
+    },
+    "ray_query": {
+      "desktop_ada_representative": "pending",
+      "desktop_blackwell_representative": "pending",
+      "decision": "capability_qualified_optional"
+    },
+    "ser": {
+      "desktop_ada_representative": "pending_unavailable",
+      "desktop_blackwell_representative": "pending_unavailable",
+      "decision": "defer"
+    },
+    "omm": {
+      "desktop_ada_representative": "not_applicable",
+      "desktop_blackwell_representative": "not_applicable",
+      "decision": "omit"
+    },
+    "micromesh": {
+      "desktop_ada_representative": "pending_unavailable",
+      "desktop_blackwell_representative": "pending_unavailable",
+      "decision": "defer"
+    }
+  }
+}

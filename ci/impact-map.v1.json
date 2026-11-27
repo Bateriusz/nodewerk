@@ -63,7 +63,8 @@
         "nw08",
         "nw08a",
         "nw10",
-        "nw11"
+        "nw11",
+        "nw13"
       ]
     },
     "nw01": {
@@ -140,6 +141,18 @@
         "src/nw11/**",
         "tools/gpu_experiment_*.py",
         "tools/canonical_export_reproducibility.py"
+      ],
+      "propagates_to": []
+    },
+    "nw13": {
+      "patterns": [
+        "tools/nw13_*.py",
+        "tools/operator_catalog.py",
+        "tests/test_nw13_*",
+        "benchmarks/nw13/**",
+        "schemas/nw13*",
+        "references/operator_catalog/**",
+        "fixtures/nw13/**"
       ],
       "propagates_to": []
     }

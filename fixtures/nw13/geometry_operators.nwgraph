@@ -1,0 +1,62 @@
+nwgraph 1
+profile nw.common.d3d12.fl12_0.sm6_0.v1 sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a
+
+node sphere nw.geom.sphere@1.0.0 frequency=initialization
+  param radius 1
+node box nw.geom.box@1.0.0 frequency=initialization
+  param half_extents 1 1 1
+node cylinder nw.geom.cylinder@1.0.0 frequency=initialization
+  param radius 0.4
+  param half_height 1.2
+node capsule nw.geom.capsule@1.0.0 frequency=initialization
+  param radius 0.3
+  param half_height 1
+node torus nw.geom.torus@1.0.0 frequency=initialization
+  param major_radius 1
+  param minor_radius 0.2
+
+node translated nw.geom.translate@1.0.0 frequency=initialization
+  input child sphere.out
+  param offset 2 0 0
+node rotated nw.geom.rotate@1.0.0 frequency=initialization
+  input child translated.out
+  param axis y
+  param degrees 45
+node scaled nw.geom.scale@1.0.0 frequency=initialization
+  input child rotated.out
+  param scale 1.2 1 1
+
+node union nw.geom.union@1.0.0 frequency=initialization
+  input a box.out
+  input b scaled.out
+node intersection nw.geom.intersection@1.0.0 frequency=initialization
+  input a union.out
+  input b cylinder.out
+node subtract nw.geom.subtract@1.0.0 frequency=initialization
+  input a intersection.out
+  input b capsule.out
+node smooth nw.geom.smooth_union@1.0.0 frequency=initialization
+  input a subtract.out
+  input b torus.out
+  param k 0.1
+
+node repeated nw.geom.repeat@1.0.0 frequency=initialization
+  input child smooth.out
+  param spacing 3 3 3
+  param counts 3 3 3
+node twisted nw.geom.twist@1.0.0 frequency=initialization
+  input child repeated.out
+  param half_height 1.5
+  param max_degrees 35
+node bent nw.geom.bend@1.0.0 frequency=initialization
+  input child twisted.out
+  param half_width 2
+  param max_degrees 20
+node displaced nw.geom.displace@1.0.0 frequency=initialization
+  input child bent.out
+  param seed 424242
+  param amplitude 0.05
+  param frequency 2
+
+layout sphere 0 0
+layout displaced 660 300

@@ -1,0 +1,59 @@
+{
+  "format": "nw13.matched-arms",
+  "version": 1,
+  "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+  "same_revision": true,
+  "arms": [
+    {
+      "arm": "common",
+      "available": false,
+      "unavailable": [
+        "startup_ms",
+        "committed_memory_bytes",
+        "vram_bytes",
+        "cpu_submit_us",
+        "gpu_time_us",
+        "image_max_abs_error",
+        "image_rmse"
+      ],
+      "metrics": {
+        "distribution_bytes": 262144,
+        "shader_bytes": 4096,
+        "startup_ms": null,
+        "committed_memory_bytes": null,
+        "vram_bytes": null,
+        "cpu_submit_us": null,
+        "gpu_time_us": null,
+        "image_max_abs_error": null,
+        "image_rmse": null
+      }
+    },
+    {
+      "arm": "optional",
+      "available": false,
+      "unavailable": [
+        "startup_ms",
+        "committed_memory_bytes",
+        "vram_bytes",
+        "cpu_submit_us",
+        "gpu_time_us",
+        "image_max_abs_error",
+        "image_rmse"
+      ],
+      "metrics": {
+        "distribution_bytes": 270336,
+        "shader_bytes": 6144,
+        "startup_ms": null,
+        "committed_memory_bytes": null,
+        "vram_bytes": null,
+        "cpu_submit_us": null,
+        "gpu_time_us": null,
+        "image_max_abs_error": null,
+        "image_rmse": null
+      }
+    }
+  ],
+  "unavailable_observations_explicit": true,
+  "production_id": "nw13.hotel_corridor",
+  "note": "physical startup/memory/CPU/GPU/image observations are unavailable in this worktree and remain explicit nulls"
+}
