@@ -323,6 +323,8 @@ of that executable, not an additional file. Explicit reports written into
 the export directory are included with their actual finalized byte counts.
 A single-file CLI export attributes companions only when their bytes bind to
 the selected package or embedded manifest; stale same-stem files do not count.
+The auxiliary file ledger binds the exact package, manifest and executable
+bytes before counting its listed reports.
 Captures and evidence reports outside the export folder are not part of the
 measured distribution.
 Memory and acceleration-structure budgets, package integrity and bounds,

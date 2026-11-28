@@ -597,6 +597,8 @@ def test_typed_scene_history_is_real_and_legacy_film_remains_stateless(tmp_path,
                                         ).artifacts[nwp.COMMON_PROFILE_ID]
     assert not dead_artifact.package.history
     assert not {"nw.feedback.scene_image", "nw.render.film_frame"}.intersection(dead_artifact.manifest["retained"]["code"])
+    dead_player = next((tmp_path / "dead").glob("*.player.cpp")).read_text(encoding="utf-8")
+    assert all(marker not in dead_player for marker in ('"--headless"', '"--film-capture"', 'NW13_STARTUP_US='))
     with pytest.raises(export.ExportError, match="exceeds the byte ceiling"):
         export.export_graph(dead_source, tmp_path / "dead-capped", allow_test_payloads=True,
                             settings=export.ExportSettings(byte_ceiling=1),
@@ -675,6 +677,45 @@ def test_portable_cpp_package_player_accepts_bounded_nonmonotonic_film_ticks(tmp
     assert "9 bounded predecessor steps" in result.stdout
 
 
+@pytest.mark.parametrize("frozen", [False, True], ids=["full", "frozen"])
+def test_generated_stateless_film_capture_matches_player_specialization(tmp_path, monkeypatch, frozen):
+    import os
+    import shutil
+    import subprocess
+
+    import nw05_export
+    import nw09_export
+    import nwp_package
+
+    compiler = shutil.which("g++") or shutil.which("clang++")
+    if os.name == "nt" or compiler is None:
+        pytest.skip("portable C++ syntax check uses GCC or Clang")
+    monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    document["effects"].pop("temporal_feedback")
+    source = tmp_path / "stateless.nwgraph"
+    production.import_graph(REPO_ROOT, document, source)
+    directory = tmp_path / "published"
+    result = nw05_export.export_graph(
+        source, directory, settings=nw05_export.ExportSettings(frozen_embedded_specialization=frozen),
+        allow_test_payloads=True, dxc_executable=nw09_export._test_dxc(tmp_path / "dxc"),
+    )
+    artifact = result.artifacts[nwp_package.COMMON_PROFILE_ID]
+    assert "nw.shader.film" in artifact.manifest["retained"]["code"] and not artifact.package.history
+    generated = next(directory.glob("*.player.cpp"))
+    command = [
+        compiler, "-std=c++20", "-DNW_PROFILE_RELEASE=1", "-DNW_PACKAGE_AUDIO=0", "-DNW07_CAPTURE_CONTROLS=0",
+        f"-DNW05_FROZEN_EMBEDDED_SPECIALIZATION={int(frozen)}", "-I", "src", str(generated),
+    ]
+    syntax = subprocess.run([*command, "-Werror=unused-variable", "-fsyntax-only"], cwd=REPO_ROOT,
+                            capture_output=True, text=True, timeout=45)
+    assert syntax.returncode == 0, syntax.stderr
+    preprocessed = subprocess.run([*command, "-E", "-P"], cwd=REPO_ROOT, check=True,
+                                  capture_output=True, text=True, timeout=45).stdout
+    for marker in ('"--headless"', '"--film-capture"', "NW13_STARTUP_US=", "NW13_MANAGED_COMMITTED_BYTES="):
+        assert (marker in preprocessed) is not frozen
+
+
 @pytest.mark.parametrize("sampled_history", [True, False])
 def test_film_export_reports_large_artifacts_without_waiving_validity(tmp_path, sampled_history, monkeypatch):
     from dataclasses import replace
@@ -701,6 +742,12 @@ def test_film_export_reports_large_artifacts_without_waiving_validity(tmp_path, 
                                  settings=settings, report_path=report_path)
     artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
     assert bool(artifact.package.history) is sampled_history
+    assert "nw.shader.film" in artifact.manifest["retained"]["code"]
+    generated_player = next(directory.glob("*.player.cpp")).read_text(encoding="utf-8")
+    for marker in ('"--headless"', "config.headless = true;", '"--film-capture"',
+                   '::fopen_s(&file, film_capture, "wb")', "player.readbackPresentedOutput(&image)",
+                   "NW13_STARTUP_US=", "NW13_MANAGED_COMMITTED_BYTES="):
+        assert marker in generated_player
     assert result.settings.byte_ceiling is None
     distribution = artifact.size_report["distribution"]
     assert distribution["byte_ceiling"] is None and distribution["within_byte_ceiling"] is None
@@ -853,3 +900,59 @@ def test_discarded_film_does_not_disable_legacy_ceiling_without_present(tmp_path
         assert "nw.shader.film" not in artifact.manifest["retained"]["code"]
         packages.append(artifact.package_bytes)
     assert packages[0] == packages[1]
+
+
+@pytest.mark.parametrize("sampled_history", [True, False])
+def test_auxiliary_ledger_binds_the_selected_executable(tmp_path, sampled_history):
+    import hashlib
+    import nw05_export as export
+    import nw09_export
+    import nwp_package as nwp
+    from test_dependency_closure_and_accounting import build_synthetic_pe64
+
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    source = REPO_ROOT / document["graph"]
+    if not sampled_history:
+        document["effects"].pop("temporal_feedback")
+        source = tmp_path / "stateless.nwgraph"
+        production.import_graph(REPO_ROOT, document, source)
+    tool = nw09_export._test_dxc(tmp_path / "dxc")
+    artifacts = []
+    for arm, timestamp in (("a", 20), ("b", 21)):
+        template = tmp_path / f"template-{arm}.exe"
+        template.write_bytes(build_synthetic_pe64(["kernel32.dll", "d3d12.dll"], time_date_stamp=timestamp))
+        directory = tmp_path / arm
+        result = export.export_graph(
+            source, directory, allow_test_payloads=True, dxc_executable=tool,
+            settings=export.ExportSettings(player_template=str(template)),
+            report_path=directory / "reports" / "build.json",
+        )
+        artifacts.append(result.artifacts[nwp.COMMON_PROFILE_ID])
+    a, b = artifacts
+    manifest_bytes = export.optimizer.manifest_bytes(b.manifest)
+    assert a.package_bytes == b.package_bytes and a.manifest == b.manifest
+    assert a.executable_bytes != b.executable_bytes
+    selected = tmp_path / "b" / b.executable_name
+    size_sidecar = selected.parent / ("size-report.json" if sampled_history else f"{selected.stem}.size.json")
+    size_record = json.loads(size_sidecar.read_bytes())
+    assert size_record["export_file_binding"] == {
+        "package_sha256": hashlib.sha256(b.package_bytes).hexdigest(),
+        "manifest_file_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "executable_sha256": hashlib.sha256(b.executable_bytes).hexdigest(),
+    }
+    complete = export.inspect_size(selected)["distribution"]
+    assert complete["total_distributed_bytes"] == b.size_report["distribution"]["total_distributed_bytes"]
+    assert "reports/build.json" in complete["artifact_files"]
+    selected.write_bytes(a.executable_bytes)
+    mismatched = export.inspect_size(selected)["distribution"]
+    assert mismatched["total_distributed_bytes"] == len(a.executable_bytes) + len(a.package_bytes) + len(manifest_bytes)
+    assert "reports/build.json" not in mismatched["artifact_files"]
+    assert not any(name.endswith("size.json") or name.endswith("size-report.json") for name in mismatched["artifact_files"])
+    package_path = next(selected.parent.glob("*.nwp"))
+    from_package = export.inspect_size(package_path)["distribution"]
+    assert from_package["total_distributed_bytes"] == mismatched["total_distributed_bytes"]
+    assert "reports/build.json" not in from_package["artifact_files"]
+    selected.write_bytes(b.executable_bytes)
+    size_record.pop("export_file_binding")
+    size_sidecar.write_text(json.dumps(size_record), encoding="utf-8")
+    assert "reports/build.json" not in export.inspect_size(selected)["distribution"]["artifact_files"]

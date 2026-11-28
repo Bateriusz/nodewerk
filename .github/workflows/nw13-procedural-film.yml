@@ -178,7 +178,7 @@ jobs:
             --probe $probe `
             --dxc $dxc
           exit $LASTEXITCODE
-      # This is independent of the film's byte budget. A failing film step
+      # This is independent of the film validation. A failing film step
       # still fails the job, even if these separate NW-11 steps pass.
       - name: Build the actual NW-11 common and fallback WARP executables
         id: nw11-warp-build

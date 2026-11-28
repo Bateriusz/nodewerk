@@ -560,6 +560,14 @@ def _byte_ceiling_error(profile: str, size_report: Mapping[str, Any], executable
     )
 
 
+def _export_file_binding(package: bytes, manifest: bytes, executable: bytes | None) -> dict[str, str | None]:
+    return {
+        "package_sha256": hashlib.sha256(package).hexdigest(),
+        "manifest_file_sha256": hashlib.sha256(manifest).hexdigest(),
+        "executable_sha256": hashlib.sha256(executable).hexdigest() if executable is not None else None,
+    }
+
+
 def _publication_path_key(name: str) -> str:
     # Windows names may alias by case even when the output does not exist yet.
     return os.path.normcase(name.rstrip(" .") if os.name == "nt" else name)
@@ -1000,7 +1008,7 @@ def generate_player_source(
     link_int64 = bool(feature_requirements.get("int64_shader_ops", False))
     implementation_mask = _specialized_implementation_mask(manifest)
     retained = manifest.get("retained", {})
-    film_controls = "nw.shader.film" in retained.get("operators", [])
+    film_controls = "nw.shader.film" in retained.get("code", ())
     runtime_implementations = {
         str(item) for item in retained.get("runtime_implementations", [])
     }
@@ -1248,10 +1256,10 @@ def generate_player_source(
         "    unsigned long long max_frames = 0;\n"
         "    unsigned long long explicit_tick = 0;\n"
         "    bool has_explicit_tick = false;\n"
-        + ("    bool headless_smoke = false;\n    const char* film_capture = nullptr;\n" if film_controls else "")
         + ("#if !NW_AUDIO_MEASURE_SYNTHESIS_ONLY\n"
            "    bool audio_evidence = false;\n#endif\n" if manifest.get("audio") else "") +
         "#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+        + ("    const char* film_capture = nullptr;\n" if film_controls else "") +
         "    bool emit_image_hash = false;\n"
         "#if NW07_CAPTURE_CONTROLS\n"
         "    std::string capture_directory;\n"
@@ -1273,7 +1281,6 @@ def generate_player_source(
         "        } else if (std::string(argv[index]) == \"--allow-software-adapter\") {\n"
         "            config.allow_software_adapter = true;\n"
         + ("        } else if (std::string(argv[index]) == \"--headless\") {\n"
-           "            headless_smoke = true;\n"
            "            config.headless = true;\n"
            "            config.visible_window = false;\n"
            "            config.create_window = false;\n"
@@ -1316,13 +1323,16 @@ def generate_player_source(
         "    }\n"
         "#endif\n"
         "    nw::player::PackagePlayer player(config);\n"
-        + ("    const auto startup_begin = std::chrono::steady_clock::now();\n" if film_controls else "")
+        + ("#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+           "    const auto startup_begin = std::chrono::steady_clock::now();\n"
+           "#endif\n" if film_controls else "")
         +
         "    const auto status = player.initialize(embedded.bytes, embedded.size);\n"
-        + ("    const auto startup = std::chrono::steady_clock::now() - startup_begin;\n"
+        + ("#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+           "    const auto startup = std::chrono::steady_clock::now() - startup_begin;\n"
            "    std::printf(\"NW13_STARTUP_US=%lld\\n\", static_cast<long long>(\n"
            "        std::chrono::duration_cast<std::chrono::microseconds>(startup).count()));\n"
-           if film_controls else "")
+           "#endif\n" if film_controls else "")
         +
         "    if (status != nw::player::ExitCode::Success) {\n"
         "#if NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
@@ -1351,8 +1361,11 @@ def generate_player_source(
         "        }\n"
         "        std::printf(\"NW05_EXPLICIT_TICK=%llu\\n\", static_cast<unsigned long long>(explicit_tick));\n"
         "#ifdef _WIN32\n"
-        + ("        if (!headless_smoke) ::Sleep(1500u);\n" if film_controls else "        ::Sleep(1500u);\n")
-        +
+        + ("#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION\n"
+           "        if (!config.headless) ::Sleep(1500u);\n"
+           "#else\n" if film_controls else "") +
+        "        ::Sleep(1500u);\n"
+        + ("#endif\n" if film_controls else "") +
         "#else\n"
         "        std::this_thread::sleep_for(std::chrono::milliseconds(1500));\n"
         "#endif\n"
@@ -1370,7 +1383,12 @@ def generate_player_source(
         "            return reported;\n"
         "        }\n"
         + ("        if (film_capture != nullptr) {\n"
-           "            FILE* file = std::fopen(film_capture, \"wb\");\n"
+           "            std::FILE* file = nullptr;\n"
+           "#if defined(_MSC_VER)\n"
+           "            if (::fopen_s(&file, film_capture, \"wb\") != 0) return 70;\n"
+           "#else\n"
+           "            file = std::fopen(film_capture, \"wb\");\n"
+           "#endif\n"
            "            if (!file) return 70;\n"
            "            const auto written = std::fwrite(image.data(), 1, image.size(), file);\n"
            "            if (std::fclose(file) != 0 || written != image.size()) return 70;\n"
@@ -3784,6 +3802,7 @@ def export_graph(
         ))
         export_report_payload = None
         if settings.byte_ceiling is None:
+            size_report["export_file_binding"] = _export_file_binding(package_bytes, manifest_data, executable_bytes)
             size_payload, export_report_payload = _finalize_informational_stateful_size(
                 size_report, stateful_report, relative_report,
             )
@@ -4156,6 +4175,8 @@ def export_graph(
                 dependency_source=dependency_source,
                 artifact_files=aux_files,
             )
+            if settings.byte_ceiling is None:
+                size_report["export_file_binding"] = _export_file_binding(package_bytes, manifest_data, executable_bytes)
             if audio_payload:
                 size_report["audio"] = {"song_payload_bytes": len(audio_payload),
                                         "synthesis_and_output_bytes": "pending_matched_measurement"}
@@ -4555,16 +4576,18 @@ def _inspect_artifact_byte_ceiling(package: nwp.NwpPackage, manifest: Mapping[st
 
 def _discover_informational_report_files(
     size_report_path: Path, package_data: bytes, artifact_files: dict[str, int], *,
-    primary_paths: frozenset[str],
+    primary_paths: frozenset[str], manifest: bytes | None, executable: bytes | None,
 ) -> None:
-    """Find explicitly shipped reports using the ledger, never trust its byte counts."""
-    if not size_report_path.is_file():
+    """Find shipped reports only when the ledger binds every selected primary file."""
+    if manifest is None or not size_report_path.is_file():
         return
     try:
         document = json.loads(size_report_path.read_bytes())
     except (OSError, ValueError):
         return
-    if not isinstance(document, dict) or document.get("package_sha256") != hashlib.sha256(package_data).hexdigest():
+    if not isinstance(document, dict) or document.get("export_file_binding") != _export_file_binding(
+        package_data, manifest, executable,
+    ):
         return
     distribution = document.get("distribution")
     files = distribution.get("artifact_files") if isinstance(distribution, dict) else None
@@ -4640,6 +4663,7 @@ def _inspect_informational_film(
     _discover_informational_report_files(
         target.parent / size_name, data, artifact_files,
         primary_paths=frozenset({target.name, sibling_package_path.name, executable_path.name, manifest_path.name}),
+        manifest=exterior if accept_exterior else embedded, executable=executable,
     )
     exterior_size = len(exterior) if accept_exterior and exterior is not None else 0
     result = analyze_package_size(
