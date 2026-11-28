@@ -72,7 +72,7 @@ struct Experiment {
     ComPtr<ID3D12GraphicsCommandList10> graph_list;
     ComPtr<ID3D12RootSignature> root;
     ComPtr<ID3D12Fence> fence;
-    ComPtr<ID3D12Resource> output, readback, backing;
+    ComPtr<ID3D12Resource> output, poison, readback, backing;
     ComPtr<ID3D12QueryHeap> timestamps;
     ComPtr<ID3D12PipelineState> conventional;
     ComPtr<ID3D12StateObject> work_graph;
@@ -127,8 +127,17 @@ struct Experiment {
             FAILED(device->CreateQueryHeap(&query_desc, IID_PPV_ARGS(&timestamps))) ||
             FAILED(Buffer(device.Get(), kOutputBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                           D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, output)) ||
+            FAILED(Buffer(device.Get(), kOutputBytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ,
+                          D3D12_RESOURCE_FLAG_NONE, poison)) ||
             FAILED(Buffer(device.Get(), kReadbackBytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST,
                           D3D12_RESOURCE_FLAG_NONE, readback))) return false;
+        const D3D12_RANGE no_read{0, 0};
+        void* mapped = nullptr;
+        if (FAILED(poison->Map(0, &no_read, &mapped))) return false;
+        auto* values = static_cast<std::uint32_t*>(mapped);
+        for (UINT i = 0; i < kCandidates; ++i) values[i] = ~Expected(i);
+        const D3D12_RANGE written{0, kOutputBytes};
+        poison->Unmap(0, &written);
         D3D12_ROOT_PARAMETER parameters[2]{};
         parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
         parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -183,23 +192,33 @@ struct Experiment {
         program.WorkGraph.ProgramIdentifier = state_props->GetProgramIdentifier(kGraphName);
         program.WorkGraph.Flags = D3D12_SET_WORK_GRAPH_FLAG_INITIALIZE;
         if (backing) program.WorkGraph.BackingMemory = {backing->GetGPUVirtualAddress(), backing_bytes};
-        dispatch.Mode = D3D12_DISPATCH_GRAPH_MODE_NODE_CPU_INPUT;
+        dispatch.Mode = D3D12_DISPATCH_MODE_NODE_CPU_INPUT;
         dispatch.NodeCPUInput = {entry, 1, nullptr, 0};
         return true;
     }
 
-    bool Dispatch(bool optional, double& duration, std::uint32_t& output_hash) {
+    bool Dispatch(bool optional, double& duration, std::uint32_t& output_hash, bool verify_reset = false) {
         if (FAILED(allocator->Reset()) ||
             FAILED(list->Reset(allocator.Get(), optional ? nullptr : conventional.Get()))) return false;
+        // Prove that every measured arm writes every slot, independent of
+        // the preceding arm. Copy the inverted reference outside the timer.
+        D3D12_RESOURCE_BARRIER reset{};
+        reset.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        reset.Transition = {output.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST};
+        list->ResourceBarrier(1, &reset);
+        list->CopyBufferRegion(output.Get(), 0, poison.Get(), 0, kOutputBytes);
+        std::swap(reset.Transition.StateBefore, reset.Transition.StateAfter);
+        list->ResourceBarrier(1, &reset);
         list->SetComputeRootSignature(root.Get());
         list->SetComputeRootUnorderedAccessView(0, output->GetGPUVirtualAddress());
         list->SetComputeRoot32BitConstant(1, kTick, 0);
         list->EndQuery(timestamps.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
-        if (optional) {
+        if (!verify_reset && optional) {
             graph_list->SetProgram(&program);
             graph_list->DispatchGraph(&dispatch);
             program.WorkGraph.Flags = D3D12_SET_WORK_GRAPH_FLAG_NONE;
-        } else {
+        } else if (!verify_reset) {
             list->Dispatch(kCandidates / 64, 1, 1);
         }
         list->EndQuery(timestamps.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
@@ -230,14 +249,15 @@ struct Experiment {
         bool matches = true;
         output_hash = 2166136261u;
         for (UINT i = 0; i < kCandidates; ++i) {
-            matches &= values[i] == Expected(i);
+            const auto expected = Expected(i);
+            matches &= values[i] == (verify_reset ? ~expected : expected);
             output_hash = (output_hash ^ values[i]) * 16777619u;
         }
         const auto* time = reinterpret_cast<const std::uint64_t*>(values + kCandidates);
         duration = time[1] > time[0] ? 1e6 * double(time[1] - time[0]) / double(frequency) : 0;
         const D3D12_RANGE written{0, 0};
         readback->Unmap(0, &written);
-        return matches && duration > 0;
+        return matches && (verify_reset || duration > 0);
     }
 };
 }
@@ -265,6 +285,10 @@ int main(int argc, char** argv) {
     if (!experiment.Dispatch(false, ignored, common_hash) ||
         (matched && !experiment.Dispatch(true, ignored, graph_hash))) return 5;
     if (!matched) {
+        // Exercise the exact per-arm reset after a launch with known output.
+        // Do not substitute this check for a conventional or optional run.
+        std::uint32_t reset_hash = 0;
+        if (!experiment.Dispatch(false, ignored, reset_hash, true)) return 5;
         std::printf("{\"status\":\"%s\",\"output_hash\":%u}\n",
                     warp ? "warp_baseline_executed" : "baseline_executed", common_hash);
         return 0;
