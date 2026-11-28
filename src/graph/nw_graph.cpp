@@ -691,6 +691,7 @@ std::string_view ToString(LogicalType type) noexcept {
     case LogicalType::Camera: return "camera";
     case LogicalType::Light: return "light";
     case LogicalType::RenderImage: return "render_image";
+    case LogicalType::ViewDepth: return "view_depth";
     }
     return "scalar";
 }
@@ -711,6 +712,7 @@ std::optional<LogicalType> ParseLogicalType(std::string_view text) {
         {"camera", LogicalType::Camera},
         {"light", LogicalType::Light},
         {"render_image", LogicalType::RenderImage},
+        {"view_depth", LogicalType::ViewDepth},
     };
     for (const auto& [name, value] : kValues) {
         if (name == text) {
@@ -1254,6 +1256,15 @@ ResourceDescriptor RenderImageDescriptor() {
     descriptor.max_bytes = 8192ull * 8192ull * 4ull;
     descriptor.format_class = "r8g8b8a8_unorm";
     descriptor.bounded = true;
+    return descriptor;
+}
+
+ResourceDescriptor FilmFrameDescriptor(bool depth = false) {
+    ResourceDescriptor descriptor = RenderImageDescriptor();
+    descriptor.max_width = 512u;
+    descriptor.max_height = 288u;
+    descriptor.max_bytes = 512ull * 288ull * (depth ? 4ull : 16ull);
+    descriptor.format_class = depth ? "positive_view_depth_r32_float" : "rgba32_float_opaque";
     return descriptor;
 }
 
@@ -2101,6 +2112,37 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
             RenderImageDescriptor())};
         schema.produces_resource = true;
         schema.resource_descriptor = RenderImageDescriptor();
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.render.film_frame", OperatorKind::GpuPass,
+            "Film color, positive view-space depth and camera sample",
+            FrameFrequency(), Frequency::Frame, "nw.lower.hlsl.render");
+        schema.inputs = {Port("shader", LogicalType::ShaderExpr, Residency::Logical)};
+        schema.outputs = {
+            ResourcePort("color", LogicalType::RenderImage, Residency::Gpu, FilmFrameDescriptor()),
+            ResourcePort("depth", LogicalType::ViewDepth, Residency::Gpu, FilmFrameDescriptor(true)),
+            Port("camera", LogicalType::Camera, Residency::Logical)};
+        schema.produces_resource = true;
+        schema.resource_descriptor = FilmFrameDescriptor();
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.feedback.scene_image", OperatorKind::GpuPass,
+            "Reproject one scheduler-owned scene sample with depth rejection",
+            HistoryFrequency(), Frequency::History, "nw.lower.history.scene_feedback");
+        schema.inputs = {
+            ResourcePort("color", LogicalType::RenderImage, Residency::Gpu, FilmFrameDescriptor()),
+            ResourcePort("depth", LogicalType::ViewDepth, Residency::Gpu, FilmFrameDescriptor(true)),
+            Port("camera", LogicalType::Camera, Residency::Logical)};
+        schema.outputs = {ResourcePort("out", LogicalType::RenderImage, Residency::Gpu, FilmFrameDescriptor())};
+        schema.params = {FloatParam("weight", 0.25, true, 0.0, 0.5),
+                         FloatParam("depth_tolerance", 0.035, true, 0.0001, 0.25)};
+        schema.produces_resource = true;
+        schema.resource_descriptor = FilmFrameDescriptor();
+        schema.produces_temporal_state = true;
         registry.Register(std::move(schema));
     }
     {
@@ -4665,7 +4707,8 @@ ValidationResult ValidateGraphDocument(const GraphDocument& document,
             } else {
                 const HistoryDeclaration& history = *node.history;
                 if (history.state_type != "nw.particles.v1" &&
-                    history.state_type != "nw.feedback.image.v1") {
+                    history.state_type != "nw.feedback.image.v1" &&
+                    history.state_type != "nw.feedback.scene_image.v1") {
                     diagnostics.push_back(MakeDiagnostic(
                         DiagnosticCode::InvalidParameterValue,
                         "unknown History state type '" + history.state_type + "'",
@@ -4676,7 +4719,8 @@ ValidationResult ValidateGraphDocument(const GraphDocument& document,
                             ? "nw.particles.v1"
                             : node.operator_id == "nw.feedback.image"
                                   ? "nw.feedback.image.v1"
-                                  : std::string();
+                                  : node.operator_id == "nw.feedback.scene_image"
+                                      ? "nw.feedback.scene_image.v1" : std::string();
                     if (expected.empty()) {
                         diagnostics.push_back(MakeDiagnostic(
                             DiagnosticCode::HistoryNotSupported,
@@ -4949,8 +4993,13 @@ ValidationResult ValidateGraphDocument(const GraphDocument& document,
                     node.id + "." + input.port};
                 diagnostics.push_back(std::move(diagnostic));
             }
+            const bool sampled_film_frame =
+                node.operator_id == "nw.feedback.scene_image" &&
+                source_node.operator_id == "nw.render.film_frame" &&
+                node.frequency == Frequency::History &&
+                source_node.frequency == Frequency::Frame;
             if (FrequencyRank(source_node.frequency) >
-                FrequencyRank(node.frequency)) {
+                    FrequencyRank(node.frequency) && !sampled_film_frame) {
                 Diagnostic diagnostic = MakeDiagnostic(
                     DiagnosticCode::FrequencyTransition,
                     "node '" + node.id + "' runs at frequency '" +

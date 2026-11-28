@@ -1,11 +1,11 @@
 // Bounded film compute pass. Emits the ordinary PackagePlayer RGBA32F buffer.
 cbuffer NwParams : register(b0) { uint presentationTick; }
 RWByteAddressBuffer outputImage : register(u0);
+/* FILM_SETTINGS */
+
 #ifdef INLINE_RAY
 RaytracingAccelerationStructure objectBounds : register(t0);
 #endif
-
-/* FILM_SETTINGS */
 
 struct Camera { float3 eye, target, up; float4 lens; };
 struct ObjectFrame { float4x4 inverse; float3 low, high; float stepScale; };
@@ -159,7 +159,7 @@ float3 direct(ObjectFrame objects[OBJECT_COUNT],Hit hit,float3 ray,uint t) {
     }
     return color;
 }
-float3 scenePixel(int2 pixel,Camera cam,uint t,uint action,ObjectFrame objects[OBJECT_COUNT]) {
+float3 scenePixel(int2 pixel,Camera cam,uint t,uint action,ObjectFrame objects[OBJECT_COUNT],out float depth) {
     float2 uv=(float2(pixel)+0.5)/float2(FRAME_WIDTH,FRAME_HEIGHT);
     float3 forward=normalize(cam.target-cam.eye), right=normalize(cross(forward,cam.up));
     float3 up=normalize(cross(right,forward));
@@ -168,7 +168,7 @@ float3 scenePixel(int2 pixel,Camera cam,uint t,uint action,ObjectFrame objects[O
     float projection=dot(ray,forward);
     Hit hit;
     float3 color=miss(ray);
-    float depth=1e20;
+    depth=1e20;
     if (trace(objects,cam.eye,ray,cam.lens.z/projection,cam.lens.w/projection,0xffffffffu,hit)) {
         color=direct(objects,hit,ray,t);
         depth=hit.distance*projection;
@@ -188,6 +188,9 @@ float3 scenePixel(int2 pixel,Camera cam,uint t,uint action,ObjectFrame objects[O
 #define TILE_WIDTH (GROUP_X+2*BLOOM_RADIUS)
 #define TILE_HEIGHT (GROUP_Y+2*BLOOM_RADIUS)
 groupshared float3 tile[TILE_WIDTH*TILE_HEIGHT];
+#if FILM_CAPTURE_DEPTH
+groupshared float tileDepth[TILE_WIDTH*TILE_HEIGHT];
+#endif
 
 [numthreads(GROUP_X,GROUP_Y,1)]
 void FILM_ENTRY(uint3 pixel:SV_DispatchThreadID, uint3 group:SV_GroupID, uint lane:SV_GroupIndex) {
@@ -199,9 +202,13 @@ void FILM_ENTRY(uint3 pixel:SV_DispatchThreadID, uint3 group:SV_GroupID, uint la
     for (uint slot=lane;slot<TILE_WIDTH*TILE_HEIGHT;slot+=GROUP_X*GROUP_Y) {
         int2 pixelCoord=corner+int2(slot%TILE_WIDTH,slot/TILE_WIDTH);
         float3 value=0;
+        float depth=1e20;
         if (all(pixelCoord>=0) && pixelCoord.x<FRAME_WIDTH && pixelCoord.y<FRAME_HEIGHT)
-            value=scenePixel(pixelCoord,cam,t,action,objects);
+            value=scenePixel(pixelCoord,cam,t,action,objects,depth);
         tile[slot]=value;
+#if FILM_CAPTURE_DEPTH
+        tileDepth[slot]=depth;
+#endif
     }
     GroupMemoryBarrierWithGroupSync();
     if (pixel.x>=FRAME_WIDTH || pixel.y>=FRAME_HEIGHT) return;
@@ -223,5 +230,9 @@ void FILM_ENTRY(uint3 pixel:SV_DispatchThreadID, uint3 group:SV_GroupID, uint la
     color=max(color,0)*EXPOSURE;
     color=pow(color/(1+color),1.0/GAMMA);
 #endif
+#if FILM_CAPTURE_DEPTH
+    outputImage.Store4((pixel.x+FRAME_WIDTH*pixel.y)*16,asuint(float4(color,tileDepth[local.x+local.y*TILE_WIDTH])));
+#else
     outputImage.Store4((pixel.x+FRAME_WIDTH*pixel.y)*16,asuint(float4(color,1)));
+#endif
 }

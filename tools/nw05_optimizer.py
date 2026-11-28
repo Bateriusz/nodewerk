@@ -1562,7 +1562,11 @@ def _partition_nodes(
             source = node_by_id.get(item.source_node)
             if source is None:
                 continue
-            if FREQUENCY_RANK.get(source.frequency, 99) > FREQUENCY_RANK.get(node.frequency, 99):
+            sampled_frame = (node.operator_id == "nw.feedback.scene_image"
+                             and source.operator_id == "nw.render.film_frame"
+                             and node.frequency == "history" and source.frequency == "frame")
+            if (FREQUENCY_RANK.get(source.frequency, 99) > FREQUENCY_RANK.get(node.frequency, 99)
+                    and not sampled_frame):
                 diagnostics.append(
                     nw03._diagnostic(
                         "frequency_transition",

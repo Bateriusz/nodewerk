@@ -21,6 +21,7 @@ import nw13_audio
 import nw13_evidence
 import nw13_film
 import nw13_geometry
+import nw13_history
 import nw13_particles
 import nw13_pipeline
 import nw13_render
@@ -205,14 +206,12 @@ def render_evidence(
     validation = validate_production(repo_root, production)
     if not validation["ok"]:
         raise ProductionError("production validation failed", validation["diagnostics"])
-    graph, (prepared, _, _, scene, settings, emitter) = film_graph(repo_root, production)
+    graph, (_, _, _, scene, settings, _) = film_graph(repo_root, production)
     rendering = settings["rendering"]
     expected = production["rendering"]
     width, height = int(graph.settings["nw05_output_width"]), int(graph.settings["nw05_output_height"])
-    renderer = nw13_render.Renderer(scene, prepared.document, width=width, height=height, **{
-        key: rendering[key] for key in ("max_steps", "samples", "epsilon", "max_distance",
-                                       "shadows", "reflection_bounces", "miss_radiance")
-    })
+    root = next(node for node in nw03_compiler._reachable_shader_roots(graph) if node.operator_id == nw13_film.OPERATOR)
+    oracle = nw13_film.FrameOracle(graph, root, width=width, height=height)
     output = _resolve(repo_root, str(output_dir))
     frames_dir = output / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
@@ -223,12 +222,7 @@ def render_evidence(
     for frame_state in transport_trace(production, repo_root, ticks=active_ticks, timing_source=(scene, settings)):
         tick = frame_state["tick"]
         action_tick = frame_state["action_tick"]
-        flash = settings.get("flash")
-        light_gain = {flash["light"]: float(frame_state["flash_active"])} if flash else {}
-        image, depth = renderer.render(tick, action_tick=action_tick, light_gain=light_gain)
-        if emitter is not None:
-            image = renderer.render_particles(image, depth, emitter.to_dict(), tick, action_tick=action_tick, film_cycle=True)
-        image = _tone_image(settings, image, width, height)
+        image = oracle.render(tick)
         frame_path = frames_dir / f"tick-{int(tick):06d}.ppm"
         nw13_render.to_ppm(image, width, height, frame_path)
         images.append(image)
@@ -264,6 +258,8 @@ def render_evidence(
                 "sha256": _sha256_file(frame_path),
                 "shot_id": camera.shot_id,
                 "cut": camera.cut,
+                **({"history_predecessor_tick": nw13_history.compatible_tick(tick, oracle.resets)}
+                   if oracle.feedback is not None else {}),
                 "regions": regions,
                 "region_checks": checks,
             }

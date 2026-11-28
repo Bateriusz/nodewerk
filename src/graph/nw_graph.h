@@ -46,6 +46,7 @@ enum class LogicalType {
     Camera,
     Light,
     RenderImage,
+    ViewDepth,
 };
 
 std::string_view ToString(LogicalType type) noexcept;

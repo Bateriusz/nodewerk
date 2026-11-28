@@ -88,7 +88,8 @@ def test_schedule_keeps_static_work_in_initialization_and_identifies_frame_work(
     assert schedule["timeline"][0]["initialization"]
     assert schedule["timeline"][1]["initialization"] == []
     assert schedule["timeline"][-1]["frame_dependent"] is True
-    assert all(frame["history"] == [] for frame in schedule["timeline"])
+    assert schedule["history"] == ["scene_feedback"]
+    assert all(frame["history"] == ["scene_feedback"] for frame in schedule["timeline"])
     capped = pipeline.build_schedule(production, start_tick=0, end_tick=400 * 10, work_cap_steps=3)
     assert len(capped["timeline"]) == 3
     assert capped["pending_steps"] == 7

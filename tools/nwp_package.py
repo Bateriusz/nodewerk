@@ -2510,6 +2510,8 @@ def _validate_resources(
             )
             continue
         allowed = tuple(family_contract.values())
+        if resource.pass_family == "compute.math_noise" and resource.name == "film_current":
+            allowed = (("srv", 1, 0),)
         satisfied = False
         for usage, slot, space in allowed:
             usage_matches = resource.usage == usage or (
@@ -3379,6 +3381,8 @@ def _validate_root_signatures(
                 )
             root_parameters.add(binding.root_parameter)
             expected = contract.get(binding.name)
+            if record.family == "compute.math_noise" and binding.name == "film_current":
+                expected = ("srv", 1, 0)
             if expected is not None:
                 if (binding.usage, binding.slot, binding.space) != expected:
                     error(
@@ -3746,6 +3750,33 @@ def validate_package_model(package: NwpPackage) -> list[dict[str, Any]]:
     return diagnostics
 
 
+def sampled_scene_frame(width: int, height: int, timeline_parameter: int, state_id: int) -> tuple[Instruction, ...]:
+    """The v1 sampled History command ABI shared by emission and admission."""
+    def ins(opcode, *operands):
+        return Instruction(opcode, tuple(InstructionOperand(kind, value) for kind, value in operands))
+
+    def table(root_index, resource):
+        return ins("frame.set_descriptor_table", ("u32", root_index), ("string", "cbv_srv_uav"), ("resource_ref", resource))
+
+    def barrier(resource):
+        return ins("frame.barrier", ("u32", 4), ("resource_ref", resource))
+
+    params, producer, previous, current, present = 1, 2, 3, 4, 5
+    shape = (("u32", (width + 7)//8), ("u32", (height + 7)//8), ("u32", 1))
+    constants = ins("frame.set_root_constants", ("u32", 0), ("resource_ref", params), ("u32", 4))
+    return (
+        ins("frame.set_timeline", ("u32", timeline_parameter), ("u64", 0)),
+        ins("frame.set_root_signature", ("root_signature_ref", 1)), constants, table(1, producer),
+        ins("frame.simulation_step", *shape, ("shader_ref", 1), ("u32", state_id)),
+        constants, ins("frame.dispatch", *shape, ("shader_ref", 1)), barrier(producer),
+        ins("frame.copy_buffer", ("resource_ref", producer), ("resource_ref", current), ("u64", width*height*16)),
+        ins("frame.set_root_signature", ("root_signature_ref", 2)), constants,
+        table(1, present), table(2, previous), table(3, current),
+        ins("frame.dispatch", *shape, ("shader_ref", 2)), barrier(present),
+        ins("frame.present", ("resource_ref", present)),
+    )
+
+
 def _validate_stateful_extension(
     package: NwpPackage,
 ) -> list[dict[str, Any]]:
@@ -3764,6 +3795,26 @@ def _validate_stateful_extension(
     resources_by_id = {
         resource.resource_id: resource for resource in package.resources
     }
+    sampled_scene_history = "nw.feedback.scene_image.v1"
+    sampled_records = [record for record in package.history if record.state_type == sampled_scene_history]
+    if sampled_records and (len(package.history) != 1 or package.release_checkpoints):
+        diagnostics.append(package_diagnostic(
+            "package_history_sampled_schedule", "sampled scene History cannot share recursive state or checkpoints",
+            section=SECTION_HISTORY))
+    sampled_dimensions = {}
+    if sampled_records:
+        for name in ("nw05.present.width", "nw05.present.height", "nw13.film.duration_ticks"):
+            matching = [param for param in package.parameters if param.name == name]
+            if len(matching) == 1 and matching[0].type == "uint" and len(matching[0].value) == 4:
+                sampled_dimensions[name] = struct.unpack("<I", matching[0].value)[0]
+        if (not 1 <= sampled_dimensions.get("nw05.present.width", 0) <= 512
+                or not 1 <= sampled_dimensions.get("nw05.present.height", 0) <= 288
+                or not 1 <= sampled_dimensions.get("nw13.film.duration_ticks", 0) <= 48_000 * 3_600
+                or not package.parameters or package.parameters[0].name != "time"
+                or package.parameters[0].type != "uint"):
+            diagnostics.append(package_diagnostic(
+                "package_history_sampled_schedule", "sampled scene History requires bounded image dimensions and an integer film clock",
+                section=SECTION_HISTORY))
     state_ids: set[int] = set()
     node_ids: set[str] = set()
     for record in package.history:
@@ -3804,6 +3855,7 @@ def _validate_stateful_extension(
         expected_state_type = {
             "nw.particles.system": "nw.particles.v1",
             "nw.feedback.image": "nw.feedback.image.v1",
+            "nw.feedback.scene_image": sampled_scene_history,
         }.get(record.operator_id)
         if expected_state_type is None:
             diagnostics.append(
@@ -3824,6 +3876,22 @@ def _validate_stateful_extension(
                     section=SECTION_HISTORY,
                 )
             )
+        sampled = record.state_type == sampled_scene_history
+        if sampled and (
+            record.initial_value != "rebuild-previous-sample" or record.initial_state
+            or record.reset_policy != "on-seek" or record.flags
+            or record.values_per_element != 4 or not 1 <= record.element_count <= 512 * 288
+            or record.current_resource_id != 2 or record.previous_resource_id != 3
+            or record.element_count != (sampled_dimensions.get("nw05.present.width", 0)
+                                        * sampled_dimensions.get("nw05.present.height", 0))
+            or not package.parameters
+            or tuple(package.frame) != sampled_scene_frame(
+                sampled_dimensions.get("nw05.present.width", 0), sampled_dimensions.get("nw05.present.height", 0),
+                package.parameters[0].parameter_id, record.state_id)
+        ):
+            diagnostics.append(package_diagnostic(
+                "package_history_sampled_schedule", "sampled scene History has an invalid bounded predecessor contract",
+                section=SECTION_HISTORY))
         if record.values_per_element <= 0 or record.element_count <= 0:
             diagnostics.append(
                 package_diagnostic(
@@ -3833,7 +3901,7 @@ def _validate_stateful_extension(
                     section=SECTION_HISTORY,
                 )
             )
-        elif len(record.initial_state) != record.state_bytes:
+        elif not sampled and len(record.initial_state) != record.state_bytes:
             diagnostics.append(
                 package_diagnostic(
                     "package_history_initial_state",
@@ -3878,6 +3946,10 @@ def _validate_stateful_extension(
             resource = resources_by_id.get(resource_id)
             if resource is None:
                 continue
+            if sampled and resource.usage != ("uav" if resource_id == record.current_resource_id else "srv"):
+                diagnostics.append(package_diagnostic(
+                    "package_history_sampled_schedule", "sampled predecessor requires a writable producer and separate read-only state",
+                    section=SECTION_HISTORY))
             if resource.kind != "buffer" or resource.format != "DXGI_FORMAT_R32_UINT":
                 diagnostics.append(
                     package_diagnostic(
@@ -3909,13 +3981,13 @@ def _validate_stateful_extension(
                 int(instruction.operands[0].value)
             )
     for record in package.history:
-        required = {record.current_resource_id, record.previous_resource_id}
+        required = (set() if record.state_type == sampled_scene_history
+                    else {record.current_resource_id, record.previous_resource_id})
         if uploads.get(record.state_id, set()) != required:
             diagnostics.append(
                 package_diagnostic(
                     "package_history_initial_upload",
-                    f"History state {record.state_id} must upload its declared "
-                    "initial bytes into both ping-pong resources",
+                    f"History state {record.state_id} has an incorrect implicit or literal initial upload",
                     section=SECTION_HISTORY,
                 )
             )

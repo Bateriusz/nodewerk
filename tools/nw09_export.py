@@ -653,6 +653,22 @@ def _test_dxc(directory: Path) -> str:
     return str(dxc)
 
 
+def resolve_history_dxc(destination: Path, explicit: str | None, *, allow_test_payloads: bool) -> str | None:
+    """Select the same offline compiler for legacy and sampled History."""
+    if explicit is not None:
+        return explicit
+    candidate = nw03.resolve_dxc()
+    if not allow_test_payloads:
+        return candidate
+    if candidate is not None:
+        try:
+            if nw03.PINNED_DXC_VERSION in nw03.query_dxc_version(candidate):
+                return candidate
+        except (OSError, RuntimeError):
+            pass
+    return _test_dxc(destination.parent / ".nw09-test-toolchain")
+
+
 def compile_history_base_package(
     document: nw03.GraphDocument,
     destination: str | os.PathLike[str],
@@ -682,29 +698,7 @@ def compile_history_base_package(
         ) from exc
     destination_path = Path(destination)
     destination_path.parent.mkdir(parents=True, exist_ok=True)
-    dxc = dxc_executable
-    if dxc is None:
-        candidate = nw03.resolve_dxc()
-        if allow_test_payloads:
-            # Prefer a real pinned offline compiler when the host provides one
-            # so CI validates the generated HLSL/register contract.  Hosts
-            # without DXC use the deterministic synthetic contract payload.
-            if candidate is not None:
-                try:
-                    version = nw03.query_dxc_version(candidate)
-                except Exception:
-                    version = ""
-                dxc = (
-                    candidate
-                    if nw03.PINNED_DXC_VERSION in version
-                    else None
-                )
-            if dxc is None:
-                dxc = _test_dxc(
-                    destination_path.parent / ".nw09-test-toolchain"
-                )
-        else:
-            dxc = candidate
+    dxc = resolve_history_dxc(destination_path, dxc_executable, allow_test_payloads=allow_test_payloads)
     if dxc is None:
         raise StatefulExportError(
             "offline DXC compiler is required for stateful export",

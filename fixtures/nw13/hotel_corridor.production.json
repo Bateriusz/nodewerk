@@ -11,7 +11,7 @@
   "rendering": {
     "width": 48,
     "height": 27,
-    "max_steps": 96,
+    "max_steps": 76,
     "samples": 1,
     "epsilon": 0.002,
     "max_distance": 48.0,
@@ -122,15 +122,13 @@
           }
         ]
       }
-    },
-    "history": {
-      "reset_policy": "on-seek",
-      "step_rate_hz": 120,
-      "max_steps": 240,
-      "max_memory_bytes": 2097152
     }
   },
   "effects": {
+    "temporal_feedback": {
+      "weight": 0.3,
+      "depth_tolerance": 0.04
+    },
     "bloom": {
       "threshold": 0.8,
       "intensity": 0.2,
@@ -149,7 +147,10 @@
     123200,
     144000,
     148800,
+    150400,
+    191600,
     192000,
+    192400,
     240000,
     252000,
     264000,

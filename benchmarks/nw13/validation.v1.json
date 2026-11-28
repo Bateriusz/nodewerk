@@ -4,8 +4,8 @@
   "sources": {
     "graph": {
       "path": "fixtures/nw13/hotel_corridor.nwgraph",
-      "sha256": "sha256:dae53c91594430041bad178cb1f5f1602e4973237fe437e22a7a93beee89a730",
-      "semantic_hash": "sha256:v1:b29c063eeab2e7283ba04029453719b6366cfae6db27fd321927e6d27c9ee34a"
+      "sha256": "sha256:c16b2f66f7054c6e59444b3a2cded62f557534a61696dd2c06b47579d2ea0bdb",
+      "semantic_hash": "sha256:v1:60a2dc8a56ceb13d503207cca35b832f362a69b3393557b021d6a79ee0bc6e53"
     },
     "geometry": {
       "source": "graph",

@@ -3221,7 +3221,15 @@ def export_graph(
             if profile_id != nwp.COMMON_PROFILE_ID
         ]
 
-    if nw03.document_has_history(document):
+    sampled_history = False
+    if any(node.operator_id in {"nw.feedback.scene_image", "nw.render.film_frame"}
+           for node in document.nodes.values()):
+        import nw13_history
+        sampled_history = nw13_history.node_present(document)
+    recursive_history = any(node.operator_id not in {"nw.feedback.scene_image"} and
+                            (node.history is not None or node.frequency == "history")
+                            for node in document.nodes.values())
+    if sampled_history or recursive_history:
         if optional_profiles:
             raise ExportError(
                 "stateful NW-09 artifacts currently support only the common "
@@ -3256,9 +3264,12 @@ def export_graph(
         import nw09_export  # local import keeps the stateless path dependency-free
         import nw09_temporal
 
+        optimized = optimizer.optimize_graph(document)
         try:
-            package, stateful_report = nw09_export.build_stateful_package(
+            builder = nw13_history.build_stateful_package if sampled_history else nw09_export.build_stateful_package
+            package, stateful_report = builder(
                 document,
+                **({"optimized": optimized} if sampled_history else {}),
                 allow_test_payloads=allow_test_payloads,
                 frames_in_flight=settings.frames_in_flight,
                 packaged_checkpoint_ticks=settings.packaged_checkpoint_ticks,
@@ -3302,9 +3313,12 @@ def export_graph(
         logical_schedule = schedule.build_logical_schedule(
             package, frames_in_flight=settings.frames_in_flight
         )
-        stateful_geometry = nw09_export.present_geometry(document)
-        render_width = stateful_geometry[0] if stateful_geometry else 1280
-        render_height = stateful_geometry[1] if stateful_geometry else 720
+        if sampled_history:
+            geometry = stateful_report["present_geometry"]
+            render_width, render_height = geometry["width"], geometry["height"]
+        else:
+            stateful_geometry = nw09_export.present_geometry(document)
+            render_width, render_height = stateful_geometry or (1280, 720)
         # Match the established production export contract: publishing an
         # artifact must not require an adapter to be present on the export
         # host.  Without an explicit allocation query, record a conservative
@@ -3354,7 +3368,6 @@ def export_graph(
         # extension fields.  generate_player_source validates link_metadata at
         # startup, so a hand-built manifest without it would make the
         # generated executable exit with NW05_LINK_METADATA_INVALID.
-        optimized = optimizer.optimize_graph(document)
         shader_rows = [
             (f"{shader.entry_point}:{shader.shader_id}", shader.target, len(shader.blob))
             for shader in package.shaders
@@ -3399,6 +3412,11 @@ def export_graph(
             ],
             "portable_gpu_state_replay": False,
         }
+        if sampled_history:
+            manifest["stateful_extension"]["sampled_scene_history"] = stateful_report["sampled_scene_history"]
+        if film_optional_provenance:
+            manifest["optional_artifact"] = True
+            manifest["film_lowering"] = dict(film_optional_provenance)
         manifest["artifact_profile_id"] = nwp.COMMON_PROFILE_ID
         manifest["artifact_requirements_digest"] = nwp.COMMON_REQUIREMENTS_DIGEST
         manifest["artifact_identity"] = artifact_key(
@@ -3412,7 +3430,7 @@ def export_graph(
             "ticks_per_second": 48_000,
             "frame_step_numerator": 1,
             "frame_step_denominator": 1,
-            "duration_ticks": 0,
+            "duration_ticks": stateful_report.get("timeline_duration_ticks", 0),
             "mode": "absolute",
         }
         manifest["dependencies_source"] = dependency_source
@@ -3477,6 +3495,7 @@ def export_graph(
                     else None
                 ),
                 frozen_embedded_specialization=settings.frozen_embedded_specialization,
+                film_inline_ray_payload_dir=settings.film_inline_ray_payload_dir,
             )
             actual_dependencies = _pe_runtime_dependencies(preliminary_player)
             manifest["retained"]["dependencies"] = actual_dependencies
@@ -3503,6 +3522,7 @@ def export_graph(
                     else None
                 ),
                 frozen_embedded_specialization=settings.frozen_embedded_specialization,
+                film_inline_ray_payload_dir=settings.film_inline_ray_payload_dir,
             )
             final_dependencies = _pe_runtime_dependencies(specialized_player_bytes)
             if final_dependencies != actual_dependencies:
@@ -3534,7 +3554,8 @@ def export_graph(
             executable_bytes = embed_package(
                 player_image, package_bytes, embedded_manifest_payload
             )
-            executable_name = "common.exe"
+            executable_name = (_profile_file_stem(nwp.COMMON_PROFILE_ID) + ".exe"
+                               if sampled_history else "common.exe")
         schedule_data = json.dumps(
             logical_schedule.to_dict(), indent=2, sort_keys=True
         ).encode("utf-8")

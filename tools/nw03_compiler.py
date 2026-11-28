@@ -176,6 +176,7 @@ KNOWN_OPERATORS = {
     "nw.readback.scalar",
     "nw.render.fullscreen",
     "nw.render.film",
+    "nw.render.film_frame",
     "nw.render.gbuffer",
     "nw.render.composite",
     "nw.render.present",
@@ -185,6 +186,7 @@ KNOWN_OPERATORS = {
     # never an ordinary author-supplied graph edge.
     "nw.particles.system",
     "nw.feedback.image",
+    "nw.feedback.scene_image",
     # NW-13 bounded procedural geometry recipes.
     "nw.geom.sphere",
     "nw.geom.library",
@@ -207,7 +209,7 @@ KNOWN_OPERATORS = {
 
 # Operators whose schema admits the NW-09 `history` frequency.  Ordinary
 # operators remain invalid at that frequency (see `history_not_supported`).
-HISTORY_OPERATORS = {"nw.particles.system", "nw.feedback.image"}
+HISTORY_OPERATORS = {"nw.particles.system", "nw.feedback.image", "nw.feedback.scene_image"}
 
 OPERATOR_INPUTS = {
     "nw.math.add": {"a", "b"},
@@ -241,6 +243,8 @@ OPERATOR_INPUTS = {
     "nw.readback.scalar": {"image"},
     "nw.render.fullscreen": {"shader", "texture"},
     "nw.render.film": {"shader"},
+    "nw.render.film_frame": {"shader"},
+    "nw.feedback.scene_image": {"color", "depth", "camera"},
     "nw.render.gbuffer": {"mesh", "material", "camera", "light", "shader"},
     "nw.render.composite": {"color", "normal"},
     "nw.render.present": {"image"},
@@ -321,6 +325,8 @@ OUTPUT_PORTS = {
     "nw.readback.scalar": {"value"},
     "nw.render.fullscreen": {"image"},
     "nw.render.film": {"image"},
+    "nw.render.film_frame": {"color", "depth", "camera"},
+    "nw.feedback.scene_image": {"out"},
     "nw.render.gbuffer": {"color", "normals"},
     "nw.render.composite": {"out"},
     "nw.render.present": {"out"},
@@ -545,6 +551,16 @@ PORT_SPECS: dict[str, dict[str, dict[str, tuple[str, int, str]]]] = {
         "inputs": {"shader": ("shader_expr", 1, "logical")},
         "outputs": {"image": ("image", 1, "gpu")},
     },
+    "nw.render.film_frame": {
+        "inputs": {"shader": ("shader_expr", 1, "logical")},
+        "outputs": {"color": ("image", 1, "gpu"), "depth": ("view_depth", 1, "gpu"),
+                    "camera": ("camera", 1, "logical")},
+    },
+    "nw.feedback.scene_image": {
+        "inputs": {"color": ("image", 1, "gpu"), "depth": ("view_depth", 1, "gpu"),
+                   "camera": ("camera", 1, "logical")},
+        "outputs": {"out": ("image", 1, "gpu")},
+    },
     "nw.render.fullscreen": {
         "inputs": {
             "shader": ("shader_expr", 1, "logical"),
@@ -640,6 +656,10 @@ PORT_SPECS: dict[str, dict[str, dict[str, tuple[str, int, str]]]] = {
 
 PARAM_RULES: dict[str, dict[str, dict[str, Any]]] = {
     "nw.shader.film": {"scene": {"kind": "string"}, "production": {"kind": "string"}},
+    "nw.feedback.scene_image": {
+        "weight": {"kind": "float", "min": 0.0, "max": 0.5},
+        "depth_tolerance": {"kind": "float", "min": 0.0001, "max": 0.25},
+    },
     "nw.shader.mix": {"factor": {"kind": "float", "min": 0.0, "max": 1.0, "clamp01": True}},
     "nw.material.describe": {
         "metallic": {"kind": "float", "min": 0.0, "max": 1.0, "clamp01": True},
@@ -863,7 +883,8 @@ class HistoryDeclaration:
                 nwp_package.canonical_json_bytes(
                     {
                         "domain": "nw09.history-layout.v2",
-                        "state_semantics": NW09_STATE_SEMANTICS,
+                        "state_semantics": (self.state_type if self.state_type == "nw.feedback.scene_image.v1"
+                                            else NW09_STATE_SEMANTICS),
                         "state_type": self.state_type,
                         "initial_value": self.initial_value,
                         "reset_policy": self.reset_policy,
@@ -1660,7 +1681,7 @@ def _validate_node_parameters(node: GraphNode) -> list[dict[str, Any]]:
 
 
 NW09_STATE_TYPES = frozenset(
-    {"nw.particles.v1", "nw.feedback.image.v1"}
+    {"nw.particles.v1", "nw.feedback.image.v1", "nw.feedback.scene_image.v1"}
 )
 
 # A History state type is bound to exactly one operator schema.  The operator
@@ -1669,6 +1690,7 @@ NW09_STATE_TYPES = frozenset(
 NW09_OPERATOR_STATE_TYPE = {
     "nw.particles.system": "nw.particles.v1",
     "nw.feedback.image": "nw.feedback.image.v1",
+    "nw.feedback.scene_image": "nw.feedback.scene_image.v1",
 }
 
 
@@ -1973,6 +1995,9 @@ def validate_graph_document(document: GraphDocument) -> list[dict[str, Any]]:
                 source.frequency in frequency_rank
                 and node.frequency in frequency_rank
                 and frequency_rank[source.frequency] > frequency_rank[node.frequency]
+                and not (node.operator_id == "nw.feedback.scene_image"
+                         and source.operator_id == "nw.render.film_frame"
+                         and node.frequency == "history" and source.frequency == "frame")
             ):
                 diagnostics.append(
                     _diagnostic(

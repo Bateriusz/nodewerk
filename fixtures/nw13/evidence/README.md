@@ -7,6 +7,9 @@ room-turn camera motion around frozen action.
 
 `frames.v1.json` records the source hashes, per-frame SHA-256, shot identity,
 region luminance checks, alpha/depth conventions and declared tolerances.
+The reference trace marks the selected raw History predecessor, or null at
+cut/reset boundaries. Hosted GPU qualification separately compares the live
+feedback and zero-weight control artifacts.
 `contact_sheet.ppm` tiles the retained frames.
 `transport.v1.json` records the fixed-tick transport trace, including the
 declared freeze/reverse/resume/cut states and one-shot cue de-duplication.

@@ -408,6 +408,7 @@ def test_operator_registry_declarations_are_complete(cli_binary: Path) -> None:
                 "mesh_recipe",
                 "geometry_recipe",
                 "render_image",
+                "view_depth",
             }:
                 assert port["resource"] is not None, (operator["id"], port)
                 assert port["resource"]["bounded"] is True
@@ -446,6 +447,7 @@ def test_operator_registry_declarations_are_complete(cli_binary: Path) -> None:
         "camera",
         "light",
         "render_image",
+        "view_depth",
     }
     assert saw_readback is True
     assert saw_conversion is True

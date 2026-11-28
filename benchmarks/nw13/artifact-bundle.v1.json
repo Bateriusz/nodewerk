@@ -177,5 +177,9 @@
     "common": null,
     "optional": {}
   },
-  "bundle_sha256": "sha256:4499e2286dcf37d87c453ab9cd8c0738c0c291634f3f470091690ee736e30977"
+  "native_history": {
+    "common": null,
+    "optional": {}
+  },
+  "bundle_sha256": "sha256:efaf43556652585ea54d6ecd66d9edb41d59fb31c5e5e677b2586c5ccedb56b4"
 }

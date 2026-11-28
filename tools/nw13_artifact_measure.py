@@ -20,6 +20,7 @@ import nw05_export
 import nw08_editor
 import nw13_evidence as evidence
 import nw13_film
+import nw13_history
 import nw13_render
 import nw13_scene
 import nw13_production as production
@@ -232,7 +233,7 @@ def _unreachable_observations(repo_root, film_graph, output, build, template, dx
     original = nw03_compiler.load_graph(unrelated)
     film = nw03_compiler.load_graph(film_graph)
     for identifier, node in film.nodes.items():
-        if node.operator_id.startswith("nw.render."):
+        if node.operator_id in {"nw.render.present", "nw.render.film"}:
             continue
         node.node_id = "dead_film_" + identifier
         node.inputs = {port: ("dead_film_" + source, output) for port, (source, output) in node.inputs.items()}
@@ -419,6 +420,43 @@ def _native_controlled_proofs(document, graph, source, output, build, template, 
     return results
 
 
+def _native_history_proof(document, graph, frames, output, build, template, dxc, audio, adapter,
+                          *, selection=None, revision=None):
+    spec = nw13_history.read_feedback(graph)
+    if spec is None:
+        return None
+    width, height = dimensions = tuple(document["rendering"][axis] for axis in ("width", "height"))
+    editor = nw08_editor.GraphEditorSession(deepcopy(graph))
+    result = editor.set_parameter(spec.node_id, "weight", [0])
+    if not result.valid:
+        raise evidence.EvidenceError("selecting zero feedback weight failed", result.diagnostics)
+    modified = build / "source" / "no-feedback.nwgraph"
+    modified.parent.mkdir(parents=True, exist_ok=True)
+    modified.write_text(nw08_editor.emit_graph_text(editor.document), encoding="utf-8")
+    artifact = _export(modified, output, build, template, dxc, audio,
+                       selection=selection, revision=revision)
+    oracle = nw13_film.FrameOracle(graph, graph.nodes[spec.film_id], width=width, height=height)
+    if not oracle.onsets or not oracle.scene.cuts:
+        raise evidence.EvidenceError("the History validation fixture must contain a flash and a shot cut")
+    flash_end = oracle.onsets[0] + oracle.settings["flash"]["duration_ticks"]
+    cut = oracle.scene.cuts[0]
+    verdicts = {}
+    for role, tick in (("visible_previous_flash", flash_end), ("clean_shot_cut", cut)):
+        observation = _smoke(artifact, output, dimensions, tick=tick, adapter=adapter)
+        if observation["status"] != "pass":
+            raise evidence.EvidenceError(f"zero-weight History control failed at tick {tick}")
+        enabled_path = frames / f"tick-{tick:06d}.rgba32f"
+        enabled_raw, enabled = _read_capture(enabled_path, dimensions)
+        disabled_raw, disabled = _read_capture(output / observation["capture"], dimensions)
+        delta = nw13_render.image_difference(enabled, disabled)
+        if ((role == "visible_previous_flash" and delta["max_abs_channel_error"] <= 0.02)
+                or (role == "clean_shot_cut" and enabled_raw != disabled_raw)):
+            raise evidence.EvidenceError(f"native scene History did not satisfy {role} at tick {tick}")
+        verdicts[role] = {"tick": tick, "with_feedback_sha256": _sha256(enabled_raw),
+                          "zero_weight_sha256": _sha256(disabled_raw), **delta}
+    return verdicts
+
+
 def _query_capabilities(probe, output) -> dict:
     if probe is None:
         return {"query_status": "unavailable"}, None
@@ -473,7 +511,8 @@ def write_evidence(
     document["revision"] = revision
     output_dir.mkdir(parents=True, exist_ok=True)
     common = fallback = rebuilds = edit_proof = common_frames = common_proofs = source_identity = None
-    optional_frames, optional_proofs = {}, {}
+    common_history = None
+    optional_frames, optional_proofs, optional_history = {}, {}, {}
     unreachable = evidence.unreachable_incremental(False)
     capabilities, adapter = _query_capabilities(probe, output_dir) if native else ({}, None)
     requests = document.get("optional_requests", [])
@@ -515,6 +554,10 @@ def write_evidence(
                 document, parsed_graph, common_dir, proof_dir, build / "common-scene-probes",
                 template, dxc, audio, adapter,
             )
+            common_history = _native_history_proof(
+                document, parsed_graph, common_dir, output_dir / "common-history-control",
+                build / "common-history-control", template, dxc, audio, adapter,
+            )
             unreachable = _unreachable_observations(repo_root, graph, output_dir, build / "unreachable", template, dxc)
             edit_proof = _native_edit_proof(document, graph, output_dir, build / "edit-proof",
                                             template, dxc, audio, adapter)
@@ -540,6 +583,11 @@ def write_evidence(
                         document, parsed_graph, optional_dir / "fixed-ticks", optional_dir / "scene-probes",
                         build / "optional-scene-probes", template, dxc, audio, adapter,
                         selection=selection, revision=revision, common_proofs=proof_dir,
+                    )
+                    optional_history[feature] = _native_history_proof(
+                        document, parsed_graph, optional_dir / "fixed-ticks",
+                        optional_dir / "history-control", build / "optional-history-control",
+                        template, dxc, audio, adapter, selection=selection, revision=revision,
                     )
                     optional_observations[feature] = observation
                     optional_rebuilds[feature] = builds
@@ -569,6 +617,7 @@ def write_evidence(
         "measured_sources": source_identity,
         "native_fixed_ticks": {"common": common_frames, "optional": optional_frames},
         "native_scene_probes": {"common": common_proofs, "optional": optional_proofs},
+        "native_history": {"common": common_history, "optional": optional_history},
     })
     diagnostics = evidence.validate_bundle(bundle)
     errors = [item for item in optional_failures

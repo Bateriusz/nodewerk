@@ -147,6 +147,9 @@
     "nw13": {
       "patterns": [
         "tools/nw13_*.py",
+        "shaders/nw13/**",
+        "src/nw13/**",
+        "tests/nw13_*",
         "tools/operator_catalog.py",
         "tools/reference_operator_catalog.py",
         "tools/werkkzeug[34]_catalog.py",

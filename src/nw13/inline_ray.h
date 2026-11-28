@@ -4,9 +4,11 @@
 // acceleration structure for candidate selection. Intersections and normals
 // still come from the current frame's solid field and object transforms.
 #include "nw13_inline_ray_payload.h"
+#include "inline_ray_root.h"
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <cstring>
+#include <cstdint>
 #include <iterator>
 
 namespace nw::film {

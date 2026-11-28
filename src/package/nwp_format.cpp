@@ -6,6 +6,7 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <initializer_list>
 #include <map>
 #include <set>
 #include <sstream>
@@ -1562,8 +1563,8 @@ bool ValidateResources(const std::vector<ResourceDescriptor>& resources,
                                 resource.binding_slot == 0u &&
                                 resource.binding_space == 0u;
             const bool input = resource.usage == "srv" &&
-                               resource.binding_slot == 0u &&
-                               resource.binding_space == 0u;
+                resource.binding_slot == (resource.name == "film_current" ? 1u : 0u) &&
+                resource.binding_space == 0u;
             const bool sampler = resource.usage == "sampler" &&
                                  resource.binding_slot == 0u &&
                                  resource.binding_space == 0u;
@@ -2185,6 +2186,10 @@ bool MatchesFixedFamilyBinding(std::string_view family,
     }
     if (binding.name == "input") {
         return binding.usage == "srv" && binding.slot == 0u &&
+               binding.space == 0u;
+    }
+    if (binding.name == "film_current") {
+        return binding.usage == "srv" && binding.slot == 1u &&
                binding.space == 0u;
     }
     if (binding.name == "sampler") {
@@ -3237,7 +3242,8 @@ bool ValidatePackage(const Package& package,
                     ? "nw.particles.v1"
                     : history.operator_id == "nw.feedback.image"
                           ? "nw.feedback.image.v1"
-                          : std::string();
+                          : history.operator_id == "nw.feedback.scene_image"
+                                ? std::string(kSampledSceneHistoryType) : std::string();
             if (expected_state_type.empty()) {
                 AddDiagnostic(diagnostics, "package_history_operator",
                               "History record uses an operator with no History "
@@ -3256,12 +3262,88 @@ bool ValidatePackage(const Package& package,
                               "unknown History reset policy",
                               std::string(kSectionHistory));
             }
+            const bool sampled = history.state_type == kSampledSceneHistoryType;
+            std::uint32_t sampled_width = 0u, sampled_height = 0u, sampled_duration = 0u;
+            if (sampled) {
+                auto read_uint = [&](const char* name) -> std::uint32_t {
+                    std::uint32_t value = 0u;
+                    const auto param = std::find_if(package.parameters.begin(), package.parameters.end(),
+                        [name](const ParameterRecord& entry) { return entry.name == name; });
+                    if (param != package.parameters.end() && param->type == "uint" && param->value.size() == 4u)
+                        value = static_cast<std::uint32_t>(param->value[0]) |
+                            (static_cast<std::uint32_t>(param->value[1]) << 8u) |
+                            (static_cast<std::uint32_t>(param->value[2]) << 16u) |
+                            (static_cast<std::uint32_t>(param->value[3]) << 24u);
+                    return value;
+                };
+                sampled_width = read_uint("nw05.present.width");
+                sampled_height = read_uint("nw05.present.height");
+                sampled_duration = read_uint("nw13.film.duration_ticks");
+            }
+            const auto has_sampled_schedule = [&] {
+                if (package.frame.size() != 17u || package.parameters.empty()) return false;
+                // Keep in sync with nwp_package.sampled_scene_frame. A valid
+                // predecessor must run before the current UAV is written,
+                // and each SRV must bind its own immutable sample.
+                using Type = OperandType;
+                struct Arg { Type type; std::uint64_t number; std::string_view text = {}; };
+                auto op = [&](std::size_t index, std::string_view opcode,
+                              std::initializer_list<Arg> expected) {
+                    const auto& instruction = package.frame[index];
+                    if (instruction.opcode != opcode || instruction.operands.size() != expected.size()) return false;
+                    std::size_t i = 0;
+                    for (const auto& want : expected) {
+                        const auto& actual = instruction.operands[i++];
+                        if (actual.type != want.type) return false;
+                        if (want.type == Type::String ? actual.string_value != want.text :
+                            (want.type == Type::U64 ? actual.u64 : actual.u32) != want.number) return false;
+                    }
+                    return true;
+                };
+                auto table = [&](std::size_t index, std::uint32_t root, std::uint32_t resource) {
+                    return op(index, "frame.set_descriptor_table",
+                              {{Type::U32, root}, {Type::String, 0u, "cbv_srv_uav"}, {Type::ResourceRef, resource}});
+                };
+                auto constants = [&](std::size_t index) {
+                    return op(index, "frame.set_root_constants", {{Type::U32, 0u}, {Type::ResourceRef, 1u}, {Type::U32, 4u}});
+                };
+                auto barrier = [&](std::size_t index, std::uint32_t resource) {
+                    return op(index, "frame.barrier", {{Type::U32, 4u}, {Type::ResourceRef, resource}});
+                };
+                const Arg x{Type::U32, (sampled_width + 7u)/8u}, y{Type::U32, (sampled_height + 7u)/8u};
+                const Arg z{Type::U32, 1u}, sample{Type::ShaderRef, 1u}, feedback{Type::ShaderRef, 2u};
+                return op(0, "frame.set_timeline", {{Type::U32, package.parameters.front().parameter_id}, {Type::U64, 0u}}) &&
+                       op(1, "frame.set_root_signature", {{Type::RootSignatureRef, 1u}}) && constants(2) && table(3, 1u, 2u) &&
+                       op(4, "frame.simulation_step", {x, y, z, sample, {Type::U32, history.state_id}}) && constants(5) &&
+                       op(6, "frame.dispatch", {x, y, z, sample}) && barrier(7, 2u) &&
+                       op(8, "frame.copy_buffer", {{Type::ResourceRef, 2u}, {Type::ResourceRef, 4u},
+                            {Type::U64, static_cast<std::uint64_t>(sampled_width) * sampled_height * 16u}}) &&
+                       op(9, "frame.set_root_signature", {{Type::RootSignatureRef, 2u}}) && constants(10) &&
+                       table(11, 1u, 5u) && table(12, 2u, 3u) && table(13, 3u, 4u) &&
+                       op(14, "frame.dispatch", {x, y, z, feedback}) && barrier(15, 5u) &&
+                       op(16, "frame.present", {{Type::ResourceRef, 5u}});
+            };
+            if (sampled && (package.history.size() != 1u ||
+                !sampled_width || sampled_width > 512u || !sampled_height || sampled_height > 288u ||
+                !sampled_duration || sampled_duration > 48'000u * 3'600u ||
+                package.parameters.empty() || package.parameters.front().name != "time" ||
+                package.parameters.front().type != "uint" ||
+                !package.release_checkpoints.empty() || !history.initial_state.empty() ||
+                history.initial_value != "rebuild-previous-sample" ||
+                history.reset_policy != "on-seek" || history.flags != 0u ||
+                history.values_per_element != 4u || history.element_count > 512u * 288u ||
+                history.element_count != static_cast<std::uint64_t>(sampled_width) * sampled_height ||
+                history.current_resource_id != 2u || history.previous_resource_id != 3u || !has_sampled_schedule())) {
+                AddDiagnostic(diagnostics, "package_history_sampled_schedule",
+                              "sampled scene History has an invalid bounded predecessor contract",
+                              std::string(kSectionHistory));
+            }
             if (history.values_per_element == 0u ||
                 history.element_count == 0u ||
-                history.initial_state.size() !=
+                (!sampled && history.initial_state.size() !=
                     static_cast<std::size_t>(history.values_per_element) *
                         static_cast<std::size_t>(history.element_count) *
-                        sizeof(float)) {
+                        sizeof(float))) {
                 AddDiagnostic(diagnostics, "package_history_initial_state",
                               "History initial-state bytes do not match the "
                               "declared layout",
@@ -3289,6 +3371,7 @@ bool ValidatePackage(const Package& package,
                 if (resource != package.resources.end() &&
                     (resource->kind != "buffer" ||
                      resource->format != "DXGI_FORMAT_R32_UINT" ||
+                     (sampled && resource->usage != (resource_id == history.current_resource_id ? "uav" : "srv")) ||
                      resource->size_bytes !=
                          static_cast<std::uint64_t>(history.values_per_element) *
                              history.element_count * sizeof(float))) {
@@ -3307,7 +3390,8 @@ bool ValidatePackage(const Package& package,
                 instruction.operands[1].type != OperandType::U32) {
                 continue;
             }
-            if (history_by_id.count(instruction.operands[1].u32) == 0u) {
+            const auto target = history_by_id.find(instruction.operands[1].u32);
+            if (target == history_by_id.end() || target->second->state_type == kSampledSceneHistoryType) {
                 AddDiagnostic(diagnostics,
                               "package_history_initial_upload",
                               "init.upload_history_state references an unknown "

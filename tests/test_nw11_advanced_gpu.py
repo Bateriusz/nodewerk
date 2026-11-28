@@ -1407,6 +1407,12 @@ def test_nw11_windows_ci_runs_command_path_and_binds_toolchain_payloads() -> Non
     smoke = workflow.split("  windows-runtime-smoke:", 1)[1].split("  build-validation-bundles:", 1)[0]
     warp_launches = [line for line in smoke.splitlines() if "--allow-software" in line]
     assert warp_launches and all("--headless" in line for line in warp_launches)
+    assert "python tools/nw11_warp_smoke.py --executables build/nw11-artifacts" in smoke
+    nw13 = (REPO_ROOT / ".github/workflows/nw13-procedural-film.yml").read_text(encoding="utf-8")
+    assert "python tools/nw11_warp_smoke.py --executables build/nw13-nw11-commands" in nw13
+    assert "canonical_export_reproducibility.py --candidate $revision" in nw13
+    assert "nw11_embed_production.py --proof build/nw13-nw11-proof" in nw13
+    assert 'warp or common_regression' not in nw13
     assert "nw11_toolchain_identity.py" in workflow
     assert "nw11_shader_payloads.py" in workflow
     assert "nw11_pe_dependencies.py" in workflow
@@ -1417,6 +1423,42 @@ def test_nw11_windows_ci_runs_command_path_and_binds_toolchain_payloads() -> Non
     assert "within_complete_ceiling" in workflow
     assert "within_incremental_budget" in workflow
     assert "::warning::" in workflow
+
+
+def test_shared_headless_warp_runner_requires_native_exit_and_fresh_timestamps(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import nw11_warp_smoke as warp
+
+    artifacts = tmp_path / "native build"
+    reports = tmp_path / "warp reports"
+    artifacts.mkdir()
+    reports.mkdir()
+    for name in warp.COMMON:
+        (artifacts / (name + ".exe")).touch()
+        (reports / f"{name}-warp-smoke.json").write_text("stale", encoding="utf-8")
+    observed = []
+
+    def launched(argv, **options):
+        observed.append(Path(argv[0]).stem)
+        assert argv[1:4] == ["--allow-software", "--headless", "--benchmark-json"]
+        report = Path(argv[4])
+        assert not report.exists() and options["timeout"] == 60
+        report.write_text('{"measurement":{"gpu_time_samples":[314]}}', encoding="utf-8")
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    monkeypatch.setattr(warp.subprocess, "run", launched)
+    warp.run(artifacts, reports)
+    assert tuple(observed) == warp.COMMON
+
+    monkeypatch.setattr(warp.subprocess, "run", lambda *args, **kwargs:
+                        SimpleNamespace(stdout="", stderr="", returncode=7))
+    with pytest.raises(ValueError, match="nw11_common_baseline.*exited 7"):
+        warp.run(artifacts, reports)
+
+    monkeypatch.setattr(warp.subprocess, "run", lambda *args, **kwargs:
+                        SimpleNamespace(stdout="", stderr="", returncode=0))
+    with pytest.raises(ValueError, match="nw11_common_baseline.*no fresh"):
+        warp.run(artifacts, reports)
 
 
 def test_nw11_toolchain_payload_and_dependency_records(

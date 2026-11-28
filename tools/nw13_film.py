@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import nw13_geometry as geometry
+import nw13_history as history
 import nw13_particles as particles
 import nw13_scene as scenes
 
@@ -133,6 +134,9 @@ def read_film(document, root):
     traces *= steps * sum(field_cost(recipes[obj.geometry]) for obj in scene.objects.values())
     traces *= max(1, len(scene.lights) + 1)
     traces *= 1 + rendering["reflection_bounces"]
+    # The one-tap scheduler renders current plus at most one predecessor.
+    # Account for both passes under the same established frame work ceiling.
+    traces *= 2 if history.read_feedback(document) is not None else 1
     if traces > 150_000_000:
         raise ValueError("film per-frame trace work exceeds the common evaluation budget")
     return prepared, recipes, bounds, scene, settings, emitter
@@ -217,8 +221,9 @@ def compile_film_song(song, document):
     import nw03_compiler
     import nw13_audio
 
+    active = {node.node_id for node in history.active_nodes(document)}
     roots = [node for node in nw03_compiler._reachable_shader_roots(document)
-             if node.operator_id == OPERATOR]
+             if node.operator_id == OPERATOR and node.node_id in active]
     if not roots:
         return nw13_audio.compile_to_nwas(song)
     if len(roots) != 1:
@@ -372,6 +377,9 @@ float3 dust(float3 color,float2 uv,float depth,uint action,Camera cam){{
 
 def emit(document, root, *, entry_point, thread_group, width, height):
     _, recipes, bounds, scene, settings, emitter = read_film(document, root)
+    feedback = history.read_feedback(document)
+    if feedback is not None and feedback.film_id != root.node_id:
+        raise ValueError("the selected feedback must bind this exact film root")
     # The recipe library organizes scene geometry. Only object-bound solids
     # and their dependencies enter the shader.
     solid_ids = set()
@@ -407,6 +415,7 @@ def emit(document, root, *, entry_point, thread_group, width, height):
         f"#define {key} {val}" for key, val in {
             "FRAME_WIDTH": width, "FRAME_HEIGHT": height, "TRACE_STEPS": int(rendering["max_steps"]),
             "FILM_DURATION_TICKS": scene.duration_ticks,
+            "FILM_CAPTURE_DEPTH": int(feedback is not None),
             "GROUP_X": thread_group[0], "GROUP_Y": thread_group[1],
             "BLOOM_RADIUS": int(bloom.get("radius", 0)),
             "TRACE_LIMIT": _literal(rendering["max_distance"]), "EPS": _literal(rendering["epsilon"]),
@@ -422,27 +431,50 @@ def emit(document, root, *, entry_point, thread_group, width, height):
     ))).replace("FILM_ENTRY", entry_point)
 
 
-def reference_image(document, root, tick, *, width, height):
-    import nw13_production
-    import nw13_render
+class FrameOracle:
+    """One authored CPU renderer shared by Studio and evidence."""
+    def __init__(self, document, root, *, width, height):
+        import nw13_render
 
-    prepared, _, _, scene, settings, emitter = read_film(document, root)
-    timing, onsets = film_timing(scene, settings)
-    tick = max(0, min(tick, scene.duration_ticks))
-    action = timing.at(tick)["action_tick"]
-    rendering = settings["rendering"]
-    renderer = nw13_render.Renderer(scene, prepared.document, width=width, height=height, **{
-        key: rendering[key] for key in ("max_steps", "samples", "epsilon", "max_distance",
-                                       "shadows", "reflection_bounces", "miss_radiance")
-    })
-    flash = settings.get("flash")
-    light_gain = {}
-    if flash:
-        light_gain[flash["light"]] = float(any(onset <= tick < onset + flash["duration_ticks"] for onset in onsets))
-    image, depth = renderer.render(tick, action_tick=action, light_gain=light_gain)
-    if emitter is not None:
-        image = renderer.render_particles(image, depth, emitter.to_dict(), tick, action_tick=action, film_cycle=True)
-    return nw13_production._tone_image(settings, image, width, height)
+        prepared, _, _, self.scene, self.settings, self.emitter = read_film(document, root)
+        self.width, self.height = width, height
+        self.timing, self.onsets = film_timing(self.scene, self.settings)
+        self.feedback = history.read_feedback(document)
+        self.resets = history.reset_ticks(self.scene, self.timing)
+        rendering = self.settings["rendering"]
+        self.renderer = nw13_render.Renderer(self.scene, prepared.document, width=width, height=height, **{
+            key: rendering[key] for key in ("max_steps", "samples", "epsilon", "max_distance",
+                                            "shadows", "reflection_bounces", "miss_radiance")
+        })
+
+    def sample(self, tick):
+        import nw13_production
+
+        tick = max(0, min(tick, self.scene.duration_ticks))
+        action = self.timing.at(tick)["action_tick"]
+        flash = self.settings.get("flash")
+        light_gain = {}
+        if flash:
+            light_gain[flash["light"]] = float(any(onset <= tick < onset + flash["duration_ticks"] for onset in self.onsets))
+        image, depth = self.renderer.render(tick, action_tick=action, light_gain=light_gain)
+        if self.emitter is not None:
+            image = self.renderer.render_particles(image, depth, self.emitter.to_dict(), tick, action_tick=action, film_cycle=True)
+        return (nw13_production._tone_image(self.settings, image, self.width, self.height),
+                depth, scenes.camera_state(self.scene, tick, action_tick=action))
+
+    def render(self, tick):
+        tick = max(0, min(tick, self.scene.duration_ticks))
+        current = self.sample(tick)
+        if not self.feedback or not self.feedback.weight:
+            return current[0]
+        predecessor = history.compatible_tick(tick, self.resets)
+        previous = self.sample(predecessor) if predecessor is not None else None
+        return history.composite(current, previous, width=self.width, height=self.height,
+                                 weight=self.feedback.weight, depth_tolerance=self.feedback.depth_tolerance)
+
+
+def reference_image(document, root, tick, *, width, height):
+    return FrameOracle(document, root, width=width, height=height).render(tick)
 
 
 def import_graph(geometry_document, scene_document, production, *, source_name):
@@ -493,14 +525,28 @@ def import_graph(geometry_document, scene_document, production, *, source_name):
     root = visit(geometry_document["root"])
     settings = {key: production[key] for key in ("rendering", "particles", "effects", "transport_script", "flash", "audio_cue_bindings")
                 if key in production}
+    temporal = settings.get("effects", {}).get("temporal_feedback")
+    if temporal is not None:
+        if not isinstance(temporal, dict) or set(temporal) != {"weight", "depth_tolerance"}:
+            raise ValueError("temporal feedback requires a weight and depth_tolerance")
+        settings["effects"] = {key: value for key, value in settings["effects"].items() if key != "temporal_feedback"}
     settings["geometry_budget"] = geometry_document.get("budget", {})
     params = {key: [json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)]
               for key, value in {"scene": scene_document, "production": settings}.items()}
     add("film", OPERATOR, params=params, inputs={"geometry": root}, frequency="frame")
-    add("corridor_render", "nw.render.film", inputs={"shader": "film"}, frequency="frame", residency="gpu")
+    if temporal is not None:
+        add("corridor_render", history.SOURCE, inputs={"shader": "film"}, frequency="frame", residency="gpu")
+        add("scene_feedback", history.OPERATOR, params=encode(temporal), frequency="history", residency="gpu")
+        nodes["scene_feedback"].inputs = {port: ("corridor_render", port) for port in history.PORTS}
+        nodes["scene_feedback"].history = compiler.HistoryDeclaration(history.STATE_TYPE, history.INITIAL, "on-seek")
+        image = ("scene_feedback", "out")
+        layout["scene_feedback"] = (1660, 300)
+    else:
+        add("corridor_render", "nw.render.film", inputs={"shader": "film"}, frequency="frame", residency="gpu")
+        image = ("corridor_render", "image")
     add("hotel_screen", "nw.render.present", frequency="frame", residency="gpu")
-    nodes["hotel_screen"].inputs["image"] = ("corridor_render", "image")
-    layout.update({"film": (1220, 300), "corridor_render": (1440, 300), "hotel_screen": (1660, 300)})
+    nodes["hotel_screen"].inputs["image"] = image
+    layout.update({"film": (1220, 300), "corridor_render": (1440, 300), "hotel_screen": (1880 if temporal else 1660, 300)})
     rendering = production["rendering"]
     document = compiler.GraphDocument(1, nwp.COMMON_PROFILE_ID, nwp.COMMON_REQUIREMENTS_DIGEST, {
         "optimization": "O2", "deterministic": "true", "frequency_policy": "strict",

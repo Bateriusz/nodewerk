@@ -157,8 +157,6 @@ jobs:
           tests/test_nw13_pipeline_and_lowering.py
           tests/test_nw13_production_render.py
           tests/test_nw13_provenance_and_catalog.py
-      - name: Preserve the shared NW-11 headless WARP command-path regression
-        run: python -m pytest -q tests/test_nw11_advanced_gpu.py -k "warp or common_regression"
       - name: Independently export, smoke-test and measure common/optional artifacts
         shell: pwsh
         run: |
@@ -175,6 +173,36 @@ jobs:
             --probe $probe `
             --dxc $dxc
           exit $LASTEXITCODE
+      - name: Build the actual NW-11 common and fallback WARP executables
+        shell: pwsh
+        run: |
+          $variants = @("nw11_common_baseline", "nw11_common_analytic", "nw11_fallback_common", "nw11_fallback_analytic")
+          cmake --build build/nw13-probe --parallel 2 --target $variants
+          if ($LASTEXITCODE -ne 0) { throw "Building NW-11 common/fallback WARP executables failed: $LASTEXITCODE" }
+          $artifacts = "build/nw13-nw11-commands"
+          New-Item -ItemType Directory -Force -Path "$artifacts/compiled-specializations" | Out-Null
+          foreach ($name in $variants) {
+            $candidate = @(Get-ChildItem -Path build/nw13-probe -Filter "$name.exe" -Recurse)
+            if ($candidate.Count -ne 1) { throw "Expected exactly one NW-11 $name.exe, found $($candidate.Count)" }
+            Copy-Item $candidate[0].FullName "$artifacts/$name.exe" -ErrorAction Stop
+          }
+          foreach ($name in @("nw11_torus_amplification_as_dxil", "nw11_torus_meshlet_ms_dxil", "nw11_scene_rayquery_ps_dxil", "nw11_deform_cs_dxil", "nw11_analytic_reflection_ps_dxil")) {
+            Copy-Item "build/nw13-probe/shaders/$name.dxil" "$artifacts/compiled-specializations/$name.dxil" -ErrorAction Stop
+          }
+      - name: Bind the NW-11 WARP executables to the same-revision canonical package
+        shell: pwsh
+        run: |
+          $revision = (git rev-parse HEAD).Trim()
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          python tools/canonical_export_reproducibility.py --candidate $revision --dxc $dxc --out build/nw13-nw11-proof
+          if ($LASTEXITCODE -ne 0) { throw "NW-11 canonical common package rebuild failed: $LASTEXITCODE" }
+          python tools/nw11_embed_production.py --proof build/nw13-nw11-proof --executables build/nw13-nw11-commands --commit $revision `
+            --variant nw11_common_baseline --variant nw11_common_analytic --variant nw11_fallback_common --variant nw11_fallback_analytic
+          if ($LASTEXITCODE -ne 0) { throw "NW-11 canonical production package binding failed: $LASTEXITCODE" }
+      - name: Exercise the shared NW-11 headless WARP command paths
+        run: >-
+          python tools/nw11_warp_smoke.py --executables build/nw13-nw11-commands
+          --output build/nw13-evidence/nw11-warp
       - name: Upload validation bundle
         if: always()
         uses: actions/upload-artifact@v4

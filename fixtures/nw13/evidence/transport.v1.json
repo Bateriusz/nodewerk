@@ -94,6 +94,24 @@
       ]
     },
     {
+      "tick": 150400,
+      "action_tick": 145600,
+      "direction": 1,
+      "frozen": false,
+      "generation": 0,
+      "flash_active": false,
+      "events": []
+    },
+    {
+      "tick": 191600,
+      "action_tick": 186800,
+      "direction": 1,
+      "frozen": false,
+      "generation": 0,
+      "flash_active": false,
+      "events": []
+    },
+    {
       "tick": 192000,
       "action_tick": 187200,
       "direction": 1,
@@ -107,6 +125,15 @@
           "presentation_tick": 192000
         }
       ]
+    },
+    {
+      "tick": 192400,
+      "action_tick": 187600,
+      "direction": 1,
+      "frozen": false,
+      "generation": 0,
+      "flash_active": false,
+      "events": []
     },
     {
       "tick": 240000,

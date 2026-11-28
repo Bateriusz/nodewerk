@@ -415,7 +415,9 @@ def test_release_film_shader_validates_and_fits_declared_shader_budgets(tmp_path
     import shutil
     import nw03_compiler as compiler
     import nw13_film
+    import nw13_history
     import offline_shader_pack
+    from dataclasses import replace
 
     dxc = shutil.which("dxc")
     if dxc is None:
@@ -430,6 +432,13 @@ def test_release_film_shader_validates_and_fits_declared_shader_budgets(tmp_path
     # than the release tag; Windows export still requires the exact pin.
     result = compiler.compile_generated_shader(shaders[0], common, dxc_executable=dxc,
                                                 allow_unpinned_dxc=os.name != "nt")
+    _, (_, _, _, scene, settings, _) = production.film_graph(REPO_ROOT, document)
+    timing, _ = nw13_film.film_timing(scene, settings)
+    feedback = nw13_history.read_feedback(graph)
+    post = tmp_path / "post" / "shader.dxil"
+    shader = replace(shaders[0], entry_point="FilmFeedback",
+                     hlsl=nw13_history.emit_composite(feedback, scene, timing, 48, 27))
+    compiler.compile_generated_shader(shader, post, dxc_executable=dxc, allow_unpinned_dxc=os.name != "nt")
     metadata = nw13_film.compile_inline_ray_payload(graph, tmp_path / "ray", dxc,
                                                    allow_unpinned_dxc=os.name != "nt")
     ray = tmp_path / "ray" / "film_inline_ray.dxil"
@@ -438,8 +447,9 @@ def test_release_film_shader_validates_and_fits_declared_shader_budgets(tmp_path
     assert metadata["bounds_count"] == 17
     with pytest.raises(ValueError, match="baseline requires"):
         offline_shader_pack.validate_dxil_container(ray.read_bytes())
-    assert common.stat().st_size <= 48 * 1024
-    assert common.stat().st_size + ray.stat().st_size <= 96 * 1024
+    common_shader_bytes = common.stat().st_size + post.stat().st_size
+    assert common_shader_bytes <= 48 * 1024
+    assert common_shader_bytes + ray.stat().st_size <= 96 * 1024
 
 
 def test_shared_export_packages_the_preview_cue_bytes_and_integer_clock(tmp_path):
@@ -497,3 +507,165 @@ def test_native_source_must_be_tracked_and_match_selected_revision(tmp_path):
         measure._tracked_source(location, "film.nwgraph", revision)
     with pytest.raises(nw13_evidence.EvidenceError, match="tracked"):
         measure._tracked_source(location, "../not-owned.nwgraph", revision)
+
+
+def test_typed_scene_history_is_real_and_legacy_film_remains_stateless(tmp_path, monkeypatch):
+    import nw03_compiler as compiler
+    import nw05_export as export
+    import nw13_history
+    import nwp_package as nwp
+
+    monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    source = REPO_ROOT / document["graph"]
+    graph = compiler.load_graph(source)
+    feedback = nw13_history.read_feedback(graph)
+    assert feedback.source_id == "corridor_render" and feedback.film_id == "film"
+    assert graph.nodes[feedback.node_id].inputs == {
+        "color": (feedback.source_id, "color"), "depth": (feedback.source_id, "depth"),
+        "camera": (feedback.source_id, "camera"),
+    }
+
+    song = production.playback_song(REPO_ROOT, document)
+    artifact = export.export_graph(source, tmp_path / "stateful", allow_test_payloads=True,
+                                   audio_song_payload=song).artifacts[nwp.COMMON_PROFILE_ID]
+    package = nwp.decode_package(artifact.package_bytes)
+    assert package.audio_song == song and len(package.history) == 1
+    record = package.history[0]
+    assert record.values_per_element == 4 and record.element_count == 48 * 27
+    assert record.initial_state == b"" and record.state_type == nw13_history.STATE_TYPE
+    assert package.frame[0].opcode == "frame.set_timeline"
+    assert [op.value for op in package.frame[0].operands] == [package.parameters[0].parameter_id, 0]
+    steps = [ins for ins in package.frame if ins.opcode == "frame.simulation_step"]
+    assert len(steps) == 1 and steps[0].operands[-2].value == 1
+    assert steps[0].operands[-1].value == record.state_id
+    assert [shader.entry_point for shader in package.shaders] == ["FilmSample", "FilmFeedback"]
+    assert [(b.name, b.slot) for b in package.root_signatures[1].bindings if b.usage == "srv"] == [
+        ("input", 0), ("film_current", 1)
+    ]
+    assert artifact.manifest["stateful_extension"]["sampled_scene_history"]["max_predecessor_dispatches_per_frame"] == 1
+    assert artifact.manifest["present_geometry"] == {"width": 48, "height": 27}
+    source_text = (tmp_path / "stateful" / "common.player.cpp").read_text(encoding="utf-8")
+    assert "config.width = 48u;" in source_text and "config.height = 27u;" in source_text
+
+    from dataclasses import replace
+    assert any(row["code"] == "package_history_sampled_schedule" for row in
+               nwp.validate_package_model(replace(package, parameters=package.parameters[:-1])))
+    assert any(row["code"] == "package_history_sampled_schedule" for row in
+               nwp.validate_package_model(replace(package, history=(replace(record, initial_state=b"x"),))))
+
+    assert any(row["code"] == "package_history_sampled_schedule" for row in
+               nwp.validate_package_model(replace(package, frame=package.frame[1:])))
+    for target in (1, 7):
+        wrong_order = list(package.frame)
+        wrong_order.insert(target, wrong_order.pop(4))
+        assert any(row["code"] == "package_history_sampled_schedule" for row in
+                   nwp.validate_package_model(replace(package, frame=wrong_order)))
+    wrong_view = list(package.frame)
+    wrong_view[12] = replace(wrong_view[12], operands=(*wrong_view[12].operands[:2], wrong_view[13].operands[2]))
+    assert any(row["code"] == "package_history_sampled_schedule" for row in
+               nwp.validate_package_model(replace(package, frame=wrong_view)))
+
+    bad = compiler.load_graph(source)
+    bad.nodes[feedback.node_id].inputs["depth"] = (feedback.source_id, "color")
+    assert any(row["code"] == "port_type_mismatch" for row in compiler.validate_graph_document(bad))
+    with pytest.raises(ValueError, match="same film frame"):
+        nw13_history.read_feedback(bad)
+
+    old = {**document, "effects": {key: value for key, value in document["effects"].items()
+                                 if key != "temporal_feedback"}}
+    old_source = tmp_path / "stateless.nwgraph"
+    production.import_graph(REPO_ROOT, old, old_source)
+    old_package = export.export_graph(old_source, tmp_path / "stateless", allow_test_payloads=True,
+                                      dxc_executable=__import__("nw09_export")._test_dxc(tmp_path / "dxc")
+                                      ).artifacts[nwp.COMMON_PROFILE_ID].package
+    assert not old_package.history and len(old_package.shaders) == 1
+
+    import nw08_editor
+    unrelated = compiler.load_graph(REPO_ROOT / "fixtures" / "nw05" / "procedural_image.nwgraph")
+    for node in graph.nodes.values():
+        if node.operator_id == "nw.render.present":
+            continue
+        renamed = replace(node, node_id=f"unreachable_{node.node_id}", inputs={
+            port: (f"unreachable_{source}", output) for port, (source, output) in node.inputs.items()
+        })
+        unrelated.nodes[renamed.node_id] = renamed
+    dead_source = tmp_path / "dead.nwgraph"
+    dead_source.write_text(nw08_editor.emit_graph_text(unrelated), encoding="utf-8")
+    dead_artifact = export.export_graph(dead_source, tmp_path / "dead", allow_test_payloads=True,
+                                        dxc_executable=__import__("nw09_export")._test_dxc(tmp_path / "dxc")
+                                        ).artifacts[nwp.COMMON_PROFILE_ID]
+    assert not dead_artifact.package.history
+    assert not {"nw.feedback.scene_image", "nw.render.film_frame"}.intersection(dead_artifact.manifest["retained"]["code"])
+
+
+def test_scene_history_is_visible_before_cut_and_exactly_reset_after_seek():
+    import nw13_film
+    import nw13_history
+
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    graph, _ = production.film_graph(REPO_ROOT, document)
+    oracle = nw13_film.FrameOracle(graph, graph.nodes["film"], width=48, height=27)
+    effect = oracle.render(150400)
+    assert render.image_difference(effect, oracle.sample(150400)[0])["max_abs_channel_error"] > 0.02
+    for boundary in (192000, 240000):
+        assert nw13_history.compatible_tick(boundary, oracle.resets) is None
+        assert oracle.render(boundary) == oracle.sample(boundary)[0]
+    assert oracle.render(150400) == effect
+    assert [nw13_history.predecessor(x) for x in (0, 399, 400, 799, 800)] == [None, None, 0, 0, 400]
+
+
+def test_scene_history_rejects_disoccluded_depth_before_blending():
+    from dataclasses import replace
+    import nw13_history
+
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    _graph, (_, _, _, scene, _, _) = production.film_graph(REPO_ROOT, document)
+    camera = replace(scene_module.camera_state(scene, 0), position=(0.0, 0.0, 0.0),
+                     forward=(0.0, 0.0, 1.0), up=(0.0, 1.0, 0.0), aspect=1.0)
+    current = ([1.0, 0.0, 0.0, 1.0], [4.0], camera)
+    stale = [0.0, 0.0, 1.0, 1.0]
+    def project(depth):
+        return nw13_history.composite(current, (stale, [depth], camera), width=1, height=1,
+                                      weight=0.25, depth_tolerance=0.04)
+    assert project(4.0) == [0.75, 0.0, 0.25, 1.0]
+    assert project(2.0) == project(float("inf")) == current[0]
+
+
+def test_portable_cpp_package_player_accepts_bounded_nonmonotonic_film_ticks(tmp_path, monkeypatch):
+    import os
+    import shutil
+    import subprocess
+
+    import nw05_export
+    import nw09_export
+    import nwp_package
+
+    native = shutil.which("g++") or shutil.which("clang++")
+    if os.name == "nt" or native is None:
+        pytest.skip("portable C++ compiler required; Windows runs the actual readback proof")
+    monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    staged = nw05_export.export_graph(
+        REPO_ROOT / document["graph"], tmp_path / "package", allow_test_payloads=True,
+        dxc_executable=nw09_export._test_dxc(tmp_path / "dxc"),
+    ).artifacts[nwp_package.COMMON_PROFILE_ID]
+    package_path = tmp_path / "typed-film.nwp"
+    package_path.write_bytes(staged.package_bytes)
+    binary = tmp_path / "planner"
+    sources = [
+        "tests/nw13_scene_history_contract.cpp",
+        "src/player/package_player.cpp", "src/player/package_loader.cpp", "src/player/diagnostics.cpp",
+        "src/player/capability_requirements.cpp", "src/player/capability_check.cpp",
+        "src/player/player_instrumentation.cpp", "src/player/resource_plan.cpp",
+        "src/player/embedded_package.cpp", "src/platform/win32_window.cpp", "src/package/nwp_format.cpp",
+    ]
+    compile_result = subprocess.run([
+        native, "-std=c++20", "-O1", "-DNW_PROFILE_DEV=1", "-ffunction-sections", "-fdata-sections",
+        "-Wl,--gc-sections", "-I", "src", "-I", "src/player", "-I", "src/package", "-I", "src/platform",
+        *sources, "-o", str(binary),
+    ], cwd=REPO_ROOT, capture_output=True, text=True, timeout=90)
+    assert compile_result.returncode == 0, compile_result.stderr
+    result = subprocess.run([str(binary), str(package_path)], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert "7 bounded predecessor steps" in result.stdout

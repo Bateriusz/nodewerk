@@ -327,17 +327,9 @@ jobs:
           python tools/nw11_embed_production.py --proof build/nw11-common-proof --executables build/nw11-artifacts/independent --commit "${{ github.event.pull_request.head.sha || github.sha }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Exercise headless common and fallback D3D12 commands on WARP
-        shell: pwsh
-        run: |
-          foreach ($name in @("nw11_common_baseline", "nw11_common_analytic", "nw11_fallback_common", "nw11_fallback_analytic")) {
-            $reportPath = "build/$name-warp-smoke.json"
-            & "build/nw11-artifacts/$name.exe" --allow-software --headless --benchmark-json $reportPath --warmup-seconds 0 --runs 1 --run-seconds 1
-            if ($LASTEXITCODE -ne 0) { throw "$name WARP command-path smoke failed" }
-            $report = Get-Content $reportPath -Raw | ConvertFrom-Json
-            if ($report.measurement.gpu_time_samples.Count -lt 1) {
-              throw "$name WARP smoke produced no GPU timestamp samples"
-            }
-          }
+        run: >-
+          python tools/nw11_warp_smoke.py --executables build/nw11-artifacts
+          --output build/nw11-warp
 
       - name: Exercise headless advanced paths on WARP and check absent features
         shell: pwsh

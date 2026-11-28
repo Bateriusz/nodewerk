@@ -27,7 +27,7 @@ def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def embed(proof_dir: Path, executable_dir: Path, commit: str) -> None:
+def embed(proof_dir: Path, executable_dir: Path, commit: str, *, variants=tuple(VARIANTS)) -> None:
     proof = json.loads((proof_dir / "common-regression.json").read_text(encoding="utf-8"))
     binding.verify_proof(proof, commit)
     if proof.get("format") != "canonical-export-reproducibility.v2":
@@ -51,7 +51,8 @@ def embed(proof_dir: Path, executable_dir: Path, commit: str) -> None:
     package_hash, manifest_hash = binding.verify_proof(proof, commit)
     payloads = binding.read_payloads(executable_dir / "compiled-specializations")
     bindings = []
-    for name, specialization in VARIANTS.items():
+    for name in variants:
+        specialization = VARIANTS[name]
         path = executable_dir / (name + ".exe")
         template = path.read_bytes()
         specialized, displaced = binding.specialize_package(package, specialization)
@@ -88,8 +89,10 @@ def main() -> int:
     parser.add_argument("--proof", type=Path, required=True)
     parser.add_argument("--executables", type=Path, required=True)
     parser.add_argument("--commit", required=True)
+    parser.add_argument("--variant", action="append", choices=VARIANTS,
+                        help="Bind only these named variants; defaults to all canonical variants.")
     args = parser.parse_args()
-    embed(args.proof, args.executables, args.commit)
+    embed(args.proof, args.executables, args.commit, variants=tuple(dict.fromkeys(args.variant or VARIANTS)))
     return 0
 
 

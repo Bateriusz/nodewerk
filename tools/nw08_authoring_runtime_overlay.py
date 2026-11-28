@@ -80,9 +80,9 @@ struct AuthoringPassTiming {
         r"""    ExitCode shutdown();
 #if NW08_AUTHORING_RUNTIME
     AuthoringReloadResult reloadForAuthoringFromFile(const char* package_path);
-    // Reset temporal resources and the simulation counter together, then let
-    // the normal render path replay every tick from zero.  Authoring seeks
-    // never silently drop or skip simulation ticks.
+    // Recursive states must replay; sampled states own an absolute bounded
+    // predecessor and do not need a device or initialization reset on seek.
+    bool requiresHistoryReplayForAuthoring() const noexcept;
     ExitCode rewindHistoryForAuthoring();
     AuthoringAdapterIdentity authoringAdapterIdentity() const noexcept;
     const AuthoringReloadResult& authoring_reload_stats() const noexcept {
@@ -141,8 +141,12 @@ bool PackagePlayer::IsAuthoringRetainedResource(
                      resource_id) != authoring_retained_resource_ids_.end();
 }
 
+bool PackagePlayer::requiresHistoryReplayForAuthoring() const noexcept {
+    return !package_.history.empty() && !UsesSampledSceneHistory(package_);
+}
+
 ExitCode PackagePlayer::rewindHistoryForAuthoring() {
-    if (package_.history.empty()) {
+    if (!requiresHistoryReplayForAuthoring()) {
         return ExitCode::Success;
     }
     if (!initialized_ || platform_ == nullptr) {

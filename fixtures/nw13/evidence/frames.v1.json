@@ -44,7 +44,8 @@
         "center": true,
         "left": true,
         "right": true
-      }
+      },
+      "history_predecessor_tick": null
     },
     {
       "tick": 96000,
@@ -64,19 +65,20 @@
         }
       ],
       "file": "frames/tick-096000.ppm",
-      "sha256": "sha256:b909b4ddde453574a07c3ae0575531e692bb3d734c253043f93c83c49e7d3cf4",
+      "sha256": "sha256:3d647ae845717929a2d9059c301464935da3080b8b7d6d794919bf3bc50f00c5",
       "shot_id": "corridor_approach",
       "cut": false,
       "regions": {
-        "center": 0.2366063016309599,
+        "center": 0.23660893299369498,
         "left": 0.24247567413304702,
-        "right": 0.23672771094348727
+        "right": 0.23673607019185247
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      }
+      },
+      "history_predecessor_tick": 95600
     },
     {
       "tick": 120000,
@@ -97,7 +99,7 @@
       "shot_id": "corridor_approach",
       "cut": false,
       "regions": {
-        "center": 0.2391023229084189,
+        "center": 0.23910521492034748,
         "left": 0.24241698770286244,
         "right": 0.23940688177358627
       },
@@ -105,7 +107,8 @@
         "center": true,
         "left": true,
         "right": true
-      }
+      },
+      "history_predecessor_tick": 119600
     },
     {
       "tick": 123200,
@@ -120,7 +123,7 @@
       "shot_id": "corridor_approach",
       "cut": false,
       "regions": {
-        "center": 0.238983714663275,
+        "center": 0.23898455808015895,
         "left": 0.24241698770286244,
         "right": 0.23979836522105177
       },
@@ -128,7 +131,8 @@
         "center": true,
         "left": true,
         "right": true
-      }
+      },
+      "history_predecessor_tick": 122800
     },
     {
       "tick": 144000,
@@ -145,19 +149,20 @@
         }
       ],
       "file": "frames/tick-144000.ppm",
-      "sha256": "sha256:d16271ce78316f592854f32c16c25e5f42acd110a5fc587f7d3f043693c9d482",
+      "sha256": "sha256:c1606806b70d88ecde1359e308c0e153f65eb2998d8e10f293896702aa261830",
       "shot_id": "corridor_approach",
       "cut": false,
       "regions": {
-        "center": 0.24476908157711158,
+        "center": 0.24476747300439958,
         "left": 0.24235830127267788,
-        "right": 0.2430658275874691
+        "right": 0.24307920199923955
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      }
+      },
+      "history_predecessor_tick": 143600
     },
     {
       "tick": 148800,
@@ -177,19 +182,68 @@
         }
       ],
       "file": "frames/tick-148800.ppm",
-      "sha256": "sha256:bcc8435d9a7df134df8c967b1c86c61251dcbb6de4f312408191e9bf4ea206c4",
+      "sha256": "sha256:32a4f6a5f3eb8f00893826bcad7da654bd9474fc113d6e0ecde75d9e335962d1",
       "shot_id": "corridor_approach",
       "cut": false,
       "regions": {
-        "center": 0.4704809885412496,
-        "left": 0.3068787574800456,
-        "right": 0.3614758049373979
+        "center": 0.40294321052023313,
+        "left": 0.28752996095845407,
+        "right": 0.3272624594209948
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      }
+      },
+      "history_predecessor_tick": 148400
+    },
+    {
+      "tick": 150400,
+      "action_tick": 145600,
+      "direction": 1,
+      "frozen": false,
+      "generation": 0,
+      "flash_active": false,
+      "events": [],
+      "file": "frames/tick-150400.ppm",
+      "sha256": "sha256:d50b37c334fff3e736d8d9f73d0890c7dc4e2d5a200041e4d0dfa488198a1530",
+      "shot_id": "corridor_approach",
+      "cut": false,
+      "regions": {
+        "center": 0.31297858270818113,
+        "left": 0.26193214542879617,
+        "right": 0.2813688151904131
+      },
+      "region_checks": {
+        "center": true,
+        "left": true,
+        "right": true
+      },
+      "history_predecessor_tick": 150000
+    },
+    {
+      "tick": 191600,
+      "action_tick": 186800,
+      "direction": 1,
+      "frozen": false,
+      "generation": 0,
+      "flash_active": false,
+      "events": [],
+      "file": "frames/tick-191600.ppm",
+      "sha256": "sha256:4a832aa69af00f00d17232f34a844df77ab2746eef82faba114f94afa059569a",
+      "shot_id": "corridor_approach",
+      "cut": false,
+      "regions": {
+        "center": 0.24309002880112743,
+        "left": 0.24202378862062585,
+        "right": 0.24732930476906897
+      },
+      "region_checks": {
+        "center": true,
+        "left": true,
+        "right": true
+      },
+      "history_predecessor_tick": 191200
     },
     {
       "tick": 192000,
@@ -218,7 +272,32 @@
         "center": true,
         "left": true,
         "right": true
-      }
+      },
+      "history_predecessor_tick": null
+    },
+    {
+      "tick": 192400,
+      "action_tick": 187600,
+      "direction": 1,
+      "frozen": false,
+      "generation": 0,
+      "flash_active": false,
+      "events": [],
+      "file": "frames/tick-192400.ppm",
+      "sha256": "sha256:768dc6d43e8e34fe7afcd416c803d718acc012f83e4dacf01e45debf80095159",
+      "shot_id": "room_turn",
+      "cut": false,
+      "regions": {
+        "center": 0.23716282612986753,
+        "left": 0.23842631045031173,
+        "right": 0.24275595150268908
+      },
+      "region_checks": {
+        "center": true,
+        "left": true,
+        "right": true
+      },
+      "history_predecessor_tick": 192000
     },
     {
       "tick": 240000,
@@ -256,7 +335,8 @@
         "center": true,
         "left": true,
         "right": true
-      }
+      },
+      "history_predecessor_tick": null
     },
     {
       "tick": 252000,
@@ -267,19 +347,20 @@
       "flash_active": false,
       "events": [],
       "file": "frames/tick-252000.ppm",
-      "sha256": "sha256:14f2d2691c37a3f35efc8e5b50de505402bbe271b92e1701af791639f4fae28d",
+      "sha256": "sha256:78677759c56bfc199b1747e5869899a3eb319a9d270e0b717384c1a94b7360d3",
       "shot_id": "room_turn",
       "cut": false,
       "regions": {
         "center": 0.23758226149853962,
         "left": 0.22698245656432103,
-        "right": 0.22199662465925687
+        "right": 0.222011535500408
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      }
+      },
+      "history_predecessor_tick": 251600
     },
     {
       "tick": 264000,
@@ -309,7 +390,8 @@
         "center": true,
         "left": true,
         "right": true
-      }
+      },
+      "history_predecessor_tick": null
     },
     {
       "tick": 288000,
@@ -332,7 +414,8 @@
         "center": true,
         "left": true,
         "right": true
-      }
+      },
+      "history_predecessor_tick": 287600
     }
   ],
   "region_checks": [
@@ -369,7 +452,7 @@
     {
       "tick": 96000,
       "region": "center",
-      "value": 0.2366063016309599,
+      "value": 0.23660893299369498,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -389,7 +472,7 @@
     {
       "tick": 96000,
       "region": "right",
-      "value": 0.23672771094348727,
+      "value": 0.23673607019185247,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -399,7 +482,7 @@
     {
       "tick": 120000,
       "region": "center",
-      "value": 0.2391023229084189,
+      "value": 0.23910521492034748,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -429,7 +512,7 @@
     {
       "tick": 123200,
       "region": "center",
-      "value": 0.238983714663275,
+      "value": 0.23898455808015895,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -459,7 +542,7 @@
     {
       "tick": 144000,
       "region": "center",
-      "value": 0.24476908157711158,
+      "value": 0.24476747300439958,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -479,7 +562,7 @@
     {
       "tick": 144000,
       "region": "right",
-      "value": 0.2430658275874691,
+      "value": 0.24307920199923955,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -489,7 +572,7 @@
     {
       "tick": 148800,
       "region": "center",
-      "value": 0.4704809885412496,
+      "value": 0.40294321052023313,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -499,7 +582,7 @@
     {
       "tick": 148800,
       "region": "left",
-      "value": 0.3068787574800456,
+      "value": 0.28752996095845407,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -509,7 +592,67 @@
     {
       "tick": 148800,
       "region": "right",
-      "value": 0.3614758049373979,
+      "value": 0.3272624594209948,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 150400,
+      "region": "center",
+      "value": 0.31297858270818113,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 150400,
+      "region": "left",
+      "value": 0.26193214542879617,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 150400,
+      "region": "right",
+      "value": 0.2813688151904131,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 191600,
+      "region": "center",
+      "value": 0.24309002880112743,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 191600,
+      "region": "left",
+      "value": 0.24202378862062585,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 191600,
+      "region": "right",
+      "value": 0.24732930476906897,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -538,6 +681,36 @@
     },
     {
       "tick": 192000,
+      "region": "right",
+      "value": 0.24275595150268908,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 192400,
+      "region": "center",
+      "value": 0.23716282612986753,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 192400,
+      "region": "left",
+      "value": 0.23842631045031173,
+      "expected": {
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      "passed": true
+    },
+    {
+      "tick": 192400,
       "region": "right",
       "value": 0.24275595150268908,
       "expected": {
@@ -599,7 +772,7 @@
     {
       "tick": 252000,
       "region": "right",
-      "value": 0.22199662465925687,
+      "value": 0.222011535500408,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -670,13 +843,13 @@
   "region_checks_passed": true,
   "contact_sheet": {
     "file": "contact_sheet.ppm",
-    "sha256": "sha256:439d581d19c81b183d84722ea6fa3148be18ad0aba9fde7f6fd47f1cf39d3d2f"
+    "sha256": "sha256:c4fd9398499b0ed359a063b6510bae6abff2d7af1ecc59f8ad3da00ec6990c1f"
   },
   "sources": {
     "graph": {
       "path": "fixtures/nw13/hotel_corridor.nwgraph",
-      "sha256": "sha256:dae53c91594430041bad178cb1f5f1602e4973237fe437e22a7a93beee89a730",
-      "semantic_hash": "sha256:v1:b29c063eeab2e7283ba04029453719b6366cfae6db27fd321927e6d27c9ee34a"
+      "sha256": "sha256:c16b2f66f7054c6e59444b3a2cded62f557534a61696dd2c06b47579d2ea0bdb",
+      "semantic_hash": "sha256:v1:60a2dc8a56ceb13d503207cca35b832f362a69b3393557b021d6a79ee0bc6e53"
     },
     "geometry": {
       "source": "graph",

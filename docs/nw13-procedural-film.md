@@ -134,8 +134,9 @@ neither substitutes the source note's action tick for its presentation onset.
 
 ## 6. Common rendering and inline ray queries
 
-The film graph connects a named geometry library to `nw.shader.film`,
-`nw.render.film` and `nw.render.present`. The library contains the source
+The film graph connects a named geometry library to `nw.shader.film`.
+The stateless `nw.render.film` still feeds `nw.render.present` directly;
+the feedback-enabled film uses the typed frame producer and History node. The library contains the source
 solids and their dependencies. The shared optimizer and offline compiler
 specialize the film pass from those nodes. The checked-in graph is the
 authoritative editable runtime input. Its geometry and scene companion JSON
@@ -178,9 +179,31 @@ positive linear view-space depth with the scene depth at the covered pixel.
 The film composites straight-alpha particles before spatial bloom and
 tonemapping.
 
-The existing Python reference helpers also cover checkpointed History and
-feedback from the current image and previous state. Connecting those feedback
-operators to the shared GPU History schedule for this film remains open.
+The film's public graph connects `nw.render.film_frame@1.0.0` to
+`nw.feedback.scene_image@1.0.0` with three typed views from the same frame:
+opaque color, positive linear view-space depth, and camera metadata. The
+previous input is owned by the shared PackagePlayer History scheduler and
+cannot be authored as a graph edge. The optional ray-query AS belongs only to
+the film producer; the feedback pass has its own current and previous SRVs.
+
+This one-tap effect reprojects the preceding raw film sample and blends
+within a declared depth tolerance. It does not recursively feed a blended
+image back into itself. The scheduler reconstructs at most one previous
+120 Hz sample plus the exact presentation frame, including after a backward
+seek. At a cut or an authored reversal the feedback pass rejects the prior
+epoch. Previous data outside the camera frustum or incompatible with the
+current depth is also rejected. The package has no baked checkpoint or
+serialized initial pixel buffer for this state type. The two scene passes
+are charged to the same per-frame work limit.
+Both package readers enforce the versioned command order and bindings: the
+prior sample is copied before the current render, and the distinct prior
+and current views are sampled by the terminal composite.
+
+Standalone measurement includes a zero-weight control export: the authored
+flash must leave a visible echo at tick 150400, while the shot cut at tick
+192000 must exactly match the no-feedback capture. The same oracle is used by
+Studio reference preview. Native results are distinct from reference and
+compiled-shader checks.
 
 ## 8. Versioned audio
 
