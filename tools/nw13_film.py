@@ -589,16 +589,18 @@ class FrameOracle:
                                             "shadows", "reflection_bounces", "miss_radiance")
         })
 
+    def light_gains(self, tick):
+        flash = self.settings.get("flash")
+        if flash:
+            return {flash["light"]: float(any(onset <= tick < onset + flash["duration_ticks"] for onset in self.onsets))}
+        return {}
+
     def sample(self, tick):
         import nw13_production
 
         tick = max(0, min(tick, self.scene.duration_ticks))
         action = self.timing.at(tick)["action_tick"]
-        flash = self.settings.get("flash")
-        light_gain = {}
-        if flash:
-            light_gain[flash["light"]] = float(any(onset <= tick < onset + flash["duration_ticks"] for onset in self.onsets))
-        image, depth = self.renderer.render(tick, action_tick=action, light_gain=light_gain)
+        image, depth = self.renderer.render(tick, action_tick=action, light_gain=self.light_gains(tick))
         if self.emitter is not None:
             image = self.renderer.render_particles(image, depth, self.emitter.to_dict(), tick, action_tick=action, film_cycle=True)
         return (nw13_production._tone_image(self.settings, image, self.width, self.height),

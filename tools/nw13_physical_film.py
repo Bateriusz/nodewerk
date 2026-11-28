@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import hashlib
 import json
 import math
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import statistics
 import struct
@@ -38,7 +37,7 @@ ORACLE = "hosted_cpu_oracle_checked_readback"
 PEER = "matched_physical_common_only"
 PROBE = "bin/nw11_capability_probe.exe"
 PRESENTMON = "bin/PresentMon.exe"
-PRESENTMON_HASH = "b2a706bc6ad475749e3b7e3409263aa1e6906d45bdcf993f6dbc0f660188f1af"
+PRESENTMON_HASH = timing.PRESENTMON_260_SHA256
 PLAYER = "nw_common_d3d12_fl12_0_sm6_0_v1.exe"
 ARMS = {"common": "independent-a", "fallback": "fallback", "dxr": "inline-ray/independent-a"}
 HELPERS = (
@@ -51,6 +50,7 @@ HELPERS = (
 HEX40 = re.compile(r"[0-9a-f]{40}")
 HEX64 = re.compile(r"[0-9a-f]{64}")
 LUID = re.compile(r"[0-9a-fA-F]{8}:[0-9a-fA-F]{8}")
+PRESENTMON_WARMUP_MS = 1000
 
 
 class HandoffError(ValueError):
@@ -414,8 +414,11 @@ def capture_process(command, output: Path, *, cwd: Path, env=None, timeout=60, p
                     try:
                         capture = timing.run_presentmon(presentmon, process_id=proc.pid, run_seconds=5,
                                                         run_dir=output, run_index=output.parent.name)
+                    except timing.PresentMonError as exc:
+                        capture_failure = timing.presentmon_unavailable(exc.code, exc.exit_code)
                     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, UnicodeError) as exc:
-                        capture_failure = type(exc).__name__
+                        (output / "presentmon-launch-error.txt").write_text(str(exc) + "\n", encoding="utf-8")
+                        capture_failure = timing.presentmon_unavailable("collector_failed")
                 code = proc.wait(timeout=max(0.1, start + timeout - time.perf_counter()))
             except subprocess.TimeoutExpired:
                 timed_out = True
@@ -428,6 +431,9 @@ def capture_process(command, output: Path, *, cwd: Path, env=None, timeout=60, p
             launch = {"argv": [str(arg) for arg in command], "pid": proc.pid, "elapsed_ms": (time.perf_counter() - start) * 1000,
                       "start_qpc_ms": start * 1000, "returncode": code, "timed_out": timed_out,
                       "presentmon": capture.name if capture else None, "presentmon_error": capture_failure}
+            if presentmon:
+                launch["presentmon_sha256"] = sha(presentmon)
+                launch["executable_sha256"] = sha(Path(command[0]))
     launch["end_qpc_ms"] = time.perf_counter() * 1000
     launch["stdout_sha256"] = sha(output / "stdout.bin")
     launch["stderr_sha256"] = sha(output / "stderr.bin")
@@ -440,9 +446,10 @@ def counter(source: str, key: str) -> int | None:
     return int(values[0]) if len(values) == 1 else None
 
 
-def device_report(output: Path, launch: dict, adapter: dict, driver: str) -> dict:
-    stdout = host.decode_windows_output((output / "stdout.bin").read_bytes())
-    stderr = host.decode_windows_output((output / "stderr.bin").read_bytes())
+def device_report(output: Path, launch: dict, adapter: dict, driver: str, *, logs=None) -> dict:
+    stdout_bytes, stderr_bytes = logs if logs is not None else (
+        (output / "stdout.bin").read_bytes(), (output / "stderr.bin").read_bytes())
+    stdout, stderr = map(host.decode_windows_output, (stdout_bytes, stderr_bytes))
     matches = re.findall(r"^NODEWERK_SELECTED_ADAPTER_LUID=([a-fA-F0-9:]+)\r?$", stderr, flags=re.MULTILINE)
     # The explicitly selected DXGI LUID is emitted by the actual child, not inferred.
     driver_rows = re.findall(r"^NW05_DRIVER=([^\r\n]*)", stdout, flags=re.MULTILINE)
@@ -467,39 +474,47 @@ def device_report(output: Path, launch: dict, adapter: dict, driver: str) -> dic
     }
 
 
-def performance(output: Path, launch: dict, sync_interval: int | None) -> dict:
-    if not launch["presentmon"] or sync_interval is None:
-        return unavailable("no_process_bound_etw")
+def performance(output: Path, launch: dict, sync_interval: int | None, *,
+                historical_csv_sha: str | None = None, metadata: dict | None = None) -> dict:
+    failure = launch.get("presentmon_error")
+    if isinstance(failure, dict):
+        # Only the current collector produces structured diagnostic values.
+        return timing.presentmon_unavailable(failure["reason"], failure.get("collector_exit_code"))
+    if launch.get("presentmon") != timing.PRESENTMON_CSV:
+        return timing.presentmon_unavailable("collector_failed" if failure else "no_process_bound_etw")
+    if sync_interval is None:
+        return timing.presentmon_unavailable("native_sync_interval_unavailable")
     try:
-        with (output / launch["presentmon"]).open(encoding="utf-8-sig", newline="") as stream:
-            rows = csv.DictReader(stream, strict=True)
-            fields = set(rows.fieldnames or ())
-            if not {"ProcessID", "CPUStartQPCTime", "SyncInterval", "SwapChainAddress"} <= fields:
-                return unavailable("etw_schema_or_clock_unavailable")
-            selected = []
-            for row in rows:
-                if row.get("ProcessID") != str(launch["pid"]):
-                    continue
-                stamp = float(row["CPUStartQPCTime"])
-                if launch["start_qpc_ms"] + 1000 <= stamp <= launch["end_qpc_ms"]:
-                    if row["SyncInterval"] != str(sync_interval) or not row["SwapChainAddress"]:
-                        return unavailable("unmatched_sync_interval_or_swapchain")
-                    selected.append(row)
-            if len({row["SwapChainAddress"] for row in selected}) != 1:
-                return unavailable("missing_or_multiple_swapchains")
-            gpu_samples, cpu_samples, display = timing.extract_samples(selected, process_id=launch["pid"])
-    except (OSError, ValueError, TypeError, csv.Error, KeyError):
-        return unavailable("invalid_etw_samples")
-    def metric(samples):
-        return ({"status": "observed", "count": len(samples), "median_ms": statistics.median(samples)}
-                if len(samples) >= 5 and all(value > 0 for value in samples)
-                else unavailable("insufficient_process_bound_samples"))
-    gpu_values, cpu_values, display_values = map(metric, (gpu_samples, cpu_samples, display))
-    return {"status": "observed" if all(obs["status"] == "observed" for obs in (gpu_values, cpu_values))
-            else "partial" if any(obs["status"] == "observed" for obs in (gpu_values, cpu_values, display_values))
+        start, end = launch["start_qpc_ms"], launch["end_qpc_ms"]
+        if type(start) not in (int, float) or not 0 < start < math.inf:
+            raise timing.PresentMonError("etw_process_window_unavailable")
+        if metadata is None:
+            metadata = json_object(member(output, timing.PRESENTMON_METADATA).read_bytes())
+        samples = timing.bound_presentmon_samples(
+            member(output, timing.PRESENTMON_CSV).read_bytes(), metadata,
+            process_id=launch["pid"], expected_tool_sha256=PRESENTMON_HASH, expected_csv_sha256=historical_csv_sha,
+            start_qpc_ms=start + PRESENTMON_WARMUP_MS, end_qpc_ms=end, sync_interval=sync_interval,
+            application=PLAYER,
+        )
+    except timing.PresentMonError as exc:
+        return timing.presentmon_unavailable(exc.code, exc.exit_code)
+    except (OSError, ValueError, KeyError, TypeError):
+        return timing.presentmon_unavailable("invalid_etw_samples")
+
+    def metric(values):
+        if len(values) >= 5 and all(value > 0 for value in values):
+            center = statistics.median(values)
+            if math.isfinite(center):
+                return {"status": "observed", "count": len(values), "median_ms": center}
+        return unavailable("insufficient_process_bound_samples")
+    observations = {key: metric(samples[key]) for key in ("gpu_time", "cpu_submit", "display_intervals")}
+    if not samples["cpu_submit_reported"]:
+        observations["cpu_submit"] = unavailable("present_api_time_not_reported_by_schema")
+    return {"status": "observed" if all(observations[key]["status"] == "observed" for key in ("gpu_time", "cpu_submit"))
+            else "partial" if any(obs["status"] == "observed" for obs in observations.values())
             else "unavailable",
-            "gpu_time": gpu_values, "cpu_submit": cpu_values, "display_intervals": display_values,
-            "raw_csv_sha256": sha(output / launch["presentmon"])}
+            **observations, "raw_csv_sha256": samples["csv_sha256"], "bound_rows": samples["bound_rows"],
+            "clock": "absolute_qpc_ms", "clock_schema": samples["clock_schema"]}
 
 
 def unavailable(code: str) -> dict:
@@ -576,10 +591,13 @@ def run(*, root: Path, output: Path, index_sha: str, revision: str, tree: str, a
             report["host"]["temperature_c"] = env["temperature_c"]
             report["host"]["enforced_limit_w"] = env["gpu_power_state"]["enforced_limit_w"]
         features = snapshot["features"]
-        report["host"]["dxr_tier"] = features.get("raytracing_tier")
-        report["host"]["shader_model"] = features.get("highest_shader_model")
-        selection = dict(highest_shader_model=str(features.get("highest_shader_model")).removeprefix("D3D12_SHADER_MODEL_"),
-                         raytracing_tier={10: 1.0, 11: 1.1}.get(features.get("raytracing_tier")))
+        tier = film.native_raytracing_tier(features.get("raytracing_tier"))
+        selection = film.normalize_probe_features(features)
+        report["host"]["dxr_tier"] = int(tier) if tier is not None else None
+        report["host"]["dxr_tier_status"] = ("unknown" if tier is None else
+            "unsupported" if tier is film.NativeRaytracingTier.NOT_SUPPORTED else "reported")
+        shader_model = selection["highest_shader_model"]
+        report["host"]["shader_model"] = f"D3D12_SHADER_MODEL_{shader_model}" if shader_model else None
         env = {**os.environ, "NODEWERK_ADAPTER_LUID": adapter["adapter_luid"]}
         size, ticks, thresholds = values["render_size"], values["ticks"], values["tolerances"]
         run_root = raw / "runs"
@@ -589,6 +607,9 @@ def run(*, root: Path, output: Path, index_sha: str, revision: str, tree: str, a
                 report["arms"][name] = unavailable("not_built_by_hosted_capability")
                 continue
             if name == "dxr":
+                if tier is None or selection["highest_shader_model"] is None:
+                    report["arms"][name] = unavailable("physical_d3d12_feature_query_unknown")
+                    continue
                 try:
                     film.select_lowering("dxr_inline_ray_query", selection)
                 except film.EvidenceError:
@@ -669,8 +690,10 @@ def run(*, root: Path, output: Path, index_sha: str, revision: str, tree: str, a
                                     all("matched_physical_common" in row for row in lane_reports),
                                 "display_pixels": unavailable("GPU_readback_is_not_a_display_capture")},
                 "metrics": metrics, "budgets": budget,
-                "performance": performance(lane / "visible", pilot, native["present_sync_interval"])
-                               if shown else unavailable("functional_run_failed"),
+                "performance": (unavailable("functional_run_failed") if not shown
+                                else unavailable("timing_not_requested") if not collect_timing
+                                else unavailable("collector_not_bundled") if not use_etw
+                                else performance(lane / "visible", pilot, native["present_sync_interval"])),
                 "identity": {key: arm[key] for key in ("executable_sha256", "package_sha256", "manifest_sha256", "song_sha256")},
             }
             report["arms"][name] = arm_report
@@ -691,6 +714,92 @@ def run(*, root: Path, output: Path, index_sha: str, revision: str, tree: str, a
     return report
 
 
+def reanalyze(*, root: Path, index_sha: str, revision: str, tree: str, evidence: Path, arm: str,
+              summary_sha: str, capability_sha: str, launch_sha: str, collector_sha: str,
+              csv_sha: str) -> dict:
+    """Analyze one retained successful Windows capture without writing to either input."""
+    root, evidence = root.resolve(strict=True), evidence.resolve(strict=True)
+    values = verify(root, index_sha=index_sha, revision=revision, tree=tree)
+    if root == evidence or evidence.is_relative_to(root) or root.is_relative_to(evidence):
+        raise HandoffError("historical evidence and verified bundle must be separate")
+    if arm not in values["arms"] or values["files"].get(PRESENTMON) != PRESENTMON_HASH:
+        raise HandoffError("historical arm or pinned collector is not in this verified bundle")
+    original = values["arms"][arm]
+    def read(relative, expected):
+        data = member(evidence, relative).read_bytes()
+        if digest(data) != hash_value(expected):
+            raise HandoffError(f"historical {Path(relative).name} hash differs from its retained copy")
+        return data
+
+    summary = json_object(read("summary.json", summary_sha))
+    prefix = f"private/runs/{arm}/visible/"
+    capability = json_object(read("private/capability.json", capability_sha))
+    launch = json_object(read(prefix + "launch.json", launch_sha))
+    metadata = json_object(read(prefix + timing.PRESENTMON_METADATA, collector_sha))
+    csv_sha = hash_value(csv_sha)
+    read(prefix + timing.PRESENTMON_CSV, csv_sha)
+    identity = {key: original[key] for key in ("executable_sha256", "package_sha256", "manifest_sha256", "song_sha256")}
+    arm_report = summary["arms"][arm]
+    if (summary.get("format") != "nw13.physical-film-evidence" or summary.get("version") != 1
+            or summary.get("status") != "completed" or summary.get("bundle_unchanged") is not True
+            or summary.get("bundle_index_sha256") != hash_value(index_sha)
+            or summary.get("revision") != revision or summary.get("tree") != tree
+            or summary.get("render_size") != values["render_size"]
+            or summary.get("window_mode") != "maximized" or summary["host"].get("status") != "physical"
+            or arm_report.get("identity") != identity
+            or arm_report["functional"].get("status") != "pass"
+            or arm_report["functional"].get("queried_adapter_bound") is not True):
+        raise HandoffError("historical summary is not a completed physical run of the selected arm")
+    args = launch["argv"]
+    if (not isinstance(args, list) or len(args) != 4 or args[1:] != ["--maximized", "--frames", "420"]
+            or type(launch.get("returncode")) is not int or launch["returncode"] != 0
+            or launch.get("timed_out") is not False
+            or launch.get("presentmon") != timing.PRESENTMON_CSV or launch.get("presentmon_error") is not None
+            or launch.get("executable_sha256", identity["executable_sha256"]) != identity["executable_sha256"]
+            or launch.get("presentmon_sha256", PRESENTMON_HASH) != PRESENTMON_HASH):
+        raise HandoffError("historical launch is not the successful bound timing run")
+    launched = PureWindowsPath(args[0])
+    arm_parts = PureWindowsPath(original["executable"]).parts
+    if (not launched.is_absolute() or ".." in launched.parts
+            or tuple(part.casefold() for part in launched.parts[-len(arm_parts):]) !=
+                tuple(part.casefold() for part in arm_parts)):
+        raise HandoffError("historical launch does not name the selected verified arm")
+    try:
+        timing.presentmon_binding(metadata, process_id=launch["pid"], expected_tool_sha256=PRESENTMON_HASH)
+    except timing.PresentMonError as exc:
+        raise HandoffError(exc.code) from exc
+    old_bundle = launched.parents[len(arm_parts) - 1]
+    old_collector = PureWindowsPath(metadata["presentmon_path"])
+    old_csv = PureWindowsPath(metadata["command"][metadata["command"].index("--output_file") + 1])
+    csv_parts = PureWindowsPath(prefix + timing.PRESENTMON_CSV).parts
+    if (old_collector != old_bundle / PureWindowsPath(PRESENTMON)
+            or not old_csv.is_absolute() or ".." in old_csv.parts
+            or tuple(part.casefold() for part in old_csv.parts[-len(csv_parts):]) !=
+                tuple(part.casefold() for part in csv_parts)
+            or metadata.get("csv_sha256", csv_sha) not in (None, csv_sha)):
+        raise HandoffError("historical collector or CSV belongs to a different bundle or arm")
+    adapter = capability["adapter"]
+    if (capability.get("status") != "ok" or not LUID.fullmatch(adapter.get("adapter_luid", ""))
+            or summary["host"].get("device") != devices.device_key(adapter["vendor_id"], adapter["device_id"])
+            or not any(item.get("software") is False and all(item.get(key) == adapter.get(key)
+               for key in ("vendor_id", "device_id", "adapter_name")) for item in capability["adapters"])):
+        raise HandoffError("historical physical adapter identity differs")
+    logs = [read(prefix + f"{name}.bin", launch[f"{name}_sha256"]) for name in ("stdout", "stderr")]
+    native = device_report(evidence / prefix, launch, adapter, capability["driver_version"], logs=logs)
+    if (not native["same_adapter"] or not native["successful_present_calls"]
+            or native["successful_present_calls"] != arm_report["metrics"].get("successful_present_calls")
+            or native["present_sync_interval"] != arm_report["metrics"].get("present_sync_interval")):
+        raise HandoffError("historical process logs do not bind the physical adapter and Present observations")
+    measured = performance(evidence / prefix, launch, native["present_sync_interval"],
+                           historical_csv_sha=csv_sha, metadata=metadata)
+    return {"format": "nw13.physical-film-timing-reanalysis", "version": 1, "scope": "historical_only",
+            "revision": revision, "tree": tree, "bundle_index_sha256": hash_value(index_sha),
+            "arm": arm, "identity": identity, "device": summary["host"]["device"],
+            "input_sha256": {key: hash_value(value) for key, value in (
+                ("summary", summary_sha), ("capability", capability_sha), ("launch", launch_sha),
+                ("collector", collector_sha), ("csv", csv_sha))}, "performance": measured}
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_subparsers(dest="action", required=True)
@@ -704,7 +813,7 @@ def main(argv=None) -> int:
     make.add_argument("--inspection-production", type=Path)
     make.add_argument("--template", type=Path)
     make.add_argument("--dxc", type=Path)
-    for mode in ("verify", "run"):
+    for mode in ("verify", "run", "reanalyze"):
         command = actions.add_parser(mode)
         command.add_argument("--root", type=Path, required=True)
         for name in ("index-sha", "revision", "tree"):
@@ -713,6 +822,11 @@ def main(argv=None) -> int:
             command.add_argument("--output", type=Path, required=True)
             command.add_argument("--adapter-luid", required=True)
             command.add_argument("--collect-timing", action="store_true")
+        elif mode == "reanalyze":
+            command.add_argument("--evidence", required=True, type=Path)
+            command.add_argument("--arm", required=True, choices=tuple(ARMS))
+            for name in ("summary-sha", "capability-sha", "launch-sha", "collector-sha", "csv-sha"):
+                command.add_argument("--" + name, required=True)
     args = vars(parser.parse_args(argv))
     action = args.pop("action")
     try:
@@ -733,6 +847,8 @@ def main(argv=None) -> int:
         elif action == "verify":
             result = verify(**args)
             print(json.dumps({key: result[key] for key in ("revision", "tree", "render_size", "ticks")}))
+        elif action == "reanalyze":
+            print(json.dumps(reanalyze(**args), sort_keys=True))
         else:
             result = run(**args)
             required = [row for row in result["arms"].values() if "functional" in row]

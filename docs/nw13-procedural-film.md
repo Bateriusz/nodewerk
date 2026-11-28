@@ -236,6 +236,24 @@ hinged door, parallax, corridor cut, camera motion around frozen action,
 reverse/resume transport states, a synchronized flash/transient,
 depth-occluded particles, a moving shadow and a material-aware reflection.
 
+The warm doorway lamp's emitter sits just below and inboard of its opaque
+globe, rather than inside it. The same steady light reaches the corridor floor
+and room surfaces without the timed flash. CPU checks isolate it from
+emission, flash and reflections, show that moving it inside the globe blocks
+direct light again, and verify a cast shadow from the separate moving
+occluder. A mirror bounce and the short flash are checked independently. Both
+editable raster profiles share these authored inputs. These checks and the
+retained images are CPU evidence, not a new physical GPU capture or a change
+to the native admission limits.
+
+Regression crops use the inspection profile's true 320×180 pixel centers,
+without rendering additional full inspection frames in CI. Existing 48×27
+native scene probes reuse the lit frame and compare two independent graph
+edits: turning the practical off and placing it back inside its globe. Their
+nonflash receiver must darken by the expected amount and the dark controls
+must agree, for Common and any admitted inline-ray arm. This does not add a
+physical run or change artifact byte policy.
+
 Every visible/audible contribution maps to editable nodes, scene objects and
 audio tracks, with catalog provenance or an
 `independently_authored` label. The retained evidence is:

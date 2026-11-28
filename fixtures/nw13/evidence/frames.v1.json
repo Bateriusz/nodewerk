@@ -14,6 +14,39 @@
     "rmse": 0.01
   },
   "render_cost": {
+    "dispatch_workload": {
+      "profile": "verification-v1",
+      "raster": [
+        48,
+        27
+      ],
+      "thread_group": [
+        8,
+        8,
+        1
+      ],
+      "dispatch_groups": [
+        6,
+        4,
+        1
+      ],
+      "rounded_lanes_per_pass": 1536,
+      "tile_slots_per_pass": 2400,
+      "scene_samples_per_pass": 1914,
+      "max_scene_passes": 2,
+      "max_rays_per_sample": 6,
+      "max_weighted_field_operations": 126186192,
+      "max_object_frame_initializations": 52224,
+      "max_ray_object_candidates": 390456,
+      "max_particle_evaluations": 367488,
+      "max_bloom_taps": 23328,
+      "max_tonemap_pixels": 2592,
+      "max_history_composite_lanes": 1536,
+      "max_history_copy_bytes": 41472,
+      "rgba32f_surface_bytes": 20736,
+      "work_units": 137133840,
+      "work_limit": 150000000
+    },
     "objects": 17,
     "geometry_nodes": 51,
     "estimated_evaluation_steps": 3456,
@@ -32,20 +65,20 @@
       "flash_active": false,
       "events": [],
       "file": "frames/tick-000000.ppm",
-      "sha256": "sha256:3c56822100fa812e3cf0aea618d4d6e01c2fe2dacb4669290dd107cb41adea6c",
+      "sha256": "sha256:96807d263afee2d0caed78ffb5034bfb9cc32f757f37110ce8a8edafa094fb4d",
       "shot_id": "corridor_approach",
       "cut": false,
+      "history_predecessor_tick": null,
       "regions": {
-        "center": 0.23616486536410403,
-        "left": 0.24180617134556454,
-        "right": 0.2532648163232578
+        "center": 0.34795788616889467,
+        "left": 0.26328154332112824,
+        "right": 0.2744298278238551
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      },
-      "history_predecessor_tick": null
+      }
     },
     {
       "tick": 96000,
@@ -65,20 +98,20 @@
         }
       ],
       "file": "frames/tick-096000.ppm",
-      "sha256": "sha256:3d647ae845717929a2d9059c301464935da3080b8b7d6d794919bf3bc50f00c5",
+      "sha256": "sha256:b8a7091498fc1ce8acec6d80d2f085d1c1e5b6cfc1592ff9b6a62bd8fbb173b2",
       "shot_id": "corridor_approach",
       "cut": false,
+      "history_predecessor_tick": 95600,
       "regions": {
-        "center": 0.23660893299369498,
-        "left": 0.24247567413304702,
-        "right": 0.23673607019185247
+        "center": 0.36278162785091206,
+        "left": 0.3430931363122565,
+        "right": 0.3096299365569956
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      },
-      "history_predecessor_tick": 95600
+      }
     },
     {
       "tick": 120000,
@@ -95,20 +128,20 @@
         }
       ],
       "file": "frames/tick-120000.ppm",
-      "sha256": "sha256:512b4c732851b33aa83e70646ade500025b331394955d57c4aeb5eaa355bd0a3",
+      "sha256": "sha256:ab2d31010a1b184a0a94e5d8d0235fe096d3413be49b7dfabe2ce33eb47df820",
       "shot_id": "corridor_approach",
       "cut": false,
+      "history_predecessor_tick": 119600,
       "regions": {
-        "center": 0.23910521492034748,
-        "left": 0.24241698770286244,
-        "right": 0.23940688177358627
+        "center": 0.29038051560619876,
+        "left": 0.36076169512173717,
+        "right": 0.32980988781738035
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      },
-      "history_predecessor_tick": 119600
+      }
     },
     {
       "tick": 123200,
@@ -119,20 +152,20 @@
       "flash_active": false,
       "events": [],
       "file": "frames/tick-123200.ppm",
-      "sha256": "sha256:1c71cda597c177f3e5610bfe3e5de742b4e34faa7204558283ea9f24e64453e2",
+      "sha256": "sha256:21044ad15265601486d0d234621961cef2271bc27f2159c996889ac09fcda563",
       "shot_id": "corridor_approach",
       "cut": false,
+      "history_predecessor_tick": 122800,
       "regions": {
-        "center": 0.23898455808015895,
-        "left": 0.24241698770286244,
-        "right": 0.23979836522105177
+        "center": 0.2886103816340132,
+        "left": 0.36265149022807225,
+        "right": 0.33126539725635273
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      },
-      "history_predecessor_tick": 122800
+      }
     },
     {
       "tick": 144000,
@@ -149,20 +182,20 @@
         }
       ],
       "file": "frames/tick-144000.ppm",
-      "sha256": "sha256:c1606806b70d88ecde1359e308c0e153f65eb2998d8e10f293896702aa261830",
+      "sha256": "sha256:bf5ccd67cff4725d5795e7f4fdd786b74e0740cc13c71a252a79c2d1b665b876",
       "shot_id": "corridor_approach",
       "cut": false,
+      "history_predecessor_tick": 143600,
       "regions": {
-        "center": 0.24476747300439958,
-        "left": 0.24235830127267788,
-        "right": 0.24307920199923955
+        "center": 0.2771305961493009,
+        "left": 0.3815648509734025,
+        "right": 0.3270546903345447
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      },
-      "history_predecessor_tick": 143600
+      }
     },
     {
       "tick": 148800,
@@ -182,20 +215,20 @@
         }
       ],
       "file": "frames/tick-148800.ppm",
-      "sha256": "sha256:32a4f6a5f3eb8f00893826bcad7da654bd9474fc113d6e0ecde75d9e335962d1",
+      "sha256": "sha256:a3e409f927b9c6192d05789caeb2c54d485aa2652c291f85574c664210d20774",
       "shot_id": "corridor_approach",
       "cut": false,
+      "history_predecessor_tick": 148400,
       "regions": {
-        "center": 0.40294321052023313,
-        "left": 0.28752996095845407,
-        "right": 0.3272624594209948
+        "center": 0.4346636651260404,
+        "left": 0.4057510280751024,
+        "right": 0.38078456670352695
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      },
-      "history_predecessor_tick": 148400
+      }
     },
     {
       "tick": 150400,
@@ -206,20 +239,20 @@
       "flash_active": false,
       "events": [],
       "file": "frames/tick-150400.ppm",
-      "sha256": "sha256:d50b37c334fff3e736d8d9f73d0890c7dc4e2d5a200041e4d0dfa488198a1530",
+      "sha256": "sha256:9bb16f043e07637cdcf59afdf8824d8739b4869331e4eceec80ed38e109f4a3f",
       "shot_id": "corridor_approach",
       "cut": false,
+      "history_predecessor_tick": 150000,
       "regions": {
-        "center": 0.31297858270818113,
-        "left": 0.26193214542879617,
-        "right": 0.2813688151904131
+        "center": 0.3451448519722195,
+        "left": 0.39699133578930695,
+        "right": 0.35035745155563086
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      },
-      "history_predecessor_tick": 150000
+      }
     },
     {
       "tick": 191600,
@@ -230,20 +263,20 @@
       "flash_active": false,
       "events": [],
       "file": "frames/tick-191600.ppm",
-      "sha256": "sha256:4a832aa69af00f00d17232f34a844df77ab2746eef82faba114f94afa059569a",
+      "sha256": "sha256:40bc4c88ffd60cb7ffa5b092243c601bad680bc4d131b41d93c9c08a9fa879d7",
       "shot_id": "corridor_approach",
       "cut": false,
+      "history_predecessor_tick": 191200,
       "regions": {
-        "center": 0.24309002880112743,
-        "left": 0.24202378862062585,
-        "right": 0.24732930476906897
+        "center": 0.28100428946007405,
+        "left": 0.4387963373735333,
+        "right": 0.32726676925754883
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      },
-      "history_predecessor_tick": 191200
+      }
     },
     {
       "tick": 192000,
@@ -260,20 +293,20 @@
         }
       ],
       "file": "frames/tick-192000.ppm",
-      "sha256": "sha256:22683ceac386b52256779d876240a13c0306250c2323eb5dbc864692e904c153",
+      "sha256": "sha256:6bcff8e246fd8c13a2a6988edeab930b1b41e6e11f8b96cc65b5f4a5c410bf53",
       "shot_id": "room_turn",
       "cut": true,
+      "history_predecessor_tick": null,
       "regions": {
-        "center": 0.23716282612986753,
-        "left": 0.23842631045031173,
-        "right": 0.24275595150268908
+        "center": 0.27575799612548607,
+        "left": 0.4358205491487817,
+        "right": 0.2932179899092116
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      },
-      "history_predecessor_tick": null
+      }
     },
     {
       "tick": 192400,
@@ -284,20 +317,20 @@
       "flash_active": false,
       "events": [],
       "file": "frames/tick-192400.ppm",
-      "sha256": "sha256:768dc6d43e8e34fe7afcd416c803d718acc012f83e4dacf01e45debf80095159",
+      "sha256": "sha256:5fa09636c9141ac0f31eb696a32f31632e7ee22f34346585a28949e83d3ca7ec",
       "shot_id": "room_turn",
       "cut": false,
+      "history_predecessor_tick": 192000,
       "regions": {
-        "center": 0.23716282612986753,
-        "left": 0.23842631045031173,
-        "right": 0.24275595150268908
+        "center": 0.2757588979548429,
+        "left": 0.43582205756112113,
+        "right": 0.29324000029473274
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      },
-      "history_predecessor_tick": 192000
+      }
     },
     {
       "tick": 240000,
@@ -323,20 +356,20 @@
         }
       ],
       "file": "frames/tick-240000.ppm",
-      "sha256": "sha256:2d8887c41ff6dad2f5e4ed6d1e5845f224f91da30be73088f0250f235cea309f",
+      "sha256": "sha256:5f6fef12036a42236672046ab84c3bb4aa0a798d32157c61d867ec3b3724de6e",
       "shot_id": "room_turn",
       "cut": false,
+      "history_predecessor_tick": null,
       "regions": {
-        "center": 0.23814150865676906,
-        "left": 0.22997546450373402,
-        "right": 0.22285671664248102
+        "center": 0.27352265322278624,
+        "left": 0.37427804844087426,
+        "right": 0.3977798502048008
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      },
-      "history_predecessor_tick": null
+      }
     },
     {
       "tick": 252000,
@@ -347,20 +380,20 @@
       "flash_active": false,
       "events": [],
       "file": "frames/tick-252000.ppm",
-      "sha256": "sha256:78677759c56bfc199b1747e5869899a3eb319a9d270e0b717384c1a94b7360d3",
+      "sha256": "sha256:12d509ab82376cbf73e007a5a91557917a6eaf8a7c6b7fdbaf0490f3840e8cf8",
       "shot_id": "room_turn",
       "cut": false,
+      "history_predecessor_tick": 251600,
       "regions": {
-        "center": 0.23758226149853962,
-        "left": 0.22698245656432103,
-        "right": 0.222011535500408
+        "center": 0.2809636998595509,
+        "left": 0.37823052197914303,
+        "right": 0.38546846931738094
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      },
-      "history_predecessor_tick": 251600
+      }
     },
     {
       "tick": 264000,
@@ -378,20 +411,20 @@
         }
       ],
       "file": "frames/tick-264000.ppm",
-      "sha256": "sha256:d9ea6e533c12ad8051d17a11f80aa5ec8bfaf34e9a1956b913d4af63809882bc",
+      "sha256": "sha256:b4a3f6dff05f00e72c5349efdb3b59ff7c618582d510da798ad40af7a06025b4",
       "shot_id": "room_turn",
       "cut": false,
+      "history_predecessor_tick": null,
       "regions": {
-        "center": 0.2368832025507528,
-        "left": 0.22727588871524404,
-        "right": 0.2202131751906504
+        "center": 0.2781613294955228,
+        "left": 0.3800900936316279,
+        "right": 0.38921891089423455
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      },
-      "history_predecessor_tick": null
+      }
     },
     {
       "tick": 288000,
@@ -402,27 +435,27 @@
       "flash_active": false,
       "events": [],
       "file": "frames/tick-288000.ppm",
-      "sha256": "sha256:3bd93cf8ba9d2234e2dd7f8388dbbf9b6c710658c411907e77916b2950a26b2d",
+      "sha256": "sha256:2f10940820f36d5cf29cba0b29b69de7b3f398ca2c11ddceb8aa657f99c0519f",
       "shot_id": "room_turn",
       "cut": false,
+      "history_predecessor_tick": 287600,
       "regions": {
-        "center": 0.23545321490639323,
-        "left": 0.2268063972737675,
-        "right": 0.21903778107808491
+        "center": 0.28124648256715484,
+        "left": 0.40706213703357397,
+        "right": 0.40258609690926633
       },
       "region_checks": {
         "center": true,
         "left": true,
         "right": true
-      },
-      "history_predecessor_tick": 287600
+      }
     }
   ],
   "region_checks": [
     {
       "tick": 0,
       "region": "center",
-      "value": 0.23616486536410403,
+      "value": 0.34795788616889467,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -432,7 +465,7 @@
     {
       "tick": 0,
       "region": "left",
-      "value": 0.24180617134556454,
+      "value": 0.26328154332112824,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -442,7 +475,7 @@
     {
       "tick": 0,
       "region": "right",
-      "value": 0.2532648163232578,
+      "value": 0.2744298278238551,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -452,7 +485,7 @@
     {
       "tick": 96000,
       "region": "center",
-      "value": 0.23660893299369498,
+      "value": 0.36278162785091206,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -462,7 +495,7 @@
     {
       "tick": 96000,
       "region": "left",
-      "value": 0.24247567413304702,
+      "value": 0.3430931363122565,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -472,7 +505,7 @@
     {
       "tick": 96000,
       "region": "right",
-      "value": 0.23673607019185247,
+      "value": 0.3096299365569956,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -482,7 +515,7 @@
     {
       "tick": 120000,
       "region": "center",
-      "value": 0.23910521492034748,
+      "value": 0.29038051560619876,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -492,7 +525,7 @@
     {
       "tick": 120000,
       "region": "left",
-      "value": 0.24241698770286244,
+      "value": 0.36076169512173717,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -502,7 +535,7 @@
     {
       "tick": 120000,
       "region": "right",
-      "value": 0.23940688177358627,
+      "value": 0.32980988781738035,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -512,7 +545,7 @@
     {
       "tick": 123200,
       "region": "center",
-      "value": 0.23898455808015895,
+      "value": 0.2886103816340132,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -522,7 +555,7 @@
     {
       "tick": 123200,
       "region": "left",
-      "value": 0.24241698770286244,
+      "value": 0.36265149022807225,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -532,7 +565,7 @@
     {
       "tick": 123200,
       "region": "right",
-      "value": 0.23979836522105177,
+      "value": 0.33126539725635273,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -542,7 +575,7 @@
     {
       "tick": 144000,
       "region": "center",
-      "value": 0.24476747300439958,
+      "value": 0.2771305961493009,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -552,7 +585,7 @@
     {
       "tick": 144000,
       "region": "left",
-      "value": 0.24235830127267788,
+      "value": 0.3815648509734025,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -562,7 +595,7 @@
     {
       "tick": 144000,
       "region": "right",
-      "value": 0.24307920199923955,
+      "value": 0.3270546903345447,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -572,7 +605,7 @@
     {
       "tick": 148800,
       "region": "center",
-      "value": 0.40294321052023313,
+      "value": 0.4346636651260404,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -582,7 +615,7 @@
     {
       "tick": 148800,
       "region": "left",
-      "value": 0.28752996095845407,
+      "value": 0.4057510280751024,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -592,7 +625,7 @@
     {
       "tick": 148800,
       "region": "right",
-      "value": 0.3272624594209948,
+      "value": 0.38078456670352695,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -602,7 +635,7 @@
     {
       "tick": 150400,
       "region": "center",
-      "value": 0.31297858270818113,
+      "value": 0.3451448519722195,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -612,7 +645,7 @@
     {
       "tick": 150400,
       "region": "left",
-      "value": 0.26193214542879617,
+      "value": 0.39699133578930695,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -622,7 +655,7 @@
     {
       "tick": 150400,
       "region": "right",
-      "value": 0.2813688151904131,
+      "value": 0.35035745155563086,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -632,7 +665,7 @@
     {
       "tick": 191600,
       "region": "center",
-      "value": 0.24309002880112743,
+      "value": 0.28100428946007405,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -642,7 +675,7 @@
     {
       "tick": 191600,
       "region": "left",
-      "value": 0.24202378862062585,
+      "value": 0.4387963373735333,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -652,7 +685,7 @@
     {
       "tick": 191600,
       "region": "right",
-      "value": 0.24732930476906897,
+      "value": 0.32726676925754883,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -662,7 +695,7 @@
     {
       "tick": 192000,
       "region": "center",
-      "value": 0.23716282612986753,
+      "value": 0.27575799612548607,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -672,7 +705,7 @@
     {
       "tick": 192000,
       "region": "left",
-      "value": 0.23842631045031173,
+      "value": 0.4358205491487817,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -682,7 +715,7 @@
     {
       "tick": 192000,
       "region": "right",
-      "value": 0.24275595150268908,
+      "value": 0.2932179899092116,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -692,7 +725,7 @@
     {
       "tick": 192400,
       "region": "center",
-      "value": 0.23716282612986753,
+      "value": 0.2757588979548429,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -702,7 +735,7 @@
     {
       "tick": 192400,
       "region": "left",
-      "value": 0.23842631045031173,
+      "value": 0.43582205756112113,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -712,7 +745,7 @@
     {
       "tick": 192400,
       "region": "right",
-      "value": 0.24275595150268908,
+      "value": 0.29324000029473274,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -722,7 +755,7 @@
     {
       "tick": 240000,
       "region": "center",
-      "value": 0.23814150865676906,
+      "value": 0.27352265322278624,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -732,7 +765,7 @@
     {
       "tick": 240000,
       "region": "left",
-      "value": 0.22997546450373402,
+      "value": 0.37427804844087426,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -742,7 +775,7 @@
     {
       "tick": 240000,
       "region": "right",
-      "value": 0.22285671664248102,
+      "value": 0.3977798502048008,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -752,7 +785,7 @@
     {
       "tick": 252000,
       "region": "center",
-      "value": 0.23758226149853962,
+      "value": 0.2809636998595509,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -762,7 +795,7 @@
     {
       "tick": 252000,
       "region": "left",
-      "value": 0.22698245656432103,
+      "value": 0.37823052197914303,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -772,7 +805,7 @@
     {
       "tick": 252000,
       "region": "right",
-      "value": 0.222011535500408,
+      "value": 0.38546846931738094,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -782,7 +815,7 @@
     {
       "tick": 264000,
       "region": "center",
-      "value": 0.2368832025507528,
+      "value": 0.2781613294955228,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -792,7 +825,7 @@
     {
       "tick": 264000,
       "region": "left",
-      "value": 0.22727588871524404,
+      "value": 0.3800900936316279,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -802,7 +835,7 @@
     {
       "tick": 264000,
       "region": "right",
-      "value": 0.2202131751906504,
+      "value": 0.38921891089423455,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -812,7 +845,7 @@
     {
       "tick": 288000,
       "region": "center",
-      "value": 0.23545321490639323,
+      "value": 0.28124648256715484,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -822,7 +855,7 @@
     {
       "tick": 288000,
       "region": "left",
-      "value": 0.2268063972737675,
+      "value": 0.40706213703357397,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -832,7 +865,7 @@
     {
       "tick": 288000,
       "region": "right",
-      "value": 0.21903778107808491,
+      "value": 0.40258609690926633,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -843,17 +876,17 @@
   "region_checks_passed": true,
   "contact_sheet": {
     "file": "contact_sheet.ppm",
-    "sha256": "sha256:c4fd9398499b0ed359a063b6510bae6abff2d7af1ecc59f8ad3da00ec6990c1f"
+    "sha256": "sha256:b608f55dd3258457be8046b7090952f4ff61cc0b96f4355e7223ef6f0f859dc1"
   },
   "sources": {
     "graph": {
       "path": "fixtures/nw13/hotel_corridor.nwgraph",
-      "sha256": "sha256:c16b2f66f7054c6e59444b3a2cded62f557534a61696dd2c06b47579d2ea0bdb",
-      "semantic_hash": "sha256:v1:60a2dc8a56ceb13d503207cca35b832f362a69b3393557b021d6a79ee0bc6e53"
+      "sha256": "sha256:88a0748a8441e7c8ffe7ddd092e277cd1e5ec29307bd7e190ca37e2f4335ea85",
+      "semantic_hash": "sha256:v1:7918e88a3ef8f40e719e3978d5b303aed61771ec56df910bb118abf648af0b6c"
     },
     "geometry": {
       "source": "graph",
-      "semantic_hash": "sha256:v1:6f712d2326d83fa1f27364acfe87a83fa7837311672fb2f25b49e9b27dc263d0",
+      "semantic_hash": "sha256:v1:92cc6bbf07343d49b8d3bb416627a9b16535452660786dc16ee86e8bebfb4837",
       "bounds": {
         "minimum": [
           -5.858118672887135,
@@ -876,7 +909,7 @@
     },
     "scene": {
       "source": "graph",
-      "sha256": "sha256:62466bb9459ac7074309e758ddc949e470905e2a2e7a596c3daaf1a6a7abf886",
+      "sha256": "sha256:c4223276535401f6f78fdb94e52b39e4f4ac1ad93994a6b9fc34e573cdc82f97",
       "objects": 17,
       "shots": [
         "corridor_approach",
@@ -893,11 +926,11 @@
     "import_inputs": {
       "geometry": {
         "path": "fixtures/nw13/geometry_room.json",
-        "sha256": "sha256:a7861129d21a4e08624d53a1a7c075c2f8480fc487c576b6aebc45ece63f825b"
+        "sha256": "sha256:93fd0b5763d3bf5bc996c9db25cd379d25b5e4ed451109f27987b37099a9b2a5"
       },
       "scene": {
         "path": "fixtures/nw13/hotel_corridor.scene.json",
-        "sha256": "sha256:acd60fadb8caab0ad5c2fb941fa7d04e281c37d2280006b7beb64a4232d78433"
+        "sha256": "sha256:9bd3bf361e5d10b8de0079d02e3d3dcc524725b7e556b53e366afa7ec3d7a552"
       }
     }
   }

@@ -8,6 +8,7 @@ budgets, and encodes the measured/unavailable distinction required by ADR 0009.
 
 from __future__ import annotations
 
+from enum import IntEnum
 import hashlib
 import json
 import subprocess
@@ -71,6 +72,40 @@ DEFAULT_CAPABILITIES = {
 }
 
 SHADER_MODEL_ORDER = {f"6_{minor}": 60 + minor for minor in range(10)}
+
+
+class NativeRaytracingTier(IntEnum):
+    """Values reported by D3D12_FEATURE_D3D12_OPTIONS5, not a GPU-name heuristic."""
+    NOT_SUPPORTED = 0
+    TIER_1_0 = 10
+    TIER_1_1 = 11
+    TIER_1_2 = 12
+
+
+def native_raytracing_tier(value: Any) -> NativeRaytracingTier | None:
+    if type(value) is not int:
+        return None
+    try:
+        return NativeRaytracingTier(value)
+    except ValueError:
+        return None
+
+
+def normalize_probe_features(features: Mapping[str, Any]) -> dict[str, Any]:
+    """Project checked native enums to the existing portable evidence schema."""
+    tier = native_raytracing_tier(features.get("raytracing_tier"))
+    shader = features.get("highest_shader_model")
+    level = features.get("d3d_feature_level")
+    mesh = features.get("mesh_shader_tier")
+    shader = shader.removeprefix("D3D12_SHADER_MODEL_") if isinstance(shader, str) else None
+    level = level.removeprefix("D3D_FEATURE_LEVEL_") if isinstance(level, str) else None
+    return {
+        "d3d_feature_level": level,
+        "highest_shader_model": shader if shader in SHADER_MODEL_ORDER else None,
+        "mesh_shader_tier": 1 if mesh == "D3D12_MESH_SHADER_TIER_1" else None,
+        # Preserve explicit native NOT_SUPPORTED as zero, unknown as null.
+        "raytracing_tier": int(tier) / 10 if tier is not None else None,
+    }
 
 
 def _shader_model_at_least(value: Any, required: str) -> bool:
@@ -201,7 +236,7 @@ def select_lowering(
         }
     if feature == "dxr_inline_ray_query":
         tier = caps.get("raytracing_tier")
-        if not isinstance(tier, (int, float)) or tier < 1.1:
+        if not isinstance(tier, (int, float)) or not tier >= 1.1:
             _unsupported(feature, "DXR inline ray queries require queried raytracing tier >= 1.1", tier=tier)
         if not _shader_model_at_least(caps.get("highest_shader_model"), "6_5"):
             _unsupported(feature, "DXR inline ray queries require shader model 6.5", shader_model=caps.get("highest_shader_model"))

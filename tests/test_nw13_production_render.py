@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 import nw13_geometry as geometry  # noqa: E402
+import nw13_film as film  # noqa: E402
 import nw13_production as production  # noqa: E402
 import nw13_render as render  # noqa: E402
 import nw13_scene as scene_module  # noqa: E402
@@ -118,6 +120,136 @@ def test_reference_renderer_does_not_claim_optional_execution() -> None:
     scene = scene_module.compile_scene(json.loads((REPO_ROOT / "fixtures/nw13/hotel_corridor.scene.json").read_text()))
     with pytest.raises(render.RenderError, match="native"):
         render.render_backend(scene, document, "dxr", width=24, height=14)
+
+
+def test_authored_steady_lamp_lights_both_shots_and_leaves_real_shadows(monkeypatch) -> None:
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    graph, (prepared, *_rest) = production.film_graph(REPO_ROOT, document)
+    oracle = film.FrameOracle(graph, graph.nodes["film"])
+    renderer = oracle.renderer
+    assert renderer.shadows
+
+    def draw(tick, *, lamp=1.0, target=renderer):
+        return target.render(
+            tick, action_tick=oracle.timing.at(tick)["action_tick"],
+            light_gain={"lamp_light": lamp, "flash_light": 0.0},
+        )[0]
+
+    def brightness(image, region):
+        return render.luma(image, oracle.width, oracle.height, *region)
+
+    # Measure direct light on visible nonemissive surfaces rather than the
+    # glowing globe, flash, reflected radiance, or exposure/history.
+    renderer.reflection_bounces = 0
+    lamp = oracle.scene.lights["lamp_light"]
+    globe = renderer.geometry_index[oracle.scene.objects["lamp"].geometry]
+    blocked_lamp = replace(lamp, position=tuple(globe["parameters"]["offset"]))
+    for tick, region, minimum in (
+        (0, (19, 18, 25, 21), 0.12),         # corridor floor
+        (240000, (4, 2, 9, 6), 0.15),       # room surface
+        (288000, (1, 0, 5, 6), 0.15),       # later in the room shot
+    ):
+        lit, off = draw(tick), draw(tick, lamp=0.0)
+        assert brightness(lit, region) - brightness(off, region) > minimum
+        if tick == 0:
+            x0, y0, x1, y1 = region
+            crop, _ = renderer.render_region(tick, region, light_gain={"flash_light": 0.0})
+            assert crop == [
+                c for y in range(y0, y1) for c in lit[(y * oracle.width + x0) * 4:(y * oracle.width + x1) * 4]
+            ]
+        with monkeypatch.context() as patches:
+            patches.setitem(oracle.scene.lights, "lamp_light", blocked_lamp)
+            assert brightness(draw(tick), region) == pytest.approx(brightness(off, region), abs=1e-6)
+
+    # A different authored object must still intercept the lamp on the arch.
+    # Remove just that blocker, not the shadow system or the receiver.
+    unblocked = replace(oracle.scene, objects={
+        key: obj for key, obj in oracle.scene.objects.items() if key != "occluder"
+    })
+    settings = oracle.settings["rendering"]
+    alternate = render.Renderer(
+        unblocked, prepared.document, width=oracle.width, height=oracle.height,
+        max_steps=settings["max_steps"], samples=settings["samples"], epsilon=settings["epsilon"],
+        max_distance=settings["max_distance"], shadows=settings["shadows"],
+        reflection_bounces=0, miss_radiance=settings["miss_radiance"],
+    )
+    arch = (4, 3, 5, 7)
+    shaded = brightness(draw(0), arch)
+    assert shaded == pytest.approx(brightness(draw(0, lamp=0.0), arch), abs=1e-6)
+    assert brightness(draw(0, target=alternate), arch) - shaded > 0.02
+
+    # The authored mirror retains a separate one-bounce signal with flash off.
+    mirror = (34, 10, 36, 14)
+    without_reflection = draw(96000)
+    renderer.reflection_bounces = 1
+    assert brightness(draw(96000), mirror) - brightness(without_reflection, mirror) > 0.04
+
+
+def test_authored_flash_is_independent_and_uses_exact_window(monkeypatch) -> None:
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    graph, _ = production.film_graph(REPO_ROOT, document)
+    oracle = film.FrameOracle(graph, graph.nodes["film"])
+    flash = oracle.scene.lights["flash_light"]
+    for tick, active in ((148799, False), (148800, True), (150399, True), (150400, False)):
+        # Sample the actual timeline at the same tick with only this source
+        # disabled. Exclude history so afterglow is not mistaken for a live cue.
+        observed, _, _ = oracle.sample(tick)
+        with monkeypatch.context() as patches:
+            patches.setitem(oracle.scene.lights, "flash_light", replace(flash, intensity=0.0))
+            no_flash, _, _ = oracle.sample(tick)
+        if active:
+            assert render.image_difference(observed, no_flash)["rmse"] > 0.08
+        else:
+            assert observed == no_flash
+
+
+def test_inspection_raster_resolves_steady_receiver_and_flash_without_full_frames(monkeypatch):
+    document = production.load_production(
+        REPO_ROOT, REPO_ROOT / "fixtures/nw13/hotel_corridor.inspection.production.json",
+    )
+    graph, _ = production.film_graph(REPO_ROOT, document)
+    oracle = film.FrameOracle(graph, graph.nodes["film"])
+    renderer = oracle.renderer
+    assert (oracle.width, oracle.height) == (320, 180)
+    assert renderer.shadows
+    renderer.reflection_bounces = 0
+    lamp = oracle.scene.lights["lamp_light"]
+    globe = renderer.geometry_index[oracle.scene.objects["lamp"].geometry]
+
+    def crop(tick, region, **gains):
+        return renderer.render_region(
+            tick, region, action_tick=oracle.timing.at(tick)["action_tick"],
+            light_gain={**oracle.light_gains(tick), **gains},
+        )[0]
+
+    for tick, region in (
+        (0, (128, 122, 160, 138)),          # corridor floor
+        (240000, (29, 16, 56, 36)),        # room wall/door frame
+        (288000, (9, 3, 30, 37)),          # same lamp later in the room shot
+    ):
+        lit, off = crop(tick, region), crop(tick, region, lamp_light=0.0)
+        # In these regions the unlit receiver must not be part of the glowing
+        # fixture; otherwise a lamp response would not prove surface light.
+        assert max(channel for i, channel in enumerate(off) if i % 4 != 3) < 0.08
+        w, h = region[2] - region[0], region[3] - region[1]
+        assert render.luma(lit, w, h, 0, 0, w, h) - render.luma(off, w, h, 0, 0, w, h) > 0.12
+        center = scene_module.transform_point(
+            scene_module.world_matrix(oracle.scene, "lamp", oracle.timing.at(tick)["action_tick"]),
+            tuple(globe["parameters"]["offset"]),
+        )
+        with monkeypatch.context() as patches:
+            patches.setitem(oracle.scene.lights, "lamp_light", replace(lamp, position=center))
+            assert crop(tick, region) == pytest.approx(off, abs=1e-6)
+
+    # Same raw receiver, camera and lights apart from the flash gain. This
+    # checks the shared timeline against the actual inspection pixel centers.
+    flash_receiver = (136, 84, 152, 100)
+    for tick, active in ((148799, False), (148800, True), (150399, True), (150400, False)):
+        on, off = crop(tick, flash_receiver), crop(tick, flash_receiver, flash_light=0.0)
+        if active:
+            assert render.image_difference(on, off)["rmse"] > 0.05
+        else:
+            assert on == off
 
 
 def test_moving_occluder_changes_the_expected_shadow_region() -> None:
@@ -544,7 +676,6 @@ def test_inspection_profile_keeps_same_scene_and_admits_higher_native_detail(tmp
     from copy import deepcopy
     import nw05_export as export
     import nw09_export
-    import nw13_film as film
     import nwp_package as nwp
 
     original = production.load_production(REPO_ROOT, PRODUCTION)
@@ -560,9 +691,10 @@ def test_inspection_profile_keeps_same_scene_and_admits_higher_native_detail(tmp
     comparable["rendering"].update(width=48, height=27)
     comparable["rendering"].pop("work_profile")
     assert comparable == small_settings
-    regenerated = tmp_path / "compiled-source.nwgraph"
-    production.import_graph(REPO_ROOT, detail, regenerated)
-    assert regenerated.read_bytes() == (REPO_ROOT / detail["graph"]).read_bytes()
+    for profile in (original, detail):
+        regenerated = tmp_path / "compiled-source.nwgraph"
+        production.import_graph(REPO_ROOT, profile, regenerated)
+        assert regenerated.read_bytes() == (REPO_ROOT / profile["graph"]).read_bytes()
     model = production.validate_production(REPO_ROOT, detail)["film_workload"]
     assert model["raster"] == [320, 180] and model["dispatch_groups"] == [40, 23, 1]
     assert model["rgba32f_surface_bytes"] == 921_600
@@ -612,11 +744,99 @@ def test_controlled_scene_probes_isolate_expected_shadow_and_reflection():
     graph, _ = production.film_graph(REPO_ROOT, document)
     dimensions = tuple(document["rendering"][axis] for axis in ("width", "height"))
     verdicts = {}
-    for name, tick, variant in measure._probe_specs(graph):
-        _, delta, channels = measure._response_channels(name, graph, variant, tick, dimensions)
+    receivers = {}
+    for name, tick, variant in measure._probe_specs(graph, dimensions):
+        altered, delta, channels = measure._response_channels(name, graph, variant, tick, dimensions)
         verdicts[name] = max(abs(delta[i]) for i in channels)
+        if name in measure._STEADY_CONTROLS:
+            receivers[name] = measure._steady_receiver(altered, dimensions[0])
     assert verdicts["moving_occluder_shadow"] > 0.03
     assert verdicts["off_camera_material_reflection"] > 0.15
+    assert verdicts["steady_lamp_off"] > 0.1 and verdicts["steady_lamp_blocked"] > 0.1
+    assert receivers["steady_lamp_off"] == pytest.approx(receivers["steady_lamp_blocked"], abs=1e-6)
+    assert {name for name, _, _ in measure._probe_specs(graph, (320, 180))} == {
+        "moving_occluder_shadow", "off_camera_material_reflection",
+    }
+
+
+def test_native_steady_controls_check_readbacks_in_common_and_dxr(tmp_path, monkeypatch):
+    import struct
+    import nw03_compiler
+    import nw13_artifact_measure as measure
+    import nw13_evidence
+
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    graph, _ = production.film_graph(REPO_ROOT, document)
+    dimensions = (48, 27)
+    off_name, blocked_name = measure._STEADY_CONTROLS
+    controls = tuple(probe for probe in measure._probe_specs(graph, dimensions) if probe[0] in (off_name, blocked_name))
+    monkeypatch.setattr(measure, "_probe_specs", lambda *_: controls)
+    authored = {name: variant.nodes["film"].params["scene"] for name, _, variant in controls}
+    x0, y0, x1, y1 = measure._STEADY_RECEIVER
+
+    def pixels(receiver, other=0.1):
+        image = []
+        for y in range(27):
+            for x in range(48):
+                gray = receiver if x0 <= x < x1 and y0 <= y < y1 else other
+                image.extend((gray, gray, gray, 1.0))
+        return image
+
+    def rgba(directory, tick, image):
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"tick-{tick:06d}.rgba32f"
+        path.write_bytes(struct.pack(f"<{len(image)}f", *image))
+        return path
+
+    unlit = pixels(0.2)
+    lit = pixels(0.5)
+    source = tmp_path / "fixed-ticks"
+    rgba(source, 0, lit)
+    rgba(source, 120000, lit)
+    rgba(source, 123200, pixels(0.5, other=0.2))
+    (source / "native-frames.json").write_text(json.dumps({"frames": [
+        {"tick": tick, "action_tick": 120000, "frozen": True} for tick in (120000, 123200)
+    ]}), encoding="utf-8")
+    monkeypatch.setattr(measure, "_reference_pixels", lambda variant, *_: lit if variant is graph else unlit)
+
+    exports = []
+    disagree = False
+
+    def export(path, directory, *_args, selection=None, **_kwargs):
+        name = directory.name
+        assert nw03_compiler.load_graph(path).nodes["film"].params["scene"] == authored[name]
+        exports.append((name, selection))
+        return name
+
+    def smoke(name, directory, _dimensions, *, tick, **_kwargs):
+        assert tick == 0
+        # Each negative still matches the independent CPU and Common tolerances;
+        # their disagreement with one another must be rejected separately.
+        image = pixels(0.215 if name == off_name else 0.185) if disagree else unlit
+        capture = rgba(directory, tick, image)
+        return {"status": "pass", "capture": capture.name, "capture_sha256": measure._sha256(capture.read_bytes())}
+
+    monkeypatch.setattr(measure, "_export", export)
+    monkeypatch.setattr(measure, "_smoke", smoke)
+
+    def run(arm, **kwargs):
+        return measure._native_controlled_proofs(
+            document, graph, source, tmp_path / arm, tmp_path / f"build-{arm}", None, None, b"", None, **kwargs,
+        )
+
+    common = run("common")
+    dxr_selection = {"feature": "dxr_inline_ray_query"}
+    dxr = run("dxr", selection=dxr_selection, common_proofs=tmp_path / "common")
+    assert exports == [(off_name, None), (blocked_name, None), (off_name, dxr_selection), (blocked_name, dxr_selection)]
+    for proof in (common, dxr):
+        assert proof["steady_lamp_controls"]["off_vs_blocked"]["image_within_tolerance"]
+        assert proof[off_name]["receiver_luma_gain"] > 0.25
+        assert proof[blocked_name]["receiver_luma_gain"] > 0.25
+    assert dxr[off_name]["matched_common"]["image_within_tolerance"]
+    assert dxr[blocked_name]["matched_common"]["image_within_tolerance"]
+    disagree = True
+    with pytest.raises(nw13_evidence.EvidenceError, match="blocked and disabled native steady lamps differ"):
+        run("dxr-mismatch", selection=dxr_selection, common_proofs=tmp_path / "common")
 
 
 

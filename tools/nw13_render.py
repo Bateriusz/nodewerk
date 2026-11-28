@@ -352,6 +352,26 @@ class Renderer:
         camera_tick: float | None = None,
         light_gain: Mapping[str, float] | None = None,
     ) -> tuple[list[float], list[float]]:
+        return self.render_region(
+            tick, (0, 0, self.width, self.height), action_tick=action_tick,
+            camera_tick=camera_tick, light_gain=light_gain,
+        )
+
+    def render_region(
+        self,
+        tick: int,
+        region: tuple[int, int, int, int],
+        *,
+        action_tick: int | None = None,
+        camera_tick: float | None = None,
+        light_gain: Mapping[str, float] | None = None,
+    ) -> tuple[list[float], list[float]]:
+        """Render a compact crop at this renderer's full-raster pixel centers."""
+        x0, y0, x1, y1 = region
+        width, height = self.width, self.height
+        if not (0 <= x0 < x1 <= width and 0 <= y0 < y1 <= height):
+            raise RenderError("region must be a nonempty rectangle inside the raster")
+        region_width, region_height = x1 - x0, y1 - y0
         self.action_tick = tick if action_tick is None else action_tick
         self.light_gain = light_gain or {}
         camera = scene_module.camera_state(self.scene, tick if camera_tick is None else camera_tick, action_tick=self.action_tick)
@@ -359,12 +379,11 @@ class Renderer:
         right = _normalize(_cross(forward, camera.up))
         up = _normalize(_cross(right, forward))
         tangent = math.tan(math.radians(camera.fov_degrees) * 0.5)
-        width, height = self.width, self.height
-        image = [0.0] * (width * height * 4)
-        depth = [math.inf] * (width * height)
-        for y in range(height):
+        image = [0.0] * (region_width * region_height * 4)
+        depth = [math.inf] * (region_width * region_height)
+        for row, y in enumerate(range(y0, y1)):
             ny = (1.0 - 2.0 * (y + 0.5) / height) * tangent
-            for x in range(width):
+            for column, x in enumerate(range(x0, x1)):
                 nx = (2.0 * (x + 0.5) / width - 1.0) * tangent * camera.aspect
                 direction = _normalize((
                     forward[0] + right[0] * nx + up[0] * ny,
@@ -376,12 +395,13 @@ class Renderer:
                 far_distance = min(camera.far / view_projection, self.max_distance)
                 start = tuple(camera.position[i] + direction[i] * near_distance for i in range(3))
                 hit = self.trace(start, direction, max_distance=far_distance - near_distance)
-                pixel = (y * width + x) * 4
+                local_pixel = row * region_width + column
+                pixel = local_pixel * 4
                 if hit is None:
                     color = self._miss(direction)
                 else:
                     color = self.shade(hit, direction)
-                    depth[y * width + x] = (hit.distance + near_distance) * view_projection
+                    depth[local_pixel] = (hit.distance + near_distance) * view_projection
                 image[pixel] = color[0]
                 image[pixel + 1] = color[1]
                 image[pixel + 2] = color[2]

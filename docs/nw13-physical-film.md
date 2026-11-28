@@ -93,12 +93,21 @@ outside the extraction. PowerShell policy is process-scoped here.
   GPU resource readback is **not** a desktop pixel capture or a simulated
   resize. The actual client extent and desktop pixel capture are reported
   unavailable when the producer does not emit them.
-- Add `-CollectTiming` if local ETW agrees with your validation policy. This
-  gathers one longer visible run per arm, preserves raw process-scoped
-  PresentMon CSV and reports CPU-submit/GPU/display interval observations
-  only when matched binding and usable samples exist. ETW, VRAM usage and
-  performance adoption are not prerequisites for functional success. Missing
-  or invalid measurements are explicit, not inferred from frame counts.
+- Add `-CollectTiming` for one longer visible run per arm. The pinned
+  PresentMon 2.6.0 collector is restricted to the player PID. Timing requires
+  an absolute QPC-millisecond column, the launch window, the native sync
+  interval, one swap chain and enough usable samples. The default collector
+  supports the combined CPU-submit metric; explicit `--v2_metrics` output
+  lacks Present API time, so only the reported GPU/display metrics can be
+  analyzed in that mode. The raw CSV, launch
+  record, collector metadata and private stdout/stderr are preserved.
+  `etw_access_denied` means the collector explicitly reported trace-session
+  access denial. Keep the functional result. If timing is needed, explicitly
+  open a Windows PowerShell window as administrator for that collection only,
+  or use an account that already has Performance Log Users access. The
+  runner never elevates itself or changes group membership. Other collector,
+  schema, clock and capture problems are reported separately. ETW, VRAM
+  usage and performance adoption are not prerequisites for functional success.
 - Physical host and operating data are gathered through the shared host and
   GPU tools, including virtualization/VBS; a rejected physical host never
   runs a film player. Unsupported/no-delivered optional arm, functional
@@ -110,3 +119,42 @@ outside the extraction. PowerShell policy is process-scoped here.
   with another bundle. This does not verify real audio/display cue alignment;
   use the [separate NWAS physical validation path](physical-audio-cues.md)
   for that measurement when the NWAS v2 exporter is present.
+
+
+## Re-analyze a retained timing run without rerunning on RTX
+
+Use the **new** verified Python tooling to read the **old** verified bundle
+and its original private evidence. Re-check the old bundle against its own
+CI inventory SHA, measured commit and tree. The command does not run
+PresentMon or a player and writes only to stdout/stderr. Save its sanitized
+JSON somewhere outside both inputs if desired. It cannot turn a different
+revision, an unsuccessful collector or missing identity into a measurement.
+
+The old collector did not record a CSV digest. Supply independently retained
+SHA-256 values for the original summary, private capability snapshot, arm
+launch record, collector metadata and CSV. If collecting those hashes now,
+use the original copies you personally retained or obtained through a trusted
+handoff. Hashing untrusted copies does not establish provenance. Historical
+player stdout/stderr are also required and compared with the launch record.
+Repeat for each arm with a successful collector.
+
+~~~powershell
+# Inputs: $newBundle (verified tooling), $oldBundle, $oldInventorySha,
+# $oldRevision, $oldTree and $oldEvidence (from the same historical run).
+$arm = 'common'
+$visible = "$oldEvidence\private\runs\$arm\visible"
+$summarySha = (Get-FileHash -Algorithm SHA256 -LiteralPath "$oldEvidence\summary.json").Hash.ToLowerInvariant()
+$capabilitySha = (Get-FileHash -Algorithm SHA256 -LiteralPath "$oldEvidence\private\capability.json").Hash.ToLowerInvariant()
+$launchSha = (Get-FileHash -Algorithm SHA256 -LiteralPath "$visible\launch.json").Hash.ToLowerInvariant()
+$collectorSha = (Get-FileHash -Algorithm SHA256 -LiteralPath "$visible\presentmon-metadata.json").Hash.ToLowerInvariant()
+$csvSha = (Get-FileHash -Algorithm SHA256 -LiteralPath "$visible\presentmon.csv").Hash.ToLowerInvariant()
+& "$newBundle\python\python.exe" -I -B "$newBundle\tools\nw13_physical_film.py" reanalyze `
+  --root $oldBundle --index-sha $oldInventorySha --revision $oldRevision --tree $oldTree `
+  --evidence $oldEvidence --arm $arm --summary-sha $summarySha --capability-sha $capabilitySha `
+  --launch-sha $launchSha --collector-sha $collectorSha --csv-sha $csvSha
+~~~
+
+A successful re-analysis is evidence for that historical artifact and device
+only. If the old clock or process cannot be matched, timing remains
+unavailable. This does not qualify the new build or change any adoption
+decision.

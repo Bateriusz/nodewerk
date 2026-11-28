@@ -21,8 +21,8 @@
         "children": [
           {"id":"room_shell","operator":"nw.geom.subtract","version":"1.0.0","children":[{"id":"room_outer","operator":"nw.geom.box","version":"1.0.0","parameters":{"half_extents":[5.2,2.8,8.2]}},{"id":"room_inner","operator":"nw.geom.box","version":"1.0.0","parameters":{"half_extents":[5.0,2.6,8.0]}}]},
           {"id":"mirror_panel","operator":"nw.geom.box","version":"1.0.0","parameters":{"half_extents":[1.1,0.78,0.04]}},
-          {"id":"lamp","operator":"nw.geom.translate","version":"1.0.0","parameters":{"offset":[2.4,1.6,1.5]},"children":[{"id":"lamp_sphere","operator":"nw.geom.sphere","version":"1.0.0","parameters":{"radius":0.18}}]},
-          {"id":"lamp_ring","operator":"nw.geom.translate","version":"1.0.0","parameters":{"offset":[2.4,1.6,1.5]},"children":[{"id":"lamp_ring_torus","operator":"nw.geom.torus","version":"1.0.0","parameters":{"major_radius":0.32,"minor_radius":0.035}}]},
+          {"id":"lamp","operator":"nw.geom.translate","version":"1.0.0","parameters":{"offset":[-0.56,2.3,-0.85]},"children":[{"id":"lamp_sphere","operator":"nw.geom.sphere","version":"1.0.0","parameters":{"radius":0.18}}]},
+          {"id":"lamp_ring","operator":"nw.geom.translate","version":"1.0.0","parameters":{"offset":[-0.56,2.3,-0.85]},"children":[{"id":"lamp_ring_torus","operator":"nw.geom.torus","version":"1.0.0","parameters":{"major_radius":0.32,"minor_radius":0.035}}]},
           {"id":"arch","operator":"nw.geom.twist","version":"1.0.0","parameters":{"half_height":1.2,"max_degrees":25},"children":[{"id":"arch_cylinder","operator":"nw.geom.translate","version":"1.0.0","parameters":{"offset":[-4.2,1.2,1.5]},"children":[{"id":"arch_cylinder_local","operator":"nw.geom.cylinder","version":"1.0.0","parameters":{"radius":0.22,"half_height":1.2}}]}]}
         ]
       },

@@ -362,11 +362,45 @@ def _unshadowed(graph):
     return graph
 
 
-def _probe_specs(graph):
-    return (
-        ("moving_occluder_shadow", 120000, _edit_scene_node(graph, _move_occluder)),
+_STEADY_PROBE_RASTER = (48, 27)
+_STEADY_RECEIVER = (19, 18, 25, 21)
+_STEADY_CONTROLS = ("steady_lamp_off", "steady_lamp_blocked")
+
+
+def _probe_specs(graph, dimensions):
+    probes = (
+        # The doorway practical and initial camera expose a nonflash receiver
+        # whose response to the move disappears with shadow queries disabled.
+        ("moving_occluder_shadow", 0, _edit_scene_node(graph, _move_occluder)),
         ("off_camera_material_reflection", 148800, _edit_scene_node(graph, _recolor_reflected_object)),
     )
+    if dimensions != _STEADY_PROBE_RASTER:
+        return probes
+
+    def adjust_lamp(scene, **change):
+        next(light for light in scene["lights"] if light["id"] == "lamp_light").update(change)
+
+    # Use the same authored globe from the graph rather than a baked alternate
+    # fixture. Both variants keep geometry, flash, materials and camera fixed.
+    _, recipes, _, scene, _, _ = nw13_film.read_film(graph, graph.nodes["film"])
+    globe = recipes[scene.objects["lamp"].geometry]
+    center = list(nw13_scene.transform_point(nw13_scene.world_matrix(scene, "lamp", 0),
+                                             tuple(globe["parameters"]["offset"])))
+    return (
+        *probes,
+        (_STEADY_CONTROLS[0], 0, _edit_scene_node(graph, lambda scene: adjust_lamp(scene, intensity=0.0))),
+        (_STEADY_CONTROLS[1], 0, _edit_scene_node(graph, lambda scene: adjust_lamp(scene, position=center))),
+    )
+
+
+def _steady_receiver(image, width):
+    x0, y0, x1, y1 = _STEADY_RECEIVER
+    return [channel for y in range(y0, y1) for channel in image[(y * width + x0) * 4:(y * width + x1) * 4]]
+
+
+def _steady_receiver_gain(lit, dark, dimensions):
+    return (nw13_render.luma(lit, *dimensions, *_STEADY_RECEIVER)
+            - nw13_render.luma(dark, *dimensions, *_STEADY_RECEIVER))
 
 
 def _reference_pixels(graph, tick, dimensions):
@@ -384,8 +418,16 @@ def _response_channels(name, graph, variant, tick, dimensions):
     if name == "moving_occluder_shadow":
         control = [b-a for a, b in zip(_reference_pixels(_unshadowed(graph), tick, dimensions),
                                       _reference_pixels(_unshadowed(variant), tick, dimensions), strict=True)]
-    channels = [i for i, difference in enumerate(expected)
-                if i % 4 != 3 and abs(difference) > 0.025 and (control is None or abs(control[i]) < 0.001)]
+    if name in _STEADY_CONTROLS:
+        x0, y0, x1, y1 = _STEADY_RECEIVER
+        width, _ = dimensions
+        indices = ((y * width + x) * 4 + i for y in range(y0, y1) for x in range(x0, x1) for i in range(3))
+        channels = [i for i in indices if expected[i] < -0.025]
+        if _steady_receiver_gain(original, altered, dimensions) < 0.1:
+            raise evidence.EvidenceError(f"CPU oracle shows no steady lamp response on the receiver for {name}")
+    else:
+        channels = [i for i, difference in enumerate(expected)
+                    if i % 4 != 3 and abs(difference) > 0.025 and (control is None or abs(control[i]) < 0.001)]
     if len(channels) < 3:
         raise evidence.EvidenceError(f"CPU oracle does not show enough of the isolated {name} effect")
     return altered, expected, channels
@@ -411,7 +453,8 @@ def _native_controlled_proofs(document, graph, source, output, build, template, 
 
     results = {"moving_camera_frozen_action": {"ticks": [first, second], "action_tick": frozen_frames[0][1],
                                                "image_delta": camera_response}}
-    for name, tick, variant in _probe_specs(graph):
+    steady_receivers = {}
+    for name, tick, variant in _probe_specs(graph, dimensions):
         reference, expected, channels = _response_channels(name, graph, variant, tick, dimensions)
         artifact_dir = output / name
         authored = build / name / "source" / "probe.nwgraph"
@@ -442,6 +485,18 @@ def _native_controlled_proofs(document, graph, source, output, build, template, 
             "oracle": oracle, "matched_common": matched, "isolated_channels": len(channels),
             "matching_response_channels": same_sign, "observed_max_delta": max(map(abs, observed)),
         }
+        if name in _STEADY_CONTROLS:
+            gain = _steady_receiver_gain(before, after, dimensions)
+            if gain < 0.1:
+                raise evidence.EvidenceError(f"native {name} did not darken the nonflash receiver")
+            results[name]["receiver_luma_gain"] = gain
+            steady_receivers[name] = _steady_receiver(after, dimensions[0])
+    if steady_receivers:
+        off, blocked = (steady_receivers[name] for name in _STEADY_CONTROLS)
+        agreement = _compare_pixels(off, blocked, tolerance)
+        if not agreement["image_within_tolerance"]:
+            raise evidence.EvidenceError("blocked and disabled native steady lamps differ on the receiver")
+        results["steady_lamp_controls"] = {"tick": 0, "receiver": list(_STEADY_RECEIVER), "off_vs_blocked": agreement}
     return results
 
 
@@ -497,14 +552,7 @@ def _query_capabilities(probe, output) -> dict:
     # Keep adapter identifiers and host-specific display data out of the evidence.
     raw = json.loads(record.read_text(encoding="utf-8"))
     record.unlink()
-    queried = raw["features"]
-    return {
-        "query_status": "queried",
-        "d3d_feature_level": str(queried["d3d_feature_level"]).removeprefix("D3D_FEATURE_LEVEL_"),
-        "highest_shader_model": str(queried["highest_shader_model"]).removeprefix("D3D12_SHADER_MODEL_"),
-        "mesh_shader_tier": {"D3D12_MESH_SHADER_TIER_1": 1}.get(queried["mesh_shader_tier"]),
-        "raytracing_tier": {10: 1.0, 11: 1.1}.get(queried["raytracing_tier"]),
-    }, raw["adapter"]["adapter_luid"]
+    return {"query_status": "queried", **evidence.normalize_probe_features(raw["features"])}, raw["adapter"]["adapter_luid"]
 
 
 def _tracked_source(repo_root, selected, revision):

@@ -16,7 +16,7 @@
     {"id":"reflected","base_color":[0.88,0.28,0.16,1],"roughness":0.2,"metallic":0.7,"specular":0.7,"emission":[0,0,0]}
   ],
   "lights": [
-    {"id":"lamp_light","type":"point","position":[2.4,1.6,1.5],"color":[1.0,0.82,0.6],"intensity":9.0,"range":9.0},
+    {"id":"lamp_light","type":"point","position":[-0.4,2.08,-0.85],"color":[1.0,0.82,0.6],"intensity":9.0,"range":9.0},
     {"id":"flash_light","type":"point","position":[0.4,1.6,1.0],"color":[0.8,0.9,1.0],"intensity":18.0,"range":6.0}
   ],
   "objects": [
