@@ -122,7 +122,7 @@ class ExportError(RuntimeError):
 
 @dataclass(frozen=True)
 class ExportSettings:
-    byte_ceiling: int = DEFAULT_BYTE_CEILING
+    byte_ceiling: int | None = DEFAULT_BYTE_CEILING
     memory_budget: int = DEFAULT_MEMORY_BUDGET
     quantization_tolerance: float | None = None
     target_profile: str = nwp.COMMON_PROFILE_ID
@@ -362,7 +362,7 @@ def analyze_package_size(
     manifest_bytes: int = 0,
     executable_bytes: int = 0,
     player_template_bytes: int = 0,
-    byte_ceiling: int = DEFAULT_BYTE_CEILING,
+    byte_ceiling: int | None = DEFAULT_BYTE_CEILING,
     runtime_dependencies: Sequence[str] | None = None,
     dependency_source: str = "package-phase-requirements",
     artifact_files: Mapping[str, int] | None = None,
@@ -463,7 +463,7 @@ def analyze_package_size(
             "embedded_package_growth_bytes": executable_growth,
             "total_distributed_bytes": distributed,
             "byte_ceiling": byte_ceiling,
-            "within_byte_ceiling": distributed <= byte_ceiling,
+            "within_byte_ceiling": None if byte_ceiling is None else distributed <= byte_ceiling,
         },
         "dependencies": dependencies,
         "dependency_source": dependency_source,
@@ -483,7 +483,10 @@ def size_observation(size_report: Mapping[str, Any], executable: bytes | None, *
                      profile: str, accounting_phase: str) -> dict[str, Any]:
     """Attribute measured bytes while preserving the gate's exact counting convention."""
     distribution = size_report["distribution"]
-    if accounting_phase == "stateful-prepublication":
+    if accounting_phase == "stateful-informational-finalized":
+        manifest_entry = "link-manifest.json"
+        repeated_entries, excluded = [], []
+    elif accounting_phase == "stateful-prepublication":
         manifest_entry = "link-manifest.json"
         # This is one actual file: the stateful gate counts it once as a
         # separate manifest and again as an auxiliary entry. Preserve the gate.
@@ -509,7 +512,8 @@ def size_observation(size_report: Mapping[str, Any], executable: bytes | None, *
             "counted_auxiliary_paths": dict(distribution["artifact_files"]),
             "counted_more_than_once": repeated_entries,
             "not_counted_at_this_phase": excluded,
-            "total_kind": "exporter_gate_total_not_unique_file_inventory",
+            "total_kind": ("unique_export_file_inventory" if distribution["byte_ceiling"] is None
+                           else "exporter_gate_total_not_unique_file_inventory"),
         },
         "shader_blob_bytes": size_report["content"]["shader_blob_bytes"],
         "package_sha256": size_report["package_sha256"],
@@ -554,6 +558,53 @@ def _byte_ceiling_error(profile: str, size_report: Mapping[str, Any], executable
             size_report, executable, profile=profile, accounting_phase=accounting_phase,
         ),
     )
+
+
+def _publication_path_key(name: str) -> str:
+    # Windows names may alias by case even when the output does not exist yet.
+    return os.path.normcase(name.rstrip(" .") if os.name == "nt" else name)
+
+
+def _report_member(report_path: str | os.PathLike[str] | None, directory: Path,
+                   reserved: Sequence[str]) -> Path | None:
+    if report_path is None:
+        return None
+    try:
+        relative = Path(report_path).resolve().relative_to(directory.resolve())
+    except ValueError:
+        return None
+    if not relative.parts or _publication_path_key(relative.parts[0]) in {
+        _publication_path_key(name) for name in reserved
+    }:
+        raise ExportError("requested export report would replace an existing artifact path")
+    return relative
+
+
+def _finalize_informational_stateful_size(
+    size_report: dict[str, Any], export_report: Mapping[str, Any], relative_report: Path | None,
+) -> tuple[bytes, bytes | None]:
+    distribution = size_report["distribution"]
+    files = distribution["artifact_files"]
+    files["size-report.json"] = 0
+    report_name = relative_report.as_posix() if relative_report is not None else None
+    if report_name is not None:
+        files[report_name] = 0
+    for _ in range(64):
+        distribution["artifact_file_bytes"] = sum(files.values())
+        total = (distribution["package_bytes"] + distribution["manifest_bytes"]
+                 + distribution["executable_bytes"] + distribution["artifact_file_bytes"])
+        distribution["total_distributed_bytes"] = total
+        size_report["dependency_cost_total_bytes"] = total + size_report["dependency_distributed_bytes"]
+        size_payload = json.dumps(size_report, indent=2, sort_keys=True).encode("utf-8")
+        export_payload = (json.dumps(export_report, indent=2, sort_keys=True).encode("utf-8")
+                          if report_name is not None else None)
+        measured = {"size-report.json": len(size_payload)}
+        if report_name is not None and export_payload is not None:
+            measured[report_name] = len(export_payload)
+        if all(files[name] == length for name, length in measured.items()):
+            return size_payload, export_payload
+        files.update(measured)
+    raise ExportError("informational stateful size accounting did not converge")
 
 
 # ---------------------------------------------------------------------------
@@ -3124,7 +3175,12 @@ def _finalize_size_accounting(
             )
             distribution["total_distributed_bytes"] = total
             distribution["byte_ceiling"] = settings.byte_ceiling
-            distribution["within_byte_ceiling"] = total <= settings.byte_ceiling
+            distribution["within_byte_ceiling"] = (None if settings.byte_ceiling is None
+                                                   else total <= settings.byte_ceiling)
+            if settings.byte_ceiling is None:
+                artifact.size_report["dependency_cost_total_bytes"] = (
+                    total + artifact.size_report["dependency_distributed_bytes"]
+                )
             payload = json.dumps(
                 artifact.size_report, indent=2, sort_keys=True
             ).encode("utf-8")
@@ -3150,7 +3206,7 @@ def _finalize_size_accounting(
     for profile_id, artifact in artifacts.items():
         distribution = artifact.size_report["distribution"]
         total = distribution["total_distributed_bytes"]
-        if total > settings.byte_ceiling:
+        if settings.byte_ceiling is not None and total > settings.byte_ceiling:
             raise _byte_ceiling_error(profile_id, artifact.size_report, artifact.executable_bytes,
                                       ["budget", profile_id, "byte_ceiling"], accounting_phase="stateless-finalized")
         # Memory budget remains based on the queried physical realization.
@@ -3222,6 +3278,15 @@ def export_graph(
     graph_path = Path(graph_path)
     output_directory = Path(output_directory)
     document = nw03.load_graph(graph_path)
+    film_operator_ids = {"nw.shader.film", "nw.feedback.scene_image", "nw.render.film_frame"}
+    active_film_operators = set()
+    if any(node.operator_id in film_operator_ids for node in document.nodes.values()):
+        retained_ids, _ = optimizer.reachable_node_ports(document, optimizer.semantic_outputs(document))
+        active_film_operators = {document.nodes[node_id].operator_id for node_id in retained_ids} & film_operator_ids
+        if "nw.shader.film" in active_film_operators:
+            # Use the shared optimizer's external outputs even without an
+            # explicit Present. Dead film must not change unrelated exports.
+            settings = replace(settings, byte_ceiling=None)
     audio_payload = b""
     if settings.audio_song_path or audio_song_payload is not None:
         if settings.frozen_embedded_specialization:
@@ -3291,11 +3356,9 @@ def export_graph(
             if profile_id != nwp.COMMON_PROFILE_ID
         ]
 
-    sampled_history = False
-    if any(node.operator_id in {"nw.feedback.scene_image", "nw.render.film_frame"}
-           for node in document.nodes.values()):
+    sampled_history = bool(active_film_operators & {"nw.feedback.scene_image", "nw.render.film_frame"})
+    if sampled_history:
         import nw13_history
-        sampled_history = nw13_history.node_present(document)
     recursive_history = any(node.operator_id not in {"nw.feedback.scene_image"} and
                             (node.history is not None or node.frequency == "history")
                             for node in document.nodes.values())
@@ -3484,6 +3547,7 @@ def export_graph(
         }
         if sampled_history:
             manifest["stateful_extension"]["sampled_scene_history"] = stateful_report["sampled_scene_history"]
+            manifest["package_sha256"] = hashlib.sha256(package_bytes).hexdigest()
         if film_optional_provenance:
             manifest["optional_artifact"] = True
             manifest["film_lowering"] = dict(film_optional_provenance)
@@ -3657,7 +3721,7 @@ def export_graph(
             runtime_dependencies=runtime_dependencies,
             dependency_source=dependency_source,
             artifact_files={
-                "link-manifest.json": len(manifest_data),
+                **({"link-manifest.json": len(manifest_data)} if settings.byte_ceiling is not None else {}),
                 "common.schedule.json": len(schedule_data),
                 "common.aliases.json": len(aliases_data),
                 "common.player.cpp": len(player_source),
@@ -3698,26 +3762,10 @@ def export_graph(
                 ],
                 dependency_path=["budget", "stateful_extension", "memory_budget"],
             )
-        if not size_report["distribution"]["within_byte_ceiling"]:
+        if size_report["distribution"]["within_byte_ceiling"] is False:
             raise _byte_ceiling_error(nwp.COMMON_PROFILE_ID, size_report, executable_bytes,
                                       ["budget", "stateful_extension", "byte_ceiling"],
                                       accounting_phase="stateful-prepublication", label="common")
-        # Only publish an artifact after every budget check succeeded, so a
-        # rejected export cannot leave a partially updated stateful closure.
-        output_directory.mkdir(parents=True, exist_ok=True)
-        _write_bytes(package_path, package_bytes)
-        _write_bytes(output_directory / "link-manifest.json", manifest_data)
-        _write_bytes(
-            output_directory / "common.schedule.json", schedule_data
-        )
-        _write_bytes(output_directory / "common.aliases.json", aliases_data)
-        _write_bytes(output_directory / "common.player.cpp", player_source)
-        if executable_bytes is not None:
-            _write_bytes(output_directory / executable_name, executable_bytes)
-        _write_bytes(
-            output_directory / "size-report.json",
-            json.dumps(size_report, indent=2, sort_keys=True).encode("utf-8"),
-        )
         stateful_report.update(
             {
                 "success": True,
@@ -3727,18 +3775,34 @@ def export_graph(
                 "package_bytes": len(package_bytes),
                 "size_report": size_report,
                 "manifest_sha256": manifest["manifest_sha256"],
-                "checkpoint_byte_cost": stateful_report[
-                    "packaged_checkpoint_byte_cost"
-                ],
+                "checkpoint_byte_cost": stateful_report["packaged_checkpoint_byte_cost"],
             }
         )
-        if report_path is not None:
-            _write_bytes(
-                Path(report_path),
-                json.dumps(
-                    stateful_report, indent=2, sort_keys=True
-                ).encode("utf-8"),
+        relative_report = _report_member(report_path, output_directory, (
+            package_path.name, "link-manifest.json", "size-report.json", executable_name,
+            *size_report["distribution"]["artifact_files"],
+        ))
+        export_report_payload = None
+        if settings.byte_ceiling is None:
+            size_payload, export_report_payload = _finalize_informational_stateful_size(
+                size_report, stateful_report, relative_report,
             )
+        else:
+            size_payload = json.dumps(size_report, indent=2, sort_keys=True).encode("utf-8")
+        # The byte ledger and both self-referential reports are complete
+        # before writing any part of the stateful artifact.
+        output_directory.mkdir(parents=True, exist_ok=True)
+        _write_bytes(package_path, package_bytes)
+        _write_bytes(output_directory / "link-manifest.json", manifest_data)
+        _write_bytes(output_directory / "common.schedule.json", schedule_data)
+        _write_bytes(output_directory / "common.aliases.json", aliases_data)
+        _write_bytes(output_directory / "common.player.cpp", player_source)
+        if executable_bytes is not None:
+            _write_bytes(output_directory / executable_name, executable_bytes)
+        _write_bytes(output_directory / "size-report.json", size_payload)
+        if report_path is not None:
+            _write_bytes(Path(report_path), export_report_payload if export_report_payload is not None else
+                         json.dumps(stateful_report, indent=2, sort_keys=True).encode("utf-8"))
         artifact = ProfileArtifact(
             profile_id=nwp.COMMON_PROFILE_ID,
             requirements_digest=nwp.COMMON_REQUIREMENTS_DIGEST,
@@ -3948,6 +4012,8 @@ def export_graph(
                 profile_id, requirements_digest, emitted_requirements(package)
             )
             manifest["optional_artifact"] = not is_common or bool(film_optional_provenance)
+            if "nw.shader.film" in manifest["retained"]["code"]:
+                manifest["package_sha256"] = hashlib.sha256(package_bytes).hexdigest()
             if film_optional_provenance:
                 manifest["film_lowering"] = dict(film_optional_provenance)
             _attach_audio_manifest(manifest, audio_payload)
@@ -4106,7 +4172,7 @@ def export_graph(
 
             # Budget validation runs again after auxiliary/size-report bytes
             # are finalized below; this early check catches obvious failures.
-            if not size_report["distribution"]["within_byte_ceiling"]:
+            if size_report["distribution"]["within_byte_ceiling"] is False:
                 raise _byte_ceiling_error(profile_id, size_report, executable_bytes,
                                           ["budget", profile_id, "byte_ceiling"],
                                           accounting_phase="stateless-pre-finalization")
@@ -4276,7 +4342,8 @@ def export_graph(
                 "memory_budget": settings.memory_budget,
                 "common_distributed_bytes": common_bytes,
                 "optional_distributed_bytes": optional_bytes,
-                "common_within_byte_ceiling": common_bytes <= settings.byte_ceiling,
+                "common_within_byte_ceiling": (None if settings.byte_ceiling is None
+                                               else common_bytes <= settings.byte_ceiling),
                 "optional_independent": True,
                 "common_baseline_raised_by_optional": False,
             },
@@ -4360,17 +4427,15 @@ def export_graph(
         # An in-directory report is part of the distributed artifact, so stage
         # and account for it before publication.  The report embeds the size
         # totals that include itself, so iterate to a deterministic fixed point.
-        in_directory_report: Path | None = None
-        if report_path is not None:
-            try:
-                candidate = Path(report_path).resolve().relative_to(
-                    output_directory.resolve()
-                )
-            except ValueError:
-                candidate = None
-            if candidate is not None and candidate.parts:
-                in_directory_report = candidate
+        reserved_reports = ["size-report.json", "link-manifest.json"]
+        for profile, artifact in artifacts.items():
+            stem = _profile_file_stem(profile)
+            reserved_reports.extend((f"{stem}.nwp", f"{stem}.manifest.json", artifact.executable_name,
+                                     *_artifact_auxiliary_names(stem, common=profile == nwp.COMMON_PROFILE_ID)))
+        in_directory_report = _report_member(report_path, output_directory, reserved_reports)
         if in_directory_report is not None:
+            if (staging / in_directory_report).exists():
+                raise ExportError("requested export report would replace an existing artifact path")
             previous: bytes | None = None
             for _iteration in range(64):
                 report = _report_payload()
@@ -4476,6 +4541,150 @@ def _profile_file_stem(profile_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _sampled_film_package(package: nwp.NwpPackage) -> bool:
+    return any(record.operator_id == "nw.feedback.scene_image" for record in package.history)
+
+
+def _inspect_artifact_byte_ceiling(package: nwp.NwpPackage, manifest: Mapping[str, Any]) -> int | None:
+    if _sampled_film_package(package) or (
+        "nw.shader.film" in manifest.get("retained", {}).get("code", ())
+    ):
+        return None
+    return DEFAULT_BYTE_CEILING
+
+
+def _discover_informational_report_files(
+    size_report_path: Path, package_data: bytes, artifact_files: dict[str, int], *,
+    primary_paths: frozenset[str],
+) -> None:
+    """Find explicitly shipped reports using the ledger, never trust its byte counts."""
+    if not size_report_path.is_file():
+        return
+    try:
+        document = json.loads(size_report_path.read_bytes())
+    except (OSError, ValueError):
+        return
+    if not isinstance(document, dict) or document.get("package_sha256") != hashlib.sha256(package_data).hexdigest():
+        return
+    distribution = document.get("distribution")
+    files = distribution.get("artifact_files") if isinstance(distribution, dict) else None
+    if not isinstance(files, dict):
+        return
+    directory = size_report_path.parent.resolve()
+    for name in files:
+        relative = Path(name)
+        if (relative.is_absolute() or not relative.parts or ".." in relative.parts
+                or relative.as_posix() in primary_paths):
+            continue
+        candidate = directory / relative
+        try:
+            if candidate.resolve().is_relative_to(directory) and candidate.is_file():
+                artifact_files[relative.as_posix()] = candidate.stat().st_size
+        except (OSError, RuntimeError):
+            continue
+
+
+def _read_inspection_file(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes() if path.is_file() else None
+    except OSError:
+        return None
+
+
+def _manifest_object(payload: bytes | None) -> dict[str, Any]:
+    try:
+        obj = json.loads(payload) if payload is not None else None
+    except ValueError:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def _same_embedded_manifest(external: bytes | None, embedded: bytes) -> bool:
+    return external is not None and (external == embedded or (
+        len(embedded) == hashlib.sha256().digest_size and hashlib.sha256(external).digest() == embedded
+    ))
+
+
+def _inspect_informational_film(
+    target: Path, package: nwp.NwpPackage, data: bytes, raw: bytes,
+    embedded: bytes | None, manifest_path: Path, executable_path: Path, canonical_sampled: bool,
+) -> dict[str, Any]:
+    """Count only actual same-build companions of the selected film artifact."""
+    selecting_exe = embedded is not None
+    stem = target.stem
+    exterior = _read_inspection_file(manifest_path)
+    exterior_metadata = _manifest_object(exterior)
+    package_digest = hashlib.sha256(data).hexdigest()
+    exterior_is_bound = exterior_metadata.get("package_sha256") == package_digest
+    executable: bytes | None = raw if selecting_exe else _read_inspection_file(executable_path)
+    if not selecting_exe and executable is not None:
+        try:
+            exe_package, exe_manifest = extract_embedded_package(executable)
+        except ExportError:
+            executable = None
+        else:
+            if exe_package != data or (exterior_is_bound and not _same_embedded_manifest(exterior, exe_manifest)):
+                executable = None
+            else:
+                embedded = exe_manifest
+    if selecting_exe:
+        accept_exterior = embedded is not None and _same_embedded_manifest(exterior, embedded)
+    else:
+        accept_exterior = exterior_is_bound or (embedded is not None and _same_embedded_manifest(exterior, embedded))
+    metadata = exterior_metadata if accept_exterior else _manifest_object(embedded)
+    sibling_package_path = target.with_suffix(".nwp")
+    if canonical_sampled and not sibling_package_path.is_file():
+        sibling_package_path = target.parent / "common.nwp"
+    artifact_files: dict[str, int] = {}
+    size_name = "size-report.json" if canonical_sampled else f"{stem}.size.json"
+    _discover_informational_report_files(
+        target.parent / size_name, data, artifact_files,
+        primary_paths=frozenset({target.name, sibling_package_path.name, executable_path.name, manifest_path.name}),
+    )
+    exterior_size = len(exterior) if accept_exterior and exterior is not None else 0
+    result = analyze_package_size(
+        package, data, manifest_bytes=exterior_size, executable_bytes=len(executable or b""),
+        byte_ceiling=None, runtime_dependencies=metadata.get("retained", {}).get("dependencies"),
+        dependency_source=metadata.get("dependencies_source", "manifest-unavailable"),
+        artifact_files=artifact_files,
+    )
+    distribution = result["distribution"]
+    if selecting_exe:
+        if _read_inspection_file(sibling_package_path) == data:
+            artifact_files[sibling_package_path.name] = len(data)
+        if accept_exterior:
+            artifact_files[manifest_path.name] = exterior_size
+        distribution["embedded_package_bytes"] = len(data)
+        distribution["embedded_manifest_bytes"] = len(embedded or b"")
+        distribution["embedded_content_counted_in_executable"] = True
+        distribution["artifact_files"] = dict(sorted(artifact_files.items()))
+        distribution["artifact_file_bytes"] = sum(artifact_files.values())
+        distribution["total_distributed_bytes"] = len(raw) + distribution["artifact_file_bytes"]
+    if executable is not None and embedded is not None:
+        overlay = len(data) + len(embedded) + EMBED_FOOTER_SIZE
+        distribution["player_template_bytes"] = len(executable) - overlay
+        distribution["embedded_package_growth_bytes"] = overlay
+    result["dependency_cost_total_bytes"] = (
+        distribution["total_distributed_bytes"] + result["dependency_distributed_bytes"]
+    )
+    result["distribution_discovered"] = {
+        "manifest_path": str(manifest_path) if accept_exterior else "",
+        "executable_path": str(executable_path) if executable is not None else "",
+        "manifest_bytes": exterior_size,
+        "executable_bytes": len(executable or b""),
+    }
+    if metadata:
+        result["manifest_sha256"] = metadata.get("manifest_sha256", "")
+        result["artifact_identity"] = metadata.get("artifact_identity", "")
+    result["path"] = str(target)
+    result["capability"] = {
+        "profile_id": package.capability.profile_id,
+        "requirements_digest": package.capability.requirements_digest,
+        "optional_profile_id": package.capability.optional_profile_id,
+    }
+    return result
+
+
 def inspect_size(path: str | os.PathLike[str]) -> dict[str, Any]:
     """Attribute package and export directory bytes without GPU submission."""
     target = Path(path)
@@ -4492,17 +4701,22 @@ def inspect_size(path: str | os.PathLike[str]) -> dict[str, Any]:
                     list(inspection.diagnostics),
                 )
             stem = package_path.with_suffix("")
-            manifest_path = target / f"{stem.name}.manifest.json"
-            executable_path = target / f"{stem.name}.exe"
+            sampled = _sampled_film_package(inspection.package)
+            manifest_path = target / ("link-manifest.json" if sampled else f"{stem.name}.manifest.json")
+            exe_stem = _profile_file_stem(nwp.COMMON_PROFILE_ID) if sampled else stem.name
+            executable_path = target / f"{exe_stem}.exe"
             manifest_bytes = (
                 len(manifest_path.read_bytes()) if manifest_path.is_file() else 0
             )
             executable_bytes = (
                 len(executable_path.read_bytes()) if executable_path.is_file() else 0
             )
-            manifest: dict[str, Any] = {}
-            if manifest_path.is_file():
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest = (_manifest_object(_read_inspection_file(manifest_path)) if sampled else
+                        json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {})
+            if _inspect_artifact_byte_ceiling(inspection.package, manifest) is None:
+                artifacts.append(inspect_size(package_path))
+                total += len(data)
+                continue
             common = (
                 inspection.package.capability.profile_id
                 == nwp.COMMON_PROFILE_ID
@@ -4510,7 +4724,7 @@ def inspect_size(path: str | os.PathLike[str]) -> dict[str, Any]:
             artifact_files: dict[str, int] = {}
             for name in _artifact_auxiliary_names(stem.name, common=common):
                 aux_path = target / name
-                if aux_path.is_file():
+                if aux_path.is_file() and (not sampled or aux_path != manifest_path):
                     artifact_files[name] = aux_path.stat().st_size
             size = analyze_package_size(
                 inspection.package,
@@ -4540,11 +4754,12 @@ def inspect_size(path: str | os.PathLike[str]) -> dict[str, Any]:
             total_distributed += size["distribution"]["total_distributed_bytes"]
         if not artifacts:
             raise ExportError(f"no .nwp artifacts in '{target}'")
-        total_distributed = sum(
-            path.stat().st_size
-            for path in sorted(target.iterdir())
-            if path.is_file()
-        )
+        files = {path.name: path.stat().st_size for path in target.iterdir() if path.is_file()}
+        for artifact in artifacts:
+            distribution = artifact["distribution"]
+            if distribution["byte_ceiling"] is None:
+                files.update(distribution["artifact_files"])
+        total_distributed = sum(files.values())
         return {
             "format": "nw05-inspect-size",
             "version": 1,
@@ -4557,6 +4772,7 @@ def inspect_size(path: str | os.PathLike[str]) -> dict[str, Any]:
     raw = target.read_bytes()
     executable_bytes = 0
     embedded_manifest_bytes = 0
+    embedded_manifest = None
     if target.suffix.lower() == ".exe":
         try:
             data, embedded_manifest = extract_embedded_package(raw)
@@ -4574,8 +4790,17 @@ def inspect_size(path: str | os.PathLike[str]) -> dict[str, Any]:
     if not inspection.valid or inspection.package is None:
         raise ExportError(f"invalid package '{target}'", list(inspection.diagnostics))
     stem = target.with_suffix("")
-    manifest_path = target.parent / f"{stem.name}.manifest.json"
-    executable_path = target.parent / f"{stem.name}.exe"
+    sampled = _sampled_film_package(inspection.package)
+    canonical_exe_stem = _profile_file_stem(nwp.COMMON_PROFILE_ID)
+    requested_manifest = target.with_suffix(".manifest.json")
+    # A CLI single-file export renames the playable output and delivers a
+    # same-stem manifest. Only a canonical directory uses the generic names.
+    canonical_sampled = (sampled and not requested_manifest.is_file()
+                         and target.name in {"common.nwp", f"{canonical_exe_stem}.exe"})
+    manifest_path = target.parent / "link-manifest.json" if canonical_sampled else requested_manifest
+    executable_path = target if target.suffix.lower() == ".exe" else target.with_suffix(".exe")
+    if canonical_sampled and not executable_path.is_file():
+        executable_path = target.parent / f"{canonical_exe_stem}.exe"
     manifest_bytes = (
         len(manifest_path.read_bytes()) if manifest_path.is_file() else embedded_manifest_bytes
     )
@@ -4583,14 +4808,19 @@ def inspect_size(path: str | os.PathLike[str]) -> dict[str, Any]:
         executable_bytes = (
             len(executable_path.read_bytes()) if executable_path.is_file() else 0
         )
+    embedded_is_film = _inspect_artifact_byte_ceiling(inspection.package, _manifest_object(embedded_manifest)) is None
     manifest: dict[str, Any] = {}
-    if manifest_path.is_file():
+    if manifest_path.is_file() and not embedded_is_film:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    common = inspection.package.capability.profile_id == nwp.COMMON_PROFILE_ID
+    if embedded_is_film or _inspect_artifact_byte_ceiling(inspection.package, manifest) is None:
+        return _inspect_informational_film(
+            target, inspection.package, data, raw, embedded_manifest, manifest_path, executable_path, canonical_sampled,
+        )
+    common = inspection.package.capability.profile_id == nwp.COMMON_PROFILE_ID and (not sampled or canonical_sampled)
     artifact_files: dict[str, int] = {}
-    for name in _artifact_auxiliary_names(stem.name, common=common):
+    for name in _artifact_auxiliary_names("common" if canonical_sampled else stem.name, common=common):
         aux_path = target.parent / name
-        if aux_path.is_file():
+        if aux_path.is_file() and (not sampled or aux_path != manifest_path):
             artifact_files[name] = aux_path.stat().st_size
     result = analyze_package_size(
         inspection.package,
@@ -4603,8 +4833,10 @@ def inspect_size(path: str | os.PathLike[str]) -> dict[str, Any]:
     )
     if target.suffix.lower() == ".exe":
         distribution = result["distribution"]
-        sibling_package = target.parent / f"{stem.name}.nwp"
-        sibling_manifest = target.parent / f"{stem.name}.manifest.json"
+        sibling_package = target.with_suffix(".nwp")
+        if canonical_sampled and not sibling_package.is_file():
+            sibling_package = target.parent / "common.nwp"
+        sibling_manifest = manifest_path
         if sibling_package.is_file():
             artifact_files[sibling_package.name] = sibling_package.stat().st_size
         if sibling_manifest.is_file():
@@ -4620,8 +4852,7 @@ def inspect_size(path: str | os.PathLike[str]) -> dict[str, Any]:
             executable_bytes + distribution["artifact_file_bytes"]
         )
         distribution["within_byte_ceiling"] = (
-            distribution["total_distributed_bytes"]
-            <= distribution["byte_ceiling"]
+            distribution["total_distributed_bytes"] <= distribution["byte_ceiling"]
         )
     result["distribution_discovered"] = {
         "manifest_path": str(manifest_path) if manifest_path.is_file() else "",

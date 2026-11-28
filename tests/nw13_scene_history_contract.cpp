@@ -51,13 +51,15 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", player.diagnostics_json().c_str());
         return 2;
     }
-    constexpr std::uint64_t ticks[] = {0, 399, 400, 288000, 192000, 1200, 148800};
+    constexpr std::uint64_t largest_uint = UINT32_MAX;
+    constexpr std::uint64_t ticks[] = {0, 399, 400, 288000, 192000, 1200, 148800,
+                                       largest_uint, largest_uint + 1u};
     for (auto tick : ticks) {
         const auto previous_work = player.history_steps_executed();
         if (!player.ApplyFramePlanForTesting(tick) ||
             player.history_steps_executed() != previous_work + 1 ||
             player.history_pending_ticks() != 0 ||
-            player.last_root_constants()[0] != tick) {
+            player.last_root_constants()[0] != std::min(tick, largest_uint)) {
             std::fprintf(stderr, "planner failed at tick %llu: %s\n",
                          static_cast<unsigned long long>(tick), player.diagnostics_json().c_str());
             return 3;

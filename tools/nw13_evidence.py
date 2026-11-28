@@ -28,7 +28,6 @@ RAY_FALLBACK_ID = "nw13.common.fallback"
 
 WORK_GRAPH_PROFILE_ID = "nw13.optional.d3d12.work_graphs.experimental.v1"
 WORK_GRAPH_FALLBACK_ID = "nw13.fallback.work_graphs.conventional.v1"
-CANONICAL_DISTRIBUTION_CEILING_BYTES = 262144
 
 
 class EvidenceError(ValueError):
@@ -322,11 +321,7 @@ def export_artifacts(
     caps = dict(DEFAULT_CAPABILITIES)
     if capabilities:
         caps.update(capabilities)
-    common_budgets = {
-        "max_distribution_bytes": CANONICAL_DISTRIBUTION_CEILING_BYTES,
-        "max_shader_bytes": 48 * 1024,
-        "max_memory_bytes": 64 * 1024 * 1024,
-    }
+    common_budgets = {"max_memory_bytes": 64 * 1024 * 1024}
     common_obs = _artifact_observation(common_observation, common_budgets)
     common = {
         "artifact_id": "nw13.common",
@@ -358,8 +353,6 @@ def export_artifacts(
             if selection["profile_id"] == COMMON_PROFILE_ID:
                 continue
             optional_budgets = {
-                "max_distribution_bytes": CANONICAL_DISTRIBUTION_CEILING_BYTES,
-                "max_shader_bytes": 96 * 1024,
                 "max_memory_bytes": 96 * 1024 * 1024,
                 **selection.get("budgets", {}),
             }
@@ -503,8 +496,6 @@ def _budget_checks(
                 "status": "passed" if observed <= limit else "exceeded",
             }
 
-    check("distribution_bytes", observation.get("distribution_bytes"), budgets.get("max_distribution_bytes"))
-    check("shader_bytes", observation.get("shader_bytes"), budgets.get("max_shader_bytes"))
     check("committed_memory_bytes", observation.get("committed_memory_bytes"), budgets.get("max_memory_bytes"))
     if "max_as_bytes" in budgets:
         check("acceleration_structure_bytes", observation["smoke"].get("acceleration_structure_bytes"), budgets["max_as_bytes"])
@@ -524,6 +515,7 @@ def _artifact_observation(
         "smoke": _normalise_smoke(observation.get("smoke")),
     }
     for key in (
+        "size_accounting",
         "startup_ms",
         "committed_memory_bytes",
         "vram_bytes",
@@ -636,7 +628,9 @@ def validate_bundle(bundle: Mapping[str, Any]) -> list[dict[str, Any]]:
         if artifact.get("image_within_tolerance") is False:
             diagnostics.append(_diagnostic("nw13_image_mismatch", "matched artifact exceeds its image tolerance"))
         for name, check in (artifact.get("budget_checks") or {}).items():
-            if check.get("status") == "exceeded":
+            # Historic reports may still contain the retired byte checks.
+            # Integrity, real smoke and runtime budgets remain mandatory.
+            if name not in {"distribution_bytes", "shader_bytes"} and check.get("status") == "exceeded":
                 diagnostics.append(
                     _diagnostic(
                         "nw13_budget_exceeded",

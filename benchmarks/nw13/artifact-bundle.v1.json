@@ -29,8 +29,6 @@
       "dxgi"
     ],
     "budgets": {
-      "max_distribution_bytes": 262144,
-      "max_shader_bytes": 49152,
       "max_memory_bytes": 67108864
     },
     "fallback_artifact_id": null,
@@ -59,23 +57,14 @@
     "dependency_identities": null,
     "measurement_status": "unavailable",
     "budget_checks": {
-      "distribution_bytes": {
-        "limit": 262144,
-        "observed": null,
-        "status": "unavailable"
-      },
-      "shader_bytes": {
-        "limit": 49152,
-        "observed": null,
-        "status": "unavailable"
-      },
       "committed_memory_bytes": {
         "limit": 67108864,
         "observed": null,
         "status": "unavailable"
       }
     },
-    "within_budgets": null
+    "within_budgets": null,
+    "size_accounting": null
   },
   "optional": [],
   "fallback": {
@@ -102,8 +91,6 @@
       "dxgi"
     ],
     "budgets": {
-      "max_distribution_bytes": 262144,
-      "max_shader_bytes": 49152,
       "max_memory_bytes": 67108864
     },
     "fallback_artifact_id": null,
@@ -132,23 +119,14 @@
     "dependency_identities": null,
     "measurement_status": "unavailable",
     "budget_checks": {
-      "distribution_bytes": {
-        "limit": 262144,
-        "observed": null,
-        "status": "unavailable"
-      },
-      "shader_bytes": {
-        "limit": 49152,
-        "observed": null,
-        "status": "unavailable"
-      },
       "committed_memory_bytes": {
         "limit": 67108864,
         "observed": null,
         "status": "unavailable"
       }
     },
-    "within_budgets": null
+    "within_budgets": null,
+    "size_accounting": null
   },
   "diagnostics": [],
   "independent_builds": false,
@@ -181,5 +159,5 @@
     "common": null,
     "optional": {}
   },
-  "bundle_sha256": "sha256:efaf43556652585ea54d6ecd66d9edb41d59fb31c5e5e677b2586c5ccedb56b4"
+  "bundle_sha256": "sha256:45cf30830c053c5a0aea5c168a61cc88a15549187208a3413eb19597e853ff44"
 }

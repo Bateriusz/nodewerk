@@ -860,14 +860,16 @@ def test_native_resource_plan_rebinds_tonemap_root_without_writing_bloom(
 def test_player_packs_uint_tick_root_constant_at_nonzero_tick() -> None:
     # Unconditional contract assertion against the actual C++ implementation.
     # The player lowers a `uint` timeline parameter with tick_kind 1 and writes
-    # the absolute integer tick, not a numeric float conversion.
+    # the absolute integer tick, saturating outside the uint32 range rather
+    # than casting to float or wrapping. The film test exercises the shared
+    # C++ path at the saturation boundary on hosts without the Win32 fixture.
     player_source = (
         REPO_ROOT / "src" / "player" / "package_player.cpp"
     ).read_text(encoding="utf-8")
     assert '} else if (parameter.type == "uint") {' in player_source
     assert "*tick_kind = 1u;" in player_source
     assert "if (tick_kind == 1u) {" in player_source
-    assert "static_cast<std::uint32_t>(tick)" in player_source
+    assert "(std::min)(tick, static_cast<std::uint64_t>(UINT32_MAX))" in player_source
 
     candidates = []
     override = os.environ.get("NW04_FIXTURE")

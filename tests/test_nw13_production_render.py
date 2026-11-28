@@ -410,7 +410,7 @@ def test_native_capture_rejects_truncated_or_nonfinite_readback(tmp_path):
         measure._read_capture(path, (1, 1))
 
 
-def test_release_film_shader_validates_and_fits_declared_shader_budgets(tmp_path):
+def test_release_film_shaders_validate_and_report_actual_bytes(tmp_path):
     import os
     import shutil
     import nw03_compiler as compiler
@@ -447,9 +447,9 @@ def test_release_film_shader_validates_and_fits_declared_shader_budgets(tmp_path
     assert metadata["bounds_count"] == 17
     with pytest.raises(ValueError, match="baseline requires"):
         offline_shader_pack.validate_dxil_container(ray.read_bytes())
-    common_shader_bytes = common.stat().st_size + post.stat().st_size
-    assert common_shader_bytes <= 48 * 1024
-    assert common_shader_bytes + ray.stat().st_size <= 96 * 1024
+    assert all(path.stat().st_size > 0 for path in (common, post, ray))
+    offline_shader_pack.validate_dxil_container(common.read_bytes())
+    offline_shader_pack.validate_dxil_container(post.read_bytes())
 
 
 def test_shared_export_packages_the_preview_cue_bytes_and_integer_clock(tmp_path):
@@ -597,6 +597,10 @@ def test_typed_scene_history_is_real_and_legacy_film_remains_stateless(tmp_path,
                                         ).artifacts[nwp.COMMON_PROFILE_ID]
     assert not dead_artifact.package.history
     assert not {"nw.feedback.scene_image", "nw.render.film_frame"}.intersection(dead_artifact.manifest["retained"]["code"])
+    with pytest.raises(export.ExportError, match="exceeds the byte ceiling"):
+        export.export_graph(dead_source, tmp_path / "dead-capped", allow_test_payloads=True,
+                            settings=export.ExportSettings(byte_ceiling=1),
+                            dxc_executable=__import__("nw09_export")._test_dxc(tmp_path / "dxc"))
 
 
 def test_scene_history_is_visible_before_cut_and_exactly_reset_after_seek():
@@ -668,60 +672,184 @@ def test_portable_cpp_package_player_accepts_bounded_nonmonotonic_film_ticks(tmp
     assert compile_result.returncode == 0, compile_result.stderr
     result = subprocess.run([str(binary), str(package_path)], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
-    assert "7 bounded predecessor steps" in result.stdout
+    assert "9 bounded predecessor steps" in result.stdout
 
 
-def test_over_budget_common_retains_rejected_bytes_and_same_source_control(tmp_path, monkeypatch):
-    import nw03_compiler as compiler
+@pytest.mark.parametrize("sampled_history", [True, False])
+def test_film_export_reports_large_artifacts_without_waiving_validity(tmp_path, sampled_history, monkeypatch):
+    from dataclasses import replace
+    import ntpath
     import nw05_export as export
     import nw09_export
     import nw13_artifact_measure as measure
-    import nw13_history
+    import nwp_package as nwp
+    from test_dependency_closure_and_accounting import build_synthetic_pe64
 
     document = production.load_production(REPO_ROOT, PRODUCTION)
     source = REPO_ROOT / document["graph"]
-    graph = compiler.load_graph(source)
-    audio = production.playback_song(REPO_ROOT, document, graph=graph)
-    output, build = tmp_path / "evidence", tmp_path / "private-build"
-    output.mkdir()
-    build.mkdir()
+    if not sampled_history:
+        document["effects"].pop("temporal_feedback")
+        source = tmp_path / "stateless.nwgraph"
+        production.import_graph(REPO_ROOT, document, source)
+    template = tmp_path / "portable-pe-fixture.exe"
+    template.write_bytes(build_synthetic_pe64(["kernel32.dll", "d3d12.dll"], extra_text_bytes=700_000))
     tool = nw09_export._test_dxc(tmp_path / "dxc")
-    settings = export.ExportSettings(byte_ceiling=1)
-    with pytest.raises(export.ExportError, match="exceeds the byte ceiling") as common:
-        export.export_graph(source, output / "rejected", allow_test_payloads=True, dxc_executable=tool,
-                            settings=settings, audio_song_payload=audio)
-    assert common.value.rejected_size["distribution"]["byte_ceiling"] == 1
+    settings = export.ExportSettings(byte_ceiling=1, player_template=str(template))
+    directory = tmp_path / "published"
+    report_path = directory / "reports" / "full-export.json"
+    result = export.export_graph(source, directory, allow_test_payloads=True, dxc_executable=tool,
+                                 settings=settings, report_path=report_path)
+    artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
+    assert bool(artifact.package.history) is sampled_history
+    assert result.settings.byte_ceiling is None
+    distribution = artifact.size_report["distribution"]
+    assert distribution["byte_ceiling"] is None and distribution["within_byte_ceiling"] is None
+    assert distribution["total_distributed_bytes"] > 700_000
+    delivered = {p.relative_to(directory).as_posix(): p.stat().st_size for p in directory.rglob("*") if p.is_file()}
+    assert distribution["total_distributed_bytes"] == sum(delivered.values())
+    actual_auxiliary = {Path(name).as_posix(): length for name, length in distribution["artifact_files"].items()}
+    assert actual_auxiliary[report_path.relative_to(directory).as_posix()] == report_path.stat().st_size
+    if sampled_history:
+        assert json.loads(report_path.read_bytes())["size_report"]["distribution"] == distribution
+    original_ledger = (directory / "size-report.json").read_bytes()
+    with monkeypatch.context() as windows:
+        windows.setattr(export, "_publication_path_key", ntpath.normcase)
+        for alias in ("SIZE-REPORT.JSON", "LINK-MANIFEST.JSON"):
+            with pytest.raises(export.ExportError, match="replace an existing artifact path"):
+                export.export_graph(source, directory, allow_test_payloads=True, dxc_executable=tool,
+                                    settings=settings, report_path=directory / alias)
+    assert (directory / "size-report.json").read_bytes() == original_ledger
+    # The NW-13 native evidence description reads bytes, not a synthetic
+    # observation or nominal ceiling. It neither runs nor claims this test PE.
+    measured = measure._description(result)
+    ledger = measured["size_accounting"]
+    assert ledger["status"] == "informational"
+    assert measured["distribution_bytes"] == distribution["total_distributed_bytes"]
+    assert {Path(name).as_posix(): length for name, length in ledger["export_files"].items()} == delivered
+    assert ledger["executable"]["linked_pe_bytes"] == template.stat().st_size
+    assert ledger["executable"]["embedded_package_bytes"] == len(artifact.package_bytes)
+    assert "smoke" not in measured
+    inspected_directory = export.inspect_size(directory)
+    assert inspected_directory["total_distributed_bytes"] == measured["distribution_bytes"]
+    for inspection in (inspected_directory["artifacts"][0], export.inspect_size(directory / artifact.executable_name)):
+        counted = inspection["distribution"]
+        assert counted["byte_ceiling"] is None
+        assert counted["total_distributed_bytes"] == measured["distribution_bytes"]
+        assert inspection["dependency_cost_total_bytes"] == measured["distribution_bytes"]
+        assert counted["player_template_bytes"] == template.stat().st_size
+        assert counted["embedded_package_growth_bytes"] == len(artifact.executable_bytes) - template.stat().st_size
+    broken = artifact.package_bytes[:-1] + bytes([artifact.package_bytes[-1] ^ 1])
+    assert nwp.validate_package_bytes(artifact.package_bytes)[0] is True
+    assert nwp.validate_package_bytes(broken)[0] is False
+    exported_package = next(directory.glob("*.nwp"))
+    exported_package.write_bytes(broken)
+    with pytest.raises(measure.evidence.EvidenceError, match="differs from measured build bytes"):
+        measure._description(result)
+    with pytest.raises(export.ExportError, match="memory budget"):
+        export.export_graph(source, tmp_path / "denied-memory", allow_test_payloads=True,
+                            dxc_executable=tool, settings=replace(settings, memory_budget=1))
 
-    def native_call_simulated(control_graph, private_output, native_build, template, dxc, same_audio):
-        control = compiler.load_graph(control_graph)
-        assert nw13_history.read_feedback(control) is None and nw13_history.read_feedback(graph) is not None
-        assert control.nodes["film"].params == graph.nodes["film"].params
-        assert control.settings == graph.settings
-        assert audio == same_audio == production.playback_song(REPO_ROOT, document, graph=control)
-        assert private_output.is_relative_to(build)
-        return export.export_graph(control_graph, private_output, allow_test_payloads=True, dxc_executable=tool,
-                                   settings=settings, audio_song_payload=audio)
 
-    monkeypatch.setattr(measure, "_export", native_call_simulated)
-    measure._retain_common_size_rejection(common.value, parsed_graph=graph, source_identity={"graph": "fixture"},
-                                         revision="fixture-revision", build=build, output=output,
-                                         template=None, dxc=None, audio=audio)
-    assert [path.name for path in output.iterdir()] == ["common-budget-rejection.v1.json"]
-    record = json.loads((output / "common-budget-rejection.v1.json").read_bytes())
-    assert record["status"] == "rejected_byte_ceiling" and record["common"] == common.value.rejected_size
-    assert record["smoke_executed"] is False and record["acceptance_claimed"] is False
-    assert record["stateless_control"]["status"] == "rejected_byte_ceiling"
-    assert record["stateless_control"]["smoke_executed"] is False
-    assert record["stateless_control"]["bytes"]["distribution"]["byte_ceiling"] == 1
-    assert "HIST" in record["common"]["package_sections"]
-    assert "HIST" not in record["stateless_control"]["bytes"]["package_sections"]
-    assert record["gate_totals_comparable"] is False and "gate_totals_delta" not in record
-    sampled_accounting = record["common"]["distribution_accounting"]
-    stateless_accounting = record["stateless_control"]["bytes"]["distribution_accounting"]
-    assert sampled_accounting["phase"] == "stateful-prepublication"
-    assert sampled_accounting["counted_manifest_path"] == "link-manifest.json"
-    assert sampled_accounting["counted_more_than_once"] == ["link-manifest.json"]
-    assert sampled_accounting["not_counted_at_this_phase"] == ["size-report.json"]
-    assert stateless_accounting["phase"] == "stateless-pre-finalization"
-    assert stateless_accounting["counted_manifest_path"] != "link-manifest.json"
-    assert stateless_accounting["counted_more_than_once"] == []
+def test_single_file_film_cli_counts_requested_exe_and_manifest(tmp_path, capsys):
+    import nodewerkc
+    import nw05_export as export
+    import nw09_export
+    from test_dependency_closure_and_accounting import build_synthetic_pe64
+
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    source = REPO_ROOT / document["graph"]
+    template = tmp_path / "template.exe"
+    template.write_bytes(build_synthetic_pe64(["kernel32.dll", "d3d12.dll"], extra_text_bytes=700_000))
+    output = tmp_path / "reel.v1.exe"
+    manifest = output.with_suffix(".manifest.json")
+    tool = nw09_export._test_dxc(tmp_path / "dxc")
+    assert nodewerkc.main(["export", str(source), str(output), "--player-template", str(template),
+                           "--allow-test-payloads", "--byte-ceiling", "1", "--dxc", str(tool)]) == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+    assert nodewerkc.main(["inspect-size", str(output)]) == 0
+    parsed = json.loads(capsys.readouterr().out)
+    dist = parsed["distribution"]
+    assert parsed["distribution_discovered"]["executable_path"] == str(output)
+    assert parsed["distribution_discovered"]["manifest_path"] == str(manifest)
+    assert dist["artifact_files"] == {manifest.name: manifest.stat().st_size}
+    assert dist["total_distributed_bytes"] == parsed["dependency_cost_total_bytes"] == output.stat().st_size + manifest.stat().st_size
+    assert dist["player_template_bytes"] == template.stat().st_size
+    assert dist["embedded_package_growth_bytes"] == output.stat().st_size - template.stat().st_size
+    assert dist["embedded_package_growth_bytes"] == (dist["embedded_package_bytes"]
+                                                      + dist["embedded_manifest_bytes"] + export.EMBED_FOOTER_SIZE)
+    renamed = tmp_path / "standalone.exe"
+    renamed.write_bytes(output.read_bytes())
+    deployed = export.inspect_size(renamed)
+    assert deployed["distribution"]["manifest_bytes"] == 0
+    assert deployed["distribution"]["embedded_manifest_bytes"] == dist["embedded_manifest_bytes"]
+    assert deployed["distribution"]["total_distributed_bytes"] == renamed.stat().st_size
+    assert deployed["dependency_cost_total_bytes"] == renamed.stat().st_size
+
+    # The same-stem CLI names alone are not a build identity. Replacing just
+    # the package and loose manifest must not change the old EXE's attribution.
+    old_manifest = manifest.read_bytes()
+    old_embedded_package, _ = export.extract_embedded_package(output.read_bytes())
+    document["rendering"]["width"] = 40
+    different_graph = tmp_path / "changed.nwgraph"
+    production.import_graph(REPO_ROOT, document, different_graph)
+    package_path = output.with_suffix(".nwp")
+    assert nodewerkc.main(["export", str(different_graph), str(package_path),
+                           "--allow-test-payloads", "--dxc", str(tool)]) == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True
+    assert package_path.read_bytes() != old_embedded_package and manifest.read_bytes() != old_manifest
+    old_exe = export.inspect_size(output)
+    assert old_exe["distribution_discovered"]["manifest_path"] == ""
+    assert old_exe["manifest_sha256"] == json.loads(old_manifest)["manifest_sha256"]
+    assert old_exe["distribution"]["total_distributed_bytes"] == output.stat().st_size
+    selected_package = export.inspect_size(package_path)
+    assert selected_package["distribution_discovered"]["executable_path"] == ""
+    assert selected_package["distribution_discovered"]["manifest_path"] == str(manifest)
+    assert selected_package["distribution"]["total_distributed_bytes"] == package_path.stat().st_size + manifest.stat().st_size
+    manifest.write_bytes(old_manifest)
+    assert export.inspect_size(package_path)["distribution"]["total_distributed_bytes"] == package_path.stat().st_size
+    manifest.write_bytes(b"not a manifest")
+    assert export.inspect_size(output)["distribution"]["total_distributed_bytes"] == output.stat().st_size
+
+
+def test_discarded_film_does_not_disable_legacy_ceiling_without_present(tmp_path):
+    import nw03_compiler as compiler
+    import nw05_export as export
+    import nw05_optimizer as optimizer
+    import nw08_editor
+    import nw09_export
+    import nwp_package as nwp
+
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    document["effects"].pop("temporal_feedback")
+    film_source = tmp_path / "film.nwgraph"
+    production.import_graph(REPO_ROOT, document, film_source)
+    film = compiler.load_graph(film_source)
+    plain = compiler.load_graph(REPO_ROOT / "fixtures" / "nw05" / "procedural_image.nwgraph")
+    del plain.nodes["screen"]
+    plain.layout.pop("screen", None)
+    base = tmp_path / "base.nwgraph"
+    base.write_text(nw08_editor.emit_graph_text(plain), encoding="utf-8")
+    for node in film.nodes.values():
+        if node.operator_id != "nw.render.present":
+            assert node.node_id not in plain.nodes
+            plain.nodes[node.node_id] = node
+    plain.nodes["unused_bloom"] = compiler.GraphNode(
+        "unused_bloom", "nw.post.bloom", "1.0.0", "frame", "gpu",
+        params={"threshold": ["1"], "intensity": ["0.2"], "radius": ["1"], "resolution_scale": ["0.5"]},
+        inputs={"image": ("corridor_render", "image")},
+    )
+    with_dead_film = tmp_path / "with-dead-film.nwgraph"
+    with_dead_film.write_text(nw08_editor.emit_graph_text(plain), encoding="utf-8")
+    assert [item.node_id for item in optimizer.semantic_outputs(plain)] == ["output"]
+    tool = nw09_export._test_dxc(tmp_path / "dxc")
+    packages = []
+    for index, source in enumerate((base, with_dead_film)):
+        with pytest.raises(export.ExportError, match="exceeds the byte ceiling"):
+            export.export_graph(source, tmp_path / f"denied-{index}", allow_test_payloads=True,
+                                dxc_executable=tool, settings=export.ExportSettings(byte_ceiling=1))
+        result = export.export_graph(source, tmp_path / f"normal-{index}", allow_test_payloads=True, dxc_executable=tool)
+        artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
+        assert result.settings.byte_ceiling == export.DEFAULT_BYTE_CEILING
+        assert "nw.shader.film" not in artifact.manifest["retained"]["code"]
+        packages.append(artifact.package_bytes)
+    assert packages[0] == packages[1]

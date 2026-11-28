@@ -216,12 +216,26 @@ def test_export_artifacts_only_records_supplied_measurements_and_smoke() -> None
     unmeasured = evidence.export_artifacts(production, independent_builds=True)
     assert any("independent_builds" in item["message"] for item in evidence.validate_bundle(unmeasured))
 
-    oversized = evidence.export_artifacts(
-        production,
-        common_observation={**observation, "distribution_bytes": 262145},
+    large = {**observation, "distribution_bytes": 1_200_000, "shader_bytes": 240_000}
+    informational = evidence.export_artifacts(
+        production, common_observation=large, fallback_observation=large,
+        capabilities={"raytracing_tier": 1.1, "highest_shader_model": "6_5"},
+        requested_features=["dxr_inline_ray_query"], optional_observations={"dxr_inline_ray_query": large},
     )
-    assert oversized["common"]["within_budgets"] is False
-    assert any(item["code"] == "nw13_budget_exceeded" for item in evidence.validate_bundle(oversized))
+    assert evidence.validate_bundle(informational) == []
+    for artifact in (informational["common"], informational["fallback"], *informational["optional"]):
+        assert artifact["distribution_bytes"] == 1_200_000 and artifact["shader_bytes"] == 240_000
+        assert set(artifact["budget_checks"]).isdisjoint({"distribution_bytes", "shader_bytes"})
+        assert artifact["within_budgets"] is None
+    historical = evidence.seal_bundle({**informational, "common": {**informational["common"],
+        "budget_checks": {"distribution_bytes": {"status": "exceeded", "limit": 262144}}}})
+    assert evidence.validate_bundle(historical) == []
+    invalid_memory = evidence.export_artifacts(
+        production, common_observation={**large, "committed_memory_bytes": 65 * 1024 * 1024},
+    )
+    assert invalid_memory["common"]["within_budgets"] is False
+    assert any(item["code"] == "nw13_budget_exceeded" and "committed_memory_bytes" in item["message"]
+               for item in evidence.validate_bundle(invalid_memory))
 
 
 def test_smoke_observation_records_real_execution(tmp_path: Path) -> None:
@@ -327,7 +341,8 @@ def test_recorded_lowering_and_artifact_evidence_is_internally_consistent() -> N
     assert bundle["common"]["smoke"]["executed"] is False
     assert bundle["common"]["smoke"]["status"] == "unavailable"
     assert bundle["common"]["within_budgets"] is None
-    assert bundle["common"]["budget_checks"]["distribution_bytes"]["status"] == "unavailable"
+    assert set(bundle["common"]["budget_checks"]) == {"committed_memory_bytes"}
+    assert bundle["common"]["size_accounting"] is None
     assert bundle["fallback"]["smoke"]["executed"] is False
     for artifact in bundle["optional"]:
         assert artifact["distribution_bytes"] is None

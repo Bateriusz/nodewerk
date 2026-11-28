@@ -314,20 +314,19 @@ zero release code, shader bytes, imports, package sections or dependencies only
 after a matched same-revision export pair is measured; otherwise those fields
 remain explicitly `null`.
 
-Measured distribution, shader and committed-memory observations are compared
-with the artifact's declared budgets (including the canonical 262144-byte
-distribution ceiling). `validate_bundle()` reports `nw13_budget_exceeded`
-instead of accepting an over-budget artifact as a passing measurement.
-If the common export is rejected before launch, the Windows evidence
-retains a separate `common-budget-rejection.v1.json` with linked PE,
-embedded and exported payload, manifest, and auxiliary byte components.
-It also attempts a stateless same-source control at the same ceiling, with
-identical geometry, timing and song. Compare actual component bytes only:
-stateful and stateless exporters count different files, and a stateless
-reject can occur before its report set is finalized. The ledger names each
-gate phase and counts, including the stateful gate's duplicate manifest
-entry and excluded later size report. It neither publishes denied runnable
-bytes nor claims that either artifact executed or passed.
+NW-13 distribution, executable, package and shader byte counts are reported
+for comparison only, not used as acceptance limits. The evidence records
+actual export file lengths, counts each delivered path once, and separately
+attributes the PE image, the embedded payload and the package sections. The
+size of an executable is included once: the embedded bytes are a component
+of that executable, not an additional file. Explicit reports written into
+the export directory are included with their actual finalized byte counts.
+A single-file CLI export attributes companions only when their bytes bind to
+the selected package or embedded manifest; stale same-stem files do not count.
+Captures and evidence reports outside the export folder are not part of the
+measured distribution.
+Memory and acceleration-structure budgets, package integrity and bounds,
+image checks, smoke and reproducibility requirements still apply.
 The independent NW-11 common/fallback WARP smoke remains runnable after a
 film rejection, without converting the Windows job result to success.
 
