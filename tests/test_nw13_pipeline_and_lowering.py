@@ -224,17 +224,25 @@ def test_export_artifacts_only_records_supplied_measurements_and_smoke() -> None
 
 
 def test_smoke_observation_records_real_execution(tmp_path: Path) -> None:
-    script = tmp_path / "smoke.py"
-    script.write_text("#!/usr/bin/env python3\nraise SystemExit(0)\n", encoding="utf-8")
-    script.chmod(0o755)
-    passed = evidence.smoke_observation(str(script), ["--headless"])
+    # Windows CreateProcess cannot start a .py file directly. Launch the
+    # interpreter explicitly, without shell association or chmod semantics.
+    script = tmp_path / "smoke with space.py"
+    script.write_text(
+        "import sys\n"
+        "assert sys.argv[1:] == ['--headless']\n"
+        "print('qualified child stdout')\n"
+        "raise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+    passed = evidence.smoke_observation(sys.executable, [str(script), "--headless"])
     assert passed["executed"] is True
     assert passed["status"] == "pass"
     assert passed["headless"] is True
+    assert passed["returncode"] == 0
+    assert passed["stdout_sha256"] == evidence.sha256_text("qualified child stdout\n")
     failing = tmp_path / "failing.py"
-    failing.write_text("#!/usr/bin/env python3\nraise SystemExit(3)\n", encoding="utf-8")
-    failing.chmod(0o755)
-    failed = evidence.smoke_observation(str(failing), ["--headless"])
+    failing.write_text("raise SystemExit(3)\n", encoding="utf-8")
+    failed = evidence.smoke_observation(sys.executable, [str(failing), "--headless"])
     assert failed["executed"] is True
     assert failed["status"] == "fail"
     assert failed["returncode"] == 3
