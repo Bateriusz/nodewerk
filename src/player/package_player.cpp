@@ -107,6 +107,9 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
+#if defined(NW13_INLINE_RAY)
+#include "nw13/inline_ray.h"
+#endif
 #if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT
 #include "nw11_production_extension.h"
 #endif
@@ -442,6 +445,26 @@ bool BarrierStateCodeCompatibleWithUsage(std::uint32_t code,
 }
 #endif  // !NW05_FROZEN_EMBEDDED_SPECIALIZATION
 
+#if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
+bool UsesSampledSceneHistory(const package::Package& pkg) noexcept {
+    return pkg.history.size() == 1u &&
+           pkg.history.front().state_type == package::kSampledSceneHistoryType;
+}
+
+std::uint64_t SceneHistoryTargetStep(const package::Package& pkg, std::uint64_t tick) noexcept {
+    std::uint32_t limit = 0u;
+    for (const auto& parameter : pkg.parameters) {
+        if (parameter.name == "nw13.film.duration_ticks" && parameter.type == "uint" &&
+            parameter.value.size() == sizeof(limit)) {
+            std::memcpy(&limit, parameter.value.data(), sizeof(limit));
+            break;
+        }
+    }
+    return (std::min)(tick, static_cast<std::uint64_t>(limit)) /
+           package::kTimelineTicksPerSimulationTick;
+}
+#endif
+
 bool TryParameterTickLayout(const package::ParameterRecord& parameter,
                             std::uint8_t* tick_kind,
                             std::uint32_t* parameter_bytes) {
@@ -495,7 +518,8 @@ void WriteTimelineTick(std::uint32_t* words,
             const float value = static_cast<float>(tick);
             std::memcpy(component_destination, &value, sizeof(value));
         } else if (tick_kind == 1u) {
-            const std::uint32_t value = static_cast<std::uint32_t>(tick);
+            const std::uint32_t value = static_cast<std::uint32_t>(
+                (std::min)(tick, static_cast<std::uint64_t>(UINT32_MAX)));
             std::memcpy(component_destination, &value, sizeof(value));
         } else if (tick_kind == 2u) {
             const std::int32_t value = static_cast<std::int32_t>(tick);
@@ -642,6 +666,9 @@ struct PlatformState {
     bool swapchain_valid = false;
 
 #if defined(_WIN32)
+#if defined(NW13_INLINE_RAY)
+    film::Acceleration film_ray;
+#endif
     struct ResourceSlot {
         std::uint32_t resource_id = 0u;
         ID3D12Resource* resource = nullptr;
@@ -1462,6 +1489,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                     op.time_byte_offset < 0) {
                     op.time_byte_offset =
                         static_cast<std::int32_t>(byte_offset);
+                    op.time_tick_kind = tick_kind;
                 }
                 if (parameter.name == "nw09.simulation_tick" &&
                     parameter_bytes >= 4u &&
@@ -1855,6 +1883,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                     op.time_byte_offset < 0) {
                     op.time_byte_offset =
                         static_cast<std::int32_t>(byte_offset);
+                    op.time_tick_kind = tick_kind;
                 }
                 if (parameter.name == "nw09.simulation_tick" &&
                     parameter_bytes >= 4u &&
@@ -2639,6 +2668,13 @@ ExitCode PackagePlayer::OpenDeviceAndWindow() {
                     "no hardware adapter supports D3D_FEATURE_LEVEL_12_0");
     }
     platform_->device = device;
+#if defined(NW13_INLINE_RAY)
+    if (!film::Supported(device)) {
+        return Fail(ExitCode::OptionalFeatureUnsupported, "device", "nw13_inline_ray_capability",
+                    "shader_model_and_raytracing", "SM 6.5 and DXR 1.1", "unsupported_or_unavailable",
+                    "capability_validation", "NW-13 inline ray film requires SM 6.5 and DXR 1.1");
+    }
+#endif
 #if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT
     const int nw11_capability = ::nw11::production::Capability(device);
     if (nw11_capability != 0) {
@@ -3871,7 +3907,13 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             }
             PlatformState::RootSlot root_slot{};
             root_slot.root_signature_id = root_id;
-#if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT && (NW11_VARIANT_MESH || NW11_VARIANT_RAY)
+#if defined(NW13_INLINE_RAY)
+            const HRESULT root_hr = root_id == film::kSampleRootId
+                ? (record->family == "compute.math_noise" ? film::Root(state->device, &root_slot.root_signature) : E_INVALIDARG)
+                : (record->blob.empty() ? E_INVALIDARG : state->device->CreateRootSignature(
+                       0u, record->blob.data(), record->blob.size(), IID_PPV_ARGS(&root_slot.root_signature)));
+            if (FAILED(root_hr) || root_slot.root_signature == nullptr) {
+#elif defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT && (NW11_VARIANT_MESH || NW11_VARIANT_RAY)
             const HRESULT root_hr = record->family == "graphics.nw06.instanced"
                 ? ::nw11::production::GraphicsRoot(state->device, &root_slot.root_signature)
                 : (record->blob.empty() ? E_INVALIDARG : state->device->CreateRootSignature(
@@ -3949,6 +3991,9 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
             pso_desc.pRootSignature = root;
             pso_desc.CS.pShaderBytecode = shader->blob.data();
             pso_desc.CS.BytecodeLength = shader->blob.size();
+#if defined(NW13_INLINE_RAY)
+            if (shader_id == film::kSampleShaderId) pso_desc.CS = film::kShader;
+#endif
             PlatformState::PipelineSlot pipeline{};
             pipeline.shader_id = shader_id;
             if (FAILED(state->device->CreateComputePipelineState(
@@ -4755,6 +4800,32 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
         const ExitCode wait = WaitForAllFrames("initialization_complete");
         if (wait != ExitCode::Success) return wait;
     }
+#if defined(NW13_INLINE_RAY)
+    {
+        auto& frame = state->frames.front();
+        if (FAILED(frame.allocator->Reset()) ||
+            FAILED(frame.command_list->Reset(frame.allocator, nullptr)) ||
+            !state->film_ray.Record(state->device, frame.command_list) ||
+            FAILED(frame.command_list->Close())) {
+            return Fail(ExitCode::ResourceAllocationFailed, "resource", "nw13_acceleration_setup",
+                        "inline_ray", "recorded within budget", "failed", "initialization_complete",
+                        "NW-13 swept acceleration structure setup failed");
+        }
+        ID3D12CommandList* commands[] = {frame.command_list};
+        state->queue->ExecuteCommandLists(1, commands);
+        frame.fence_value = next_fence_value_++;
+        if (FAILED(state->queue->Signal(state->fence, frame.fence_value))) {
+            return Fail(ExitCode::GpuSubmissionFailed, "gpu_execution", "nw13_acceleration_signal",
+                        "inline_ray", "submitted", "failed", "initialization_complete",
+                        "NW-13 acceleration structure submission failed");
+        }
+        const auto wait = WaitForAllFrames("nw13_acceleration_build");
+        if (wait != ExitCode::Success) return wait;
+        NoteEngineAllocation(state->film_ray.bytes, state->film_ray.upload, false, false, false);
+        std::printf("NW13_AS_COMMITTED_BYTES=%llu\n",
+                    static_cast<unsigned long long>(state->film_ray.bytes + state->film_ray.upload));
+    }
+#endif
 #if defined(NW11_PRODUCTION_EXPERIMENT) && NW11_PRODUCTION_EXPERIMENT && NW11_VARIANT_RAY
     // Reuse the production queue and retirement path for the one-time
     // graph-generated instance readback. All optional allocations use the
@@ -4832,11 +4903,12 @@ ExitCode PackagePlayer::RunInitializationInstructions() {
                         "deterministic pipeline creation failure seam");
 #if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
         } else if (instruction.opcode == "init.upload_history_state") {
-            if (!require_operands(instruction, 2u) ||
-                instruction.operands[0].type !=
-                    package::OperandType::ResourceRef ||
+            if (instruction.operands.size() != 2u ||
+                instruction.operands[0].type != package::OperandType::ResourceRef ||
                 instruction.operands[1].type != package::OperandType::U32) {
-                return last_exit_;
+                return Fail(ExitCode::PackageValidationFailed, "package_validation",
+                            "history_upload_operands", "operands", "resource_ref,u32",
+                            "invalid", "init.upload_history_state", "invalid History upload operands");
             }
             const package::HistoryRecord* history = nullptr;
             for (const auto& candidate : package_.history) {
@@ -4970,10 +5042,17 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     // player display root signature/pipeline and must restore this state for a
     // following package dispatch.
     ID3D12RootSignature* package_root_signature = nullptr;
+#if defined(NW13_INLINE_RAY)
+    std::uint32_t package_root_id = 0u;
+    auto bind_sample_tlas = [&]() {
+        film::BindSampleRootTlas(list, package_root_id, state->film_ray.top->GetGPUVirtualAddress());
+    };
+#endif
     bool package_has_constants = false;
     std::uint32_t package_constant_root = 0u;
     std::uint32_t package_constant_count = 0u;
     std::int32_t package_time_byte_offset = -1;
+    std::uint8_t package_time_tick_kind = 0u;
     std::int32_t package_simulation_tick_byte_offset = -1;
     std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
         package_constant_values{};
@@ -4987,9 +5066,10 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     bool history_schedule_done = false;
     auto record_history_schedule = [&]() -> ExitCode {
         if (package_.history.empty()) return ExitCode::Success;
-        const std::uint64_t target_sim =
-            tick / package::kTimelineTicksPerSimulationTick;
-        if (target_sim < history_simulation_tick_) {
+        const bool sampled = UsesSampledSceneHistory(package_);
+        const std::uint64_t target_sim = sampled ? SceneHistoryTargetStep(package_, frame_tick)
+            : tick / package::kTimelineTicksPerSimulationTick;
+        if (!sampled && target_sim < history_simulation_tick_) {
             return Fail(ExitCode::InvalidArguments, "history",
                         "history_backward_seek_requires_reinitialization",
                         "simulation_tick",
@@ -4998,17 +5078,9 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                         "device playback cannot rewind History state without "
                         "an explicit reinitialization/checkpoint restore");
         }
-        const std::uint64_t required = target_sim - history_simulation_tick_;
-        const std::uint64_t processed =
-            history_work_cap_ == 0u
-                ? required
-                : std::min<std::uint64_t>(required, history_work_cap_);
-        std::vector<const FrameOp*> steps;
-        for (const auto& candidate : frame_ops_) {
-            if (candidate.type == FrameOp::Type::SimulationStep) {
-                steps.push_back(&candidate);
-            }
-        }
+        const std::uint64_t required = sampled ? 1u : target_sim - history_simulation_tick_;
+        const std::uint64_t processed = sampled || history_work_cap_ == 0u
+                ? required : (std::min<std::uint64_t>)(required, history_work_cap_);
         auto find_slot = [&](std::uint32_t resource_id)
             -> PlatformState::ResourceSlot* {
             for (auto& slot : state->resources) {
@@ -5118,11 +5190,16 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
             return ExitCode::Success;
         };
         for (std::uint64_t iteration = 0u; iteration < processed; ++iteration) {
-            const std::uint64_t next_tick =
-                history_simulation_tick_ + iteration + 1u;
-            const bool loop_boundary =
+            // Sampled History doesn't replay from the prior physical frame:
+            // it reconstructs exactly one absolute predecessor into owned
+            // state. Tick zero seeds the buffer even when feedback is gated.
+            const std::uint64_t next_tick = sampled ? (target_sim ? target_sim - 1u : 0u)
+                : history_simulation_tick_ + iteration + 1u;
+            const bool loop_boundary = !sampled &&
                 loop_sim_ticks > 0u && next_tick % loop_sim_ticks == 0u;
-            for (const FrameOp* step : steps) {
+            for (const auto& operation : frame_ops_) {
+                if (operation.type != FrameOp::Type::SimulationStep) continue;
+                const auto* step = &operation;
                 const package::HistoryRecord* history = nullptr;
                 for (const auto& candidate : package_.history) {
                     if (candidate.state_id == step->history_state_id) {
@@ -5179,28 +5256,27 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 const D3D12_GPU_DESCRIPTOR_HANDLE previous_handle =
                     previous->gpu_handle;
 #endif
-                list->SetComputeRootDescriptorTable(2u, previous_handle);
+                if (!sampled) list->SetComputeRootDescriptorTable(2u, previous_handle);
+#if defined(NW13_INLINE_RAY)
+                if (sampled) bind_sample_tlas();
+#endif
                 list->SetComputeRootDescriptorTable(1u, current->gpu_handle);
                 if (package_has_constants &&
                     package_constant_count > 0u) {
                     std::array<std::uint32_t,
                                package::kMaxRootSignatureDwordCost>
                         tick_values = package_constant_values;
-                    const std::uint64_t simulation_tick =
-                        history_simulation_tick_ + iteration + 1u;
+                    const std::uint64_t simulation_tick = next_tick;
                     bool updated = false;
                     if (package_time_byte_offset >= 0 &&
                         static_cast<std::uint32_t>(
                             package_time_byte_offset) + 4u <=
                             package_constant_count * 4u) {
-                        const float tick_seconds = static_cast<float>(
-                            simulation_tick *
-                            package::kTimelineTicksPerSimulationTick);
-                        std::memcpy(
-                            reinterpret_cast<std::uint8_t*>(
-                                tick_values.data()) +
-                                package_time_byte_offset,
-                            &tick_seconds, sizeof(tick_seconds));
+                        WriteTimelineTick(
+                            tick_values.data(),
+                            static_cast<std::uint32_t>(package_time_byte_offset),
+                            4u, package_time_tick_kind,
+                            simulation_tick * package::kTimelineTicksPerSimulationTick);
                         updated = true;
                     }
                     if (package_simulation_tick_byte_offset >= 0 &&
@@ -5256,9 +5332,10 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                                 "available", "missing", "renderAtTick",
                                 "History ping-pong copy transition failed");
                 }
-                list->CopyBufferRegion(
-                    previous->resource, 0u, current->resource, 0u,
-                    static_cast<UINT>(history->initial_state.size()));
+                const auto history_bytes = sampled
+                    ? static_cast<std::uint64_t>(history->values_per_element) * history->element_count * sizeof(float)
+                    : history->initial_state.size();
+                list->CopyBufferRegion(previous->resource, 0u, current->resource, 0u, history_bytes);
                 if (!transition(previous,
                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) ||
                     !transition(current,
@@ -5270,7 +5347,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 }
             }
         }
-        history_simulation_tick_ += processed;
+        history_simulation_tick_ = sampled ? target_sim : history_simulation_tick_ + processed;
         history_pending_ticks_ = target_sim - history_simulation_tick_;
         return ExitCode::Success;
     };
@@ -5360,6 +5437,10 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                 list->SetComputeRootSignature(root);
 #endif
                 package_root_signature = root;
+#if defined(NW13_INLINE_RAY)
+                package_root_id = op.root_parameter;
+                bind_sample_tlas();
+#endif
                 break;
             }
             case FrameOp::Type::SetRootConstants:
@@ -5390,6 +5471,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                             timeline_applied = true;
                             package_time_byte_offset =
                                 op.parameter_offsets[entry];
+                            package_time_tick_kind = op.parameter_tick_kinds[entry];
                             break;
                         }
                     }
@@ -6093,6 +6175,9 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
 #endif
                 if (package_root_signature != nullptr) {
                     list->SetComputeRootSignature(package_root_signature);
+#if defined(NW13_INLINE_RAY)
+                    bind_sample_tlas();
+#endif
                     if (package_has_constants &&
                         package_constant_count > 0u) {
                         list->SetComputeRoot32BitConstants(
@@ -7467,6 +7552,9 @@ void PackagePlayer::ReleasePlatform() noexcept {
     if (state->fence_event != nullptr) CloseHandle(state->fence_event);
     if (state->fence != nullptr) state->fence->Release();
     if (state->queue != nullptr) state->queue->Release();
+#if defined(NW13_INLINE_RAY)
+    state->film_ray = {};
+#endif
     if (state->device != nullptr) state->device->Release();
     if (state->adapter != nullptr) state->adapter->Release();
     if (state->factory != nullptr) state->factory->Release();
@@ -7592,7 +7680,11 @@ bool PackagePlayer::BuildFramePlanForTesting(const package::Package& pkg) {
 bool PackagePlayer::ApplyFramePlanForTesting(std::uint64_t tick) {
     const std::uint64_t frame_tick = EffectiveTimelineTick(tick);
 #if !NW05_FROZEN_EMBEDDED_SPECIALIZATION
-    if (!package_.history.empty()) {
+    if (UsesSampledSceneHistory(package_)) {
+        history_simulation_tick_ = SceneHistoryTargetStep(package_, frame_tick);
+        history_pending_ticks_ = 0u;
+        ++history_steps_executed_;
+    } else if (!package_.history.empty()) {
         const std::uint64_t target_sim =
             tick / package::kTimelineTicksPerSimulationTick;
         if (target_sim < history_simulation_tick_) {
@@ -7685,11 +7777,9 @@ bool PackagePlayer::ApplyFramePlanForTesting(std::uint64_t tick) {
             if (!timeline_applied && op.time_byte_offset >= 0 &&
                 static_cast<std::uint32_t>(op.time_byte_offset) + 4u <=
                     op.constant_count * 4u) {
-                const float time_value = static_cast<float>(frame_tick);
-                std::memcpy(
-                    reinterpret_cast<std::uint8_t*>(values.data()) +
-                        op.time_byte_offset,
-                    &time_value, sizeof(time_value));
+                WriteTimelineTick(
+                    values.data(), static_cast<std::uint32_t>(op.time_byte_offset),
+                    4u, op.time_tick_kind, frame_tick);
             }
             last_root_constants_ = values;
             last_root_constant_count_ = op.constant_count;

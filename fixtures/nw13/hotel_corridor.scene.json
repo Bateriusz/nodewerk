@@ -1,0 +1,57 @@
+{
+  "format": "nw13.scene",
+  "version": 1,
+  "tick_rate_hz": 48000,
+  "duration_ticks": 288000,
+  "bounds": {"minimum": [-10, -6, -15], "maximum": [10, 6, 15]},
+  "materials": [
+    {"id":"wall","base_color":[0.48,0.42,0.36,1],"roughness":0.82,"metallic":0.0,"specular":0.25,"emission":[0,0,0]},
+    {"id":"door","base_color":[0.34,0.18,0.10,1],"roughness":0.45,"metallic":0.0,"specular":0.5,"emission":[0,0,0]},
+    {"id":"skin","base_color":[0.72,0.56,0.45,1],"roughness":0.68,"metallic":0.0,"specular":0.35,"emission":[0,0,0]},
+    {"id":"metal","base_color":[0.72,0.72,0.78,1],"roughness":0.18,"metallic":0.9,"specular":0.8,"emission":[0,0,0]},
+    {"id":"lamp","base_color":[1.0,0.86,0.62,1],"roughness":0.3,"metallic":0.0,"specular":0.4,"emission":[2.8,2.0,1.2]},
+    {"id":"prop","base_color":[0.20,0.42,0.60,1],"roughness":0.5,"metallic":0.1,"specular":0.5,"emission":[0,0,0]},
+    {"id":"mirror","base_color":[0.62,0.70,0.72,1],"roughness":0.06,"metallic":0.95,"specular":0.9,"emission":[0,0,0]},
+    {"id":"occluder","base_color":[0.12,0.12,0.14,1],"roughness":0.9,"metallic":0.0,"specular":0.1,"emission":[0,0,0]},
+    {"id":"reflected","base_color":[0.88,0.28,0.16,1],"roughness":0.2,"metallic":0.7,"specular":0.7,"emission":[0,0,0]}
+  ],
+  "lights": [
+    {"id":"lamp_light","type":"point","position":[-0.4,2.08,-0.85],"color":[1.0,0.82,0.6],"intensity":9.0,"range":9.0},
+    {"id":"flash_light","type":"point","position":[0.4,1.6,1.0],"color":[0.8,0.9,1.0],"intensity":18.0,"range":6.0}
+  ],
+  "objects": [
+    {"id":"room_shell","geometry":"room_shell","material":"wall","parent":null,"transform":{"position":[0,2.6,0],"rotation":[0,0,0],"scale":[1,1,1]}},
+    {"id":"corridor_wall","geometry":"corridor_wall","material":"wall","parent":null,"transform":{"position":[0,0,0],"rotation":[0,0,0],"scale":[1,1,1]}},
+    {"id":"corridor_left_wall","geometry":"corridor_wall","material":"wall","parent":null,"transform":{"position":[-5.6,0,0],"rotation":[0,0,0],"scale":[1,1,1]}},
+    {"id":"corridor_windows","geometry":"corridor_windows","material":"metal","parent":"corridor_wall","transform":{"position":[2.62,1.4,-3.1],"rotation":[0,0,0],"scale":[1,1,1]}},
+    {"id":"door_frame","geometry":"door_frame","material":"door","parent":null,"transform":{"position":[0,0,0],"rotation":[0,0,0],"scale":[1,1,1]}},
+    {"id":"door","geometry":"door","material":"door","parent":"door_frame","transform":{"position":[0.72,1.05,-2.0],"rotation":[0,0,0],"scale":[1,1,1]},"tracks":[{"channel":"transform.rotation","value_type":"vec3","keys":[{"tick":96000,"value":[0,0,0],"interpolation":"smoothstep"},{"tick":144000,"value":[0,88,0],"interpolation":"smoothstep"}]}]},
+    {"id":"handle","geometry":"handle","material":"metal","parent":"door","transform":{"position":[0.55,0.0,0.08],"rotation":[0,0,0],"scale":[1,1,1]}},
+    {"id":"character_body","geometry":"character_body","material":"skin","parent":null,"transform":{"position":[-1.0,1.0,0.4],"rotation":[0,0,0],"scale":[1,1,1]},"tracks":[{"channel":"transform.position","value_type":"vec3","keys":[{"tick":0,"value":[-1.2,1.0,0.6],"interpolation":"linear"},{"tick":144000,"value":[-0.3,1.0,0.1],"interpolation":"smoothstep"},{"tick":288000,"value":[0.2,1.0,-0.4],"interpolation":"linear"}]},{"channel":"transform.rotation","value_type":"vec3","keys":[{"tick":0,"value":[0,-18,0],"interpolation":"linear"},{"tick":288000,"value":[0,22,0],"interpolation":"linear"}]}]},
+    {"id":"character_head","geometry":"character_head","material":"skin","parent":"character_body","transform":{"position":[0,0.72,0],"rotation":[0,0,0],"scale":[1,1,1]}},
+    {"id":"held_prop","geometry":"held_prop","material":"prop","parent":"character_body","transform":{"position":[0.36,0.15,0.12],"rotation":[12,0,8],"scale":[1,1,1]}},
+    {"id":"lamp","geometry":"lamp","material":"lamp","parent":null,"transform":{"position":[0,0,0],"rotation":[0,0,0],"scale":[1,1,1]}},
+    {"id":"occluder","geometry":"occluder","material":"occluder","parent":null,"transform":{"position":[-1.4,2.1,1.2],"rotation":[0,0,0],"scale":[1,1,1]},"tracks":[{"channel":"transform.position","value_type":"vec3","keys":[{"tick":0,"value":[-1.4,2.1,1.2],"interpolation":"linear"},{"tick":96000,"value":[1.4,2.1,1.2],"interpolation":"linear"}]}]},
+    {"id":"mirror_panel","geometry":"mirror_panel","material":"mirror","parent":null,"transform":{"position":[1.8,1.45,-2.8],"rotation":[0,0,0],"scale":[1,1,1]}},
+    {"id":"arch","geometry":"arch","material":"wall","parent":null,"transform":{"position":[1.3,0,0],"rotation":[0,0,0],"scale":[1,1,1]}},
+    {"id":"bent_wall","geometry":"bent_wall","material":"door","parent":null,"transform":{"position":[-1.9,0.2,-2.95],"rotation":[0,0,0],"scale":[1,1,1]}},
+    {"id":"displaced_wall","geometry":"displaced_wall","material":"wall","parent":null,"transform":{"position":[-1.9,0.38,-3.4],"rotation":[0,0,0],"scale":[1,1,1]}},
+    {"id":"reflected_object","geometry":"reflected_object","material":"reflected","parent":null,"transform":{"position":[2.6,1.5,6.2],"rotation":[0,25,0],"scale":[1,1,1]}}
+  ],
+  "cameras": [
+    {"id":"main","shots":[
+      {"id":"corridor_approach","start_tick":0,"end_tick":192000,"position":[0,1.65,5.2],"target":[0,1.25,0],"up":[0,1,0],"position_track":{"channel":"transform.position","value_type":"vec3","keys":[{"tick":0,"value":[0,1.65,5.2],"interpolation":"linear"},{"tick":96000,"value":[0.45,1.55,3.0],"interpolation":"smoothstep"},{"tick":192000,"value":[0.2,1.45,1.8],"interpolation":"linear"}]},"projection":{"fov_degrees":58,"near":0.05,"far":80,"aspect":1.7777777777777777}},
+      {"id":"room_turn","start_tick":192000,"end_tick":288000,"position":[0.7,1.6,-0.6],"target":[-0.1,1.1,-2.4],"up":[0,1,0],"position_track":{"channel":"transform.position","value_type":"vec3","keys":[{"tick":192000,"value":[0.7,1.6,-0.6],"interpolation":"linear"},{"tick":288000,"value":[-0.6,1.5,-1.4],"interpolation":"smoothstep"}]},"projection":{"fov_degrees":62,"near":0.05,"far":80,"aspect":1.7777777777777777},"transition":"cut","transition_ticks":0}
+    ]}
+  ],
+  "cuts": [192000],
+  "cues": [
+    {"id":"door_hinge","tick":96000,"policy":"one-shot","kind":"animation"},
+    {"id":"flash","tick":144000,"policy":"one-shot","kind":"flash"},
+    {"id":"corridor_cut","tick":192000,"policy":"one-shot","kind":"cut"}
+  ],
+  "provenance": {
+    "authored": "independent original hotel-room/corridor sequence",
+    "clean_room": "no Farbrausch code or assets copied"
+  }
+}

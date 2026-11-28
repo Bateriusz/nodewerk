@@ -22,32 +22,39 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "Usage: nw_audio_offline song.nwas output.wav frame-plan.csv\n");
         return 10;
     }
-    std::array<std::uint8_t, 20 + 20 * kMaxEvents + 1> bytes{};
+    constexpr auto max_payload = 28 + 40 * kMaxInstruments + 24 * kMaxEvents +
+        kMaxAutomationBuses * (8 + 16 * kMaxAutomationKeys);
+    std::array<std::uint8_t, max_payload + 1> bytes{};
     std::ifstream input(argv[1], std::ios::binary);
     if (!input) return 70;
     input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
     Song song{};
     if (input.bad() || !DecodeSong(bytes.data(), static_cast<std::size_t>(input.gcount()), song))
         return 70;
-    constexpr std::uint32_t rate = 48000;
+    const PcmFormat format = SongPcmFormat(song);
+    const auto rate = format.sample_rate;
+    const auto frame_bytes = format.channels * 2u;
+    PcmStream stream;
+    if (!stream.Start(song, format, 0)) return 70;
     constexpr std::uint32_t frame_ticks = 800; // exact 60 fps
     std::uint64_t samples = 0;
-    if (!TickToSample(song.duration_ticks, rate, samples) || samples > (UINT32_MAX - 36u) / 2u)
+    if (!TickToSample(song.duration_ticks, rate, samples) || samples > (UINT32_MAX - 36u) / frame_bytes)
         return 70;
-    const auto pcm_bytes = static_cast<std::uint32_t>(samples * 2u);
+    const auto pcm_bytes = static_cast<std::uint32_t>(samples * frame_bytes);
     std::ofstream wav(argv[2], std::ios::binary | std::ios::trunc);
     std::ofstream plan(argv[3], std::ios::binary | std::ios::trunc);
     if (!wav || !plan) return 10;
     wav.write("RIFF", 4); Put32(wav, 36u + pcm_bytes); wav.write("WAVEfmt ", 8);
-    Put32(wav, 16); Put16(wav, 1); Put16(wav, 1); Put32(wav, rate);
-    Put32(wav, rate * 2u); Put16(wav, 2); Put16(wav, 16);
+    Put32(wav, 16); Put16(wav, 1); Put16(wav, static_cast<std::uint16_t>(format.channels)); Put32(wav, rate);
+    Put32(wav, rate * frame_bytes); Put16(wav, static_cast<std::uint16_t>(frame_bytes)); Put16(wav, 16);
     wav.write("data", 4); Put32(wav, pcm_bytes);
     std::array<std::int16_t, 4096> pcm{};
     for (std::uint64_t cursor = 0; cursor < samples;) {
-        const auto count = static_cast<std::size_t>(samples - cursor < pcm.size() ?
-            samples - cursor : pcm.size());
-        if (!RenderPcm(song, {rate}, cursor, pcm.data(), count)) return 70;
-        for (std::size_t i = 0; i < count; ++i)
+        const auto capacity = pcm.size() / format.channels;
+        const auto count = static_cast<std::size_t>(samples - cursor < capacity ?
+            samples - cursor : capacity);
+        if (!stream.Render(pcm.data(), count)) return 70;
+        for (std::size_t i = 0; i < count * format.channels; ++i)
             Put16(wav, static_cast<std::uint16_t>(pcm[i]));
         if (!wav) return 10;
         cursor += count;

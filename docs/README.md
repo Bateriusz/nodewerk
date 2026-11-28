@@ -33,6 +33,8 @@ graph semantics and `.nwgraph` schema.
 24. [NW-11 Advanced GPU Feature Experiments](nw11-advanced-gpu-experiments.md)
 25. [NW-11 Bounded Follow-Up Matrix](nw11-follow-up-matrix.md)
 26. [NW-12 Optional Procedural Audio](procedural-audio.md)
+27. [ADR-0010: NW-13 Editable Procedural Film](architecture/0010-nw13-procedural-film.md)
+28. [NW-13 Editable Procedural Film](nw13-procedural-film.md)
 
 ## Schemas & Recorded Baseline Artifacts
 
@@ -74,5 +76,11 @@ graph semantics and `.nwgraph` schema.
 - NW-11 Evidence Status and Decisions: [`benchmarks/nw11/evidence-status.v1.json`](../benchmarks/nw11/evidence-status.v1.json), [`benchmarks/nw11/decisions/`](../benchmarks/nw11/decisions/) (validated by [`schemas/nw11-evidence-status.schema.json`](../schemas/nw11-evidence-status.schema.json) and [`schemas/nw11-decision.schema.json`](../schemas/nw11-decision.schema.json))
 - NW-11 Follow-Up Matrix: [`benchmarks/nw11/follow-up-matrix.v1.json`](../benchmarks/nw11/follow-up-matrix.v1.json) (validated by [`schemas/nw11-follow-up-matrix.schema.json`](../schemas/nw11-follow-up-matrix.schema.json))
 - NW-11 Bundle and Evidence Schemas: [`schemas/nw11-bundle-manifest.schema.json`](../schemas/nw11-bundle-manifest.schema.json), [`schemas/nw11-evidence.schema.json`](../schemas/nw11-evidence.schema.json)
+- NW-13 Bounded Geometry: [`schemas/nw13-geometry-graph.v1.json`](../schemas/nw13-geometry-graph.v1.json), reference [`tools/nw13_geometry.py`](../tools/nw13_geometry.py)
+- NW-13 Scene, Particles and Audio: [`schemas/nw13-scene.v1.json`](../schemas/nw13-scene.v1.json), [`schemas/nw13-particles.v1.json`](../schemas/nw13-particles.v1.json), [`schemas/nw13-instrument-sequence.v2.json`](../schemas/nw13-instrument-sequence.v2.json)
+- NW-13 Pinned Operator Catalog: [`references/operator_catalog/`](../references/operator_catalog/)
+- NW-13 Base Provenance: [`benchmarks/nw13/base.v1.json`](../benchmarks/nw13/base.v1.json)
+- NW-13 Fixed-Tick Image Evidence: [`fixtures/nw13/evidence/`](../fixtures/nw13/evidence/)
+- NW-13 Optional Lowering and Evidence Status: [`benchmarks/nw13/optional-lowering.v1.json`](../benchmarks/nw13/optional-lowering.v1.json), [`benchmarks/nw13/evidence-status.v1.json`](../benchmarks/nw13/evidence-status.v1.json), [`benchmarks/nw13/artifact-bundle.v1.json`](../benchmarks/nw13/artifact-bundle.v1.json)
 
 - [ADR 0009 — Validation and evidence lifecycle](architecture/0009-validation-and-evidence-lifecycle.md)

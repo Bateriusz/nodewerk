@@ -1,0 +1,23 @@
+{
+  "format": "nw13.work-graph-experiment",
+  "version": 1,
+  "criterion": "median GPU dispatch time below 95% of conventional, exact output, backing allocation at most 32 MiB",
+  "conventional_metric": null,
+  "work_graph_metric": null,
+  "decision": "defer",
+  "reason": "CI delivers a provenance-bound offline bundle; native matched physical measurements are pending.",
+  "satisfies_completion": false,
+  "functional_execution": "pending_native",
+  "workload": {
+    "source": "shaders/nw13/particle_routing.hlsl",
+    "harness": "src/nw13/work_graph.cpp",
+    "candidates": 1024,
+    "tick": 148800,
+    "samples_per_arm": 9,
+    "warmup_per_arm": 1,
+    "max_backing_bytes": 33554432,
+    "correctness": "Every output slot must equal the CPU oracle.",
+    "recorded_order": "one warmup per arm, followed by nine pairs alternating conventional-first and Work Graphs-first",
+    "clock": "raw same-queue GPU begin/end timestamp ticks and frequency; preparation, reset and readback are not timed"
+  }
+}

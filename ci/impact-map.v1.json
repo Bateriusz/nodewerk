@@ -63,7 +63,8 @@
         "nw08",
         "nw08a",
         "nw10",
-        "nw11"
+        "nw11",
+        "nw13"
       ]
     },
     "nw01": {
@@ -140,6 +141,29 @@
         "src/nw11/**",
         "tools/gpu_experiment_*.py",
         "tools/canonical_export_reproducibility.py"
+      ],
+      "propagates_to": []
+    },
+    "nw13": {
+      "patterns": [
+        "tools/nw13_*.py",
+        "tools/nw13_run_work_graphs.ps1",
+        "tools/nw11_pack_python_runtime.py",
+        "tools/nw11_pe_dependencies.py",
+        "tools/nw11_contract.py",
+        "tools/nw13/**",
+        "shaders/nw13/**",
+        "src/nw13/**",
+        "tests/nw13_*",
+        "tools/operator_catalog.py",
+        "tools/reference_operator_catalog.py",
+        "tools/werkkzeug[34]_catalog.py",
+        "tests/test_werkkzeug[34]_catalog.py",
+        "tests/test_nw13_*",
+        "benchmarks/nw13/**",
+        "schemas/nw13*",
+        "references/operator_catalog/**",
+        "fixtures/nw13/**"
       ],
       "propagates_to": []
     }

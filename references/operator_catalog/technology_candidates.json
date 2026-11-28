@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "reviewed_on": "2026-11-27",
+  "purpose": "Initial implementation candidate catalog for NW-13 planning; eligibility is not an implementation or adoption claim.",
+  "nodewerk_baseline": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+  "policy": {
+    "authoring": "Backend-neutral semantics; concrete GPU mechanisms are compiler/export choices.",
+    "common_profile": "Retain the agreed common non-RTX implementations and separately exported fallback artifacts. A common implementation need not reproduce a historical algorithm.",
+    "allowed_neural_use": "Fixed vendor-supplied, production-independent pretrained inference without fitting model weights or latents to nodewerk content.",
+    "excluded_training": ["dataset_preparation", "backpropagation", "fine_tuning", "per_production_model_fitting", "per_asset_model_or_latent_fitting", "runtime_or_online_training"],
+    "ordinary_state": "Sampling, cache updates and temporal accumulation are not neural training; their state/reset behavior still needs definition.",
+    "adoption": "Choose a useful workload and apply existing NW-11/NW-13 validation policy. Eligibility alone does not select an integration or require all candidates in NW-13.",
+    "costs": "Account for required SDK/runtime/model dependencies and memory. Use only explicit artifact-specific size requirements, without introducing universal byte gates.",
+    "hardware": "Query the concrete API, shader-model, driver and feature requirements. A GPU marketing name is not a capability test. Many candidates use ordinary compute rather than RT/Tensor cores."
+  },
+  "sources": {
+    "nw13": "https://github.com/Bateriusz/nodewerk/issues/36",
+    "mesh_shaders": "https://microsoft.github.io/DirectX-Specs/d3d/MeshShader.html",
+    "dxr": "https://microsoft.github.io/DirectX-Specs/d3d/Raytracing.html",
+    "work_graphs": "https://learn.microsoft.com/windows-hardware/drivers/display/work-graphs",
+    "rtxdi": "https://github.com/NVIDIA-RTX/RTXDI/blob/main/README.md",
+    "ddgi": "https://github.com/NVIDIAGameWorks/RTXGI-DDGI/blob/main/docs/Algorithms.md",
+    "sharc": "https://github.com/NVIDIA-RTX/RTXGI/blob/main/Docs/SharcGuide.md",
+    "nrd": "https://github.com/NVIDIA-RTX/NRD",
+    "dlss": "https://developer.nvidia.com/rtx/dlss",
+    "dlss_sr_integration": "https://github.com/NVIDIA-RTX/Streamline/blob/main/docs/ProgrammingGuideDLSS.md",
+    "dlss_rr_integration": "https://github.com/NVIDIA-RTX/Streamline/blob/main/docs/ProgrammingGuideDLSS_RR.md",
+    "nrc": "https://github.com/NVIDIA-RTX/RTXGI/blob/main/Docs/NrcGuide.md",
+    "ntc": "https://research.nvidia.com/publication/2023-08_random-access-neural-compression-material-textures",
+    "neural_rendering": "https://developer.nvidia.com/blog/nvidia-rtx-neural-rendering-introduces-next-era-of-ai-powered-graphics-innovation/",
+    "directx_rtx": "https://developer.nvidia.com/directx"
+  },
+  "candidates": [
+    {
+      "id": "mesh_shaders",
+      "kind": "geometry_backend",
+      "eligibility": "allowed",
+      "training": "none",
+      "current_integration": "bounded_nw11_experiment",
+      "role": "Geometry generation, processing and culling before rasterization.",
+      "replacement_boundary": "Can replace geometry execution stages, not modeling functions, topology, selections or UV authoring.",
+      "prerequisites": ["shared_geometry_and_instance_data", "queried_mesh_shader_support", "common_geometry_path"],
+      "sources": ["mesh_shaders", "nw13"]
+    },
+    {
+      "id": "dxr_ray_queries",
+      "kind": "visibility_backend",
+      "eligibility": "allowed",
+      "training": "none",
+      "current_integration": "bounded_nw11_experiment",
+      "role": "Scene intersections for shadows, reflections and selected visibility queries.",
+      "replacement_boundary": "Requires actual geometry, materials, lights and shading. Intersection support alone is not scene-aware reflected radiance.",
+      "prerequisites": ["shared_scene_and_material_identity", "current_transform_acceleration_structures", "queried_dxr_capabilities", "common_semantic_realization"],
+      "sources": ["dxr", "nw13"]
+    },
+    {
+      "id": "work_graphs",
+      "kind": "scheduling_backend",
+      "eligibility": "allowed",
+      "training": "none",
+      "current_integration": "not_integrated",
+      "role": "GPU-created work for a selected bounded procedural or stateful workload.",
+      "replacement_boundary": "Scheduling implementation; does not replace the authored generation or simulation semantics.",
+      "prerequisites": ["useful_bounded_gpu_workload", "queried_api_and_driver_support", "existing_nw13_adoption_criterion"],
+      "sources": ["work_graphs", "nw13"]
+    },
+    {
+      "id": "restir_rtxdi",
+      "kind": "lighting_sampling",
+      "eligibility": "allowed",
+      "training": "none",
+      "current_integration": "not_integrated",
+      "role": "Reservoir resampling for selected direct or indirect lighting workloads; assess DI, GI and PT variants separately.",
+      "replacement_boundary": "Sampling strategy within a renderer, not a replacement for authored lights or materials.",
+      "prerequisites": ["scene_aware_lighting", "matching_signal_and_sampling_model", "temporal_state_and_resets"],
+      "sources": ["rtxdi"]
+    },
+    {
+      "id": "ddgi",
+      "kind": "indirect_lighting",
+      "eligibility": "allowed",
+      "training": "none",
+      "current_integration": "not_integrated",
+      "role": "Probe-based dynamic diffuse indirect illumination.",
+      "replacement_boundary": "Low-frequency diffuse signal with temporal response and memory costs; not complete GI or a replacement for sharp reflections.",
+      "prerequisites": ["scene_lighting_queries", "probe_layout_and_update_budget", "history_behavior"],
+      "sources": ["ddgi"]
+    },
+    {
+      "id": "sharc",
+      "kind": "radiance_cache",
+      "eligibility": "allowed",
+      "training": "none",
+      "current_integration": "not_integrated",
+      "role": "Spatially hashed radiance cache populated and reused by a path-traced lighting workload.",
+      "replacement_boundary": "Caches sampled radiance; updates are not neural training. Requires a suitable renderer and declared cache response.",
+      "prerequisites": ["path_traced_lighting_workload", "cache_memory_budget", "temporal_invalidation"],
+      "sources": ["sharc"]
+    },
+    {
+      "id": "nrd",
+      "kind": "denoising",
+      "eligibility": "allowed",
+      "training": "none",
+      "current_integration": "not_integrated",
+      "role": "Non-neural spatio-temporal denoising of compatible noisy signals.",
+      "replacement_boundary": "Not an artistic blur, bloom, distortion or feedback replacement; select a denoiser for its supported signal.",
+      "prerequisites": ["appropriate_noisy_signal", "depth_motion_normals_roughness", "history_resets"],
+      "sources": ["nrd"]
+    },
+    {
+      "id": "dlss_sr_dlaa",
+      "kind": "pretrained_inference",
+      "eligibility": "allowed",
+      "training": "vendor_pretrained",
+      "current_integration": "not_integrated",
+      "role": "Super Resolution or native-resolution anti-aliasing using vendor-trained models.",
+      "replacement_boundary": "Image reconstruction, not procedural texture generation or material authoring.",
+      "prerequisites": ["depth_and_motion_vectors", "camera_jitter_and_frame_constants", "compatible_model_and_runtime", "history_reset_policy"],
+      "sources": ["dlss", "dlss_sr_integration"]
+    },
+    {
+      "id": "dlss_ray_reconstruction",
+      "kind": "pretrained_inference",
+      "eligibility": "allowed",
+      "training": "vendor_pretrained",
+      "current_integration": "not_integrated",
+      "role": "Reconstruction of noisy ray-traced image signals using vendor-trained models.",
+      "replacement_boundary": "Can replace compatible denoising stages. Does not create scene geometry, lights or authored post effects.",
+      "prerequisites": ["compatible_ray_traced_signal", "depth_motion_diffuse_specular_albedo_normals_roughness", "compatible_model_and_runtime", "camera_cut_and_time_reset_behavior"],
+      "sources": ["dlss", "dlss_rr_integration"]
+    },
+    {
+      "id": "dlss_frame_generation",
+      "kind": "presentation_inference",
+      "eligibility": "allowed",
+      "training": "vendor_pretrained",
+      "current_integration": "not_integrated",
+      "role": "Frame Generation and Multi Frame Generation are separately capability-qualified presentation options.",
+      "replacement_boundary": "Generated presentation frames do not advance simulation, authored animation or the authoritative audio clock. They are not additional native-rendered frames in evidence.",
+      "prerequisites": ["feature_specific_runtime_support", "presentation_integration", "correct_temporal_inputs", "explicit_native_and_generated_frame_accounting"],
+      "sources": ["dlss", "nw13"]
+    },
+    {
+      "id": "neural_radiance_cache",
+      "kind": "neural_radiance_cache",
+      "eligibility": "excluded",
+      "training": "runtime_scene_training",
+      "current_integration": "not_integrated",
+      "role": "NRC learns scene radiance while rendering.",
+      "replacement_boundary": "A ready SDK still performs online training; this conflicts with the agreed policy.",
+      "prerequisites": [],
+      "sources": ["nrc", "nw13"]
+    },
+    {
+      "id": "asset_fitted_neural_texture_materials",
+      "kind": "asset_representation",
+      "eligibility": "excluded",
+      "training": "asset_specific_model_or_latent_fitting",
+      "current_integration": "not_integrated",
+      "role": "NTC or neural material variants that optimize weights or latents for the production's assets.",
+      "replacement_boundary": "Exclusion applies to the fitting-dependent integration. A different fixed, production-independent pretrained technique would require a separate eligibility assessment.",
+      "prerequisites": [],
+      "sources": ["ntc", "neural_rendering", "nw13"]
+    },
+    {
+      "id": "cooperative_vectors_neural_shader_execution",
+      "kind": "execution_mechanism",
+      "eligibility": "conditional",
+      "training": "depends_on_workload",
+      "current_integration": "not_integrated",
+      "role": "Execution infrastructure for an explicitly eligible fixed pretrained-inference workload.",
+      "replacement_boundary": "The execution API is not itself a model or an authoring capability. Do not adopt it without a permitted concrete workload.",
+      "prerequisites": ["eligible_pretrained_model", "queried_api_and_toolchain_support"],
+      "sources": ["neural_rendering", "nw13"]
+    },
+    {
+      "id": "ser_opacity_micromaps_displacement_acceleration",
+      "kind": "secondary_optimization",
+      "eligibility": "conditional",
+      "training": "none",
+      "current_integration": "not_integrated",
+      "role": "Independently evaluate applicable execution reordering, opacity and dense-geometry/displacement acceleration techniques.",
+      "replacement_boundary": "No new authoring semantics. Historical technology names, including Micro-Mesh, do not establish current D3D12/toolchain availability; verify each concrete API before selecting it.",
+      "prerequisites": ["matching_divergent_alpha_tested_or_dense_geometry_workload", "current_api_toolchain_and_distribution_support", "measured_end_to_end_benefit"],
+      "sources": ["directx_rtx", "nw13"]
+    }
+  ]
+}

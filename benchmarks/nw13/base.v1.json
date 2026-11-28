@@ -1,0 +1,53 @@
+{
+  "format": "nw13-base-provenance",
+  "version": 1,
+  "task": "NW-13",
+  "implementation_base": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+  "base_subject": "Merge PR #45: NW-12 optional procedural audio",
+  "contains_merged_work": {
+    "NW-11": {
+      "merge_commit": "8ade0b7",
+      "subject": "Merge pull request #44 \u2014 NW-11 advanced GPU experiments",
+      "verified_as_ancestor": true
+    },
+    "NW-12": {
+      "merge_commit": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "subject": "Merge PR #45: NW-12 optional procedural audio",
+      "verified_as_ancestor": true
+    }
+  },
+  "planning_inputs": {
+    "pr_48": {
+      "status": "absent_from_main_at_base",
+      "role": "pinned catalog and roadmap planning input only",
+      "is_implementation_base": false,
+      "historical_planning_sha_is_implementation_base": false,
+      "catalog_commit": "5c846f80f8cf9d51d9d7ecb4f55642531721488a",
+      "reference_revision": "8c8f82c2ae01133370e649bbc05916e7aceecadd"
+    },
+    "catalog_pr_head_is_implementation_base": false
+  },
+  "nw11_versioned_decisions": {
+    "mesh_shader": {
+      "source": "benchmarks/nw11/decisions/mesh-shader.v1.json",
+      "per_device_status": [
+        "pending",
+        "pending"
+      ],
+      "nw13_use": "defer; capability-qualified lowering only after measured adoption criterion"
+    },
+    "ray_query": {
+      "source": "benchmarks/nw11/decisions/ray-query.v1.json",
+      "per_device_status": [
+        "pending",
+        "pending"
+      ],
+      "nw13_use": "capability-qualified optional path; common fallback independently exported"
+    }
+  },
+  "clean_room": {
+    "farbrausch_code_copied": false,
+    "farbrausch_assets_copied": false,
+    "references_farbrausch_modified": false
+  }
+}

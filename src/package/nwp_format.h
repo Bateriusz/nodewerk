@@ -255,6 +255,8 @@ struct ShaderRecord {
 // frozen fixtures explicitly force the full model so every translation unit on
 // that fixture boundary uses the same Package ABI as the full decoder.
 #if !NW05_FROZEN_EMBEDDED_SPECIALIZATION || NW09_FORCE_STATEFUL_PACKAGE_MODEL
+inline constexpr std::string_view kSampledSceneHistoryType = "nw.feedback.scene_image.v1";
+
 struct HistoryRecord {
     std::uint32_t state_id = 0;
     std::string node_id;

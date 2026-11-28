@@ -443,7 +443,7 @@ int RunSession(const Options& options, nw::player::PackagePlayer* player) {
             bool ok = ParseU64(command.c_str() + 12u, &target) && payload &&
                 nw::audio::DecodeSong(payload->data(), payload->size(), song) &&
                 target < song.duration_ticks;
-            if (ok && !player->package().history.empty() &&
+            if (ok && player->requiresHistoryReplayForAuthoring() &&
                 target / nw::package::kTimelineTicksPerSimulationTick < player->history_simulation_tick()) {
                 ok = player->rewindHistoryForAuthoring() == nw::player::ExitCode::Success;
             }
@@ -547,13 +547,9 @@ int RunSession(const Options& options, nw::player::PackagePlayer* player) {
             std::fflush(stdout);
             continue;
         }
-        // Timeline scrubbing may move backwards.  The device player rejects a
-        // backward History target because it cannot rewind in place; the
-        // persistent authoring host resets the ping-pong resources and the
-        // simulation counter together, then submits the same render request,
-        // which replays every required tick from zero in order.  This is the
-        // existing authoring runtime path (never a second graph/timeline).
-        if (!player->package().history.empty()) {
+        // Recursive History replays on backwards scrub. The sampled film
+        // reconstructs its single absolute predecessor without a replay.
+        if (player->requiresHistoryReplayForAuthoring()) {
             const std::uint64_t target_sim =
                 tick / nw::package::kTimelineTicksPerSimulationTick;
             if (target_sim < player->history_simulation_tick()) {

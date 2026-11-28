@@ -226,8 +226,11 @@ def validate_dxil_container(
     *,
     allow_test_container: bool = True,
     reject_debug_reflection: bool = False,
+    qualified_shader_model: str | None = None,
 ) -> dict[str, Any]:
-    """Validate that a DXIL container has a genuine signed DXBC header, PSV0, SFI0, and SM 6.0 DXIL bitcode."""
+    """Validate a signed DXIL container without broadening the baseline profile."""
+    if qualified_shader_model not in (None, "cs_6_5"):
+        raise ValueError("unsupported explicitly qualified DXIL target")
     if len(blob) < 44:
         raise ValueError(f"DXIL container too small ({len(blob)} bytes)")
     if blob[:4] != DXBC_MAGIC:
@@ -301,11 +304,11 @@ def validate_dxil_container(
                 if shader_type_name is not None
                 else f"type{sm_type}_{sm_major}_{sm_minor}"
             )
-            if shader_type_name is None or (sm_major, sm_minor) != (6, 0):
-                raise ValueError(
-                    f"Unexpected shader model '{shader_model}', baseline requires "
-                    "'cs_6_0', 'vs_6_0', or 'ps_6_0'"
-                )
+            accepted = {qualified_shader_model} if qualified_shader_model else {"cs_6_0", "vs_6_0", "ps_6_0"}
+            if shader_model not in accepted:
+                expected = ", ".join(repr(model) for model in sorted(accepted))
+                profile = "qualified target" if qualified_shader_model else "baseline"
+                raise ValueError(f"Unexpected shader model '{shader_model}', {profile} requires {expected}")
             if size_in_uint32 < 6 or size_in_uint32 * 4 > chunk_size:
                 raise ValueError(
                     f"DXIL chunk SizeInUint32 out of bounds ({size_in_uint32 * 4} vs chunk_size={chunk_size})"

@@ -1,0 +1,344 @@
+name: NW-13 Procedural Film
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci-impact:
+    name: NW-13 CI impact routing
+    runs-on: ubuntu-latest
+    outputs:
+      nw13: ${{ steps.classify.outputs.nw13 }}
+      full_regression: ${{ steps.classify.outputs.full_regression }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Classify changed scope
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python tools/ci/changed_scope.py
+          --event-name "${{ github.event_name }}"
+          --base "$BASE_SHA"
+          --head "$HEAD_SHA"
+          --github-output "$GITHUB_OUTPUT"
+          --summary-file "$GITHUB_STEP_SUMMARY"
+
+  contracts-and-headless-images:
+    name: Catalog, contracts, headless images and evidence bundles
+    needs: ci-impact
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Verify pinned catalog regeneration and clean-room boundary
+        run: |
+          reference="$RUNNER_TEMP/fr-public-nw13"
+          git clone --filter=blob:none --no-checkout https://github.com/farbrausch/fr_public.git "$reference"
+          git -C "$reference" -c core.autocrlf=false checkout --detach 8c8f82c2ae01133370e649bbc05916e7aceecadd
+          python tools/operator_catalog.py check --reference-root "$reference"
+          python -m pytest -q tests/test_werkkzeug3_catalog.py tests/test_werkkzeug4_catalog.py
+      - name: Run NW-13 contract, geometry, scene, particle, audio and pipeline tests
+        run: >-
+          python -m pytest -v
+          tests/test_nw13_geometry.py
+          tests/test_nw13_geometry_graph_cpp.py
+          tests/test_nw13_scene_animation.py
+          tests/test_nw13_particles_effects.py
+          tests/test_nw13_audio.py
+          tests/test_nw13_audio_physical.py
+          tests/test_nw13_pipeline_and_lowering.py
+          tests/test_nw13_production_render.py
+          tests/test_nw13_provenance_and_catalog.py
+          tests/test_nw13_work_graph_bundle.py
+          tests/test_nw13_physical_film.py
+      - name: Regenerate fixed-tick frames and contact sheet
+        run: |
+          PYTHONPATH=tools python - <<'PY'
+          from pathlib import Path
+          import json
+          import nw13_production as production
+          root = Path('.').resolve()
+          document = production.load_production(root, 'fixtures/nw13/hotel_corridor.production.json')
+          manifest = production.render_evidence(root, document, output_dir='build/nw13-evidence')
+          print(json.dumps(manifest['contact_sheet'], sort_keys=True))
+          PY
+      - name: Export independent common/optional/fallback artifacts and matched ledger
+        run: >-
+          env PYTHONPATH=tools python tools/nw13_artifact_measure.py
+          --output-dir build/nw13-evidence
+      - name: Upload NW-13 evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw13-evidence-${{ github.sha }}
+          path: build/nw13-evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+  headless-warp-and-evidence:
+    name: Windows builds, shared WARP regression, package identity and validation bundle
+    needs: ci-impact
+    if: needs.ci-impact.outputs.nw13 == 'true' || needs.ci-impact.outputs.full_regression == 'true'
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest
+        run: python -m pip install pytest
+      - name: Restore pinned portable-tool payload cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\nw01-download-cache
+          key: nw13-pinned-toolchain-${{ runner.os }}-${{ hashFiles('benchmarks/toolchain-manifest.v1.json') }}
+      - name: Export portable-tool payload cache root
+        shell: pwsh
+        run: |
+          $cache = Join-Path $env:RUNNER_TEMP "nw01-download-cache"
+          "NW01_DOWNLOAD_CACHE=$cache" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Bootstrap exact NW-01 Windows toolchain
+        shell: pwsh
+        run: >-
+          pwsh tools/nw01/bootstrap-windows.ps1
+          -Ci
+          -ProvenancePath build/nw01-bootstrap.json
+      - name: Export the pinned MSVC/SDK build environment
+        shell: pwsh
+        run: pwsh tools/nw01/enter-build-env.ps1 -ExportGitHubEnv
+      - name: Configure the frozen NW-07 release build
+        run: cmake --preset nw07-release -DNW_ENFORCE_PINNED_TOOLCHAIN=ON
+      - name: Build portable PackagePlayer, capability checker and standalone player
+        run: |
+          cmake --build --preset nw07-release --target nw06_capability_check --parallel 2
+          cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
+      - name: Configure NW-11 command paths and build the capability probe
+        id: nw11-warp-toolchain
+        shell: pwsh
+        run: |
+          $cl = (Get-Command cl.exe -ErrorAction Stop).Source
+          cmake -S src/nw11 -B build/nw13-probe -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_COMPILER=$cl"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build/nw13-probe --target nw11_capability_probe --parallel 2
+          exit $LASTEXITCODE
+      - name: Build and run the bounded Work Graphs experiment
+        shell: pwsh
+        run: |
+          $cl = (Get-Command cl.exe -ErrorAction Stop).Source
+          cmake -S src/nw13 -B build/nw13-work-graph -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_COMPILER=$cl"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build/nw13-work-graph --target nw13_work_graph --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/nw13_work_graph.py warp --executable build/nw13-work-graph/nw13_work_graph.exe --revision $env:GITHUB_SHA --output build/nw13-evidence/work-graph-warp.json
+          exit $LASTEXITCODE
+      - name: Stage the same-revision offline Work Graphs validation bundle
+        shell: pwsh
+        run: |
+          $pythonRoot = python -c "import sys; print(sys.base_prefix)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $probes = @(Get-ChildItem -Path build/nw13-probe -Filter nw11_capability_probe.exe -Recurse)
+          if ($probes.Count -ne 1) { throw "Expected exactly one same-build capability probe" }
+          python tools/nw13_work_graph.py stage --repo . --build build/nw13-work-graph `
+            --probe $probes[0].FullName --python-root $pythonRoot `
+            --warp-record build/nw13-evidence/work-graph-warp.json `
+            --bundle build/nw13-work-graph-physical --revision $env:GITHUB_SHA `
+            --trust build/nw13-evidence/work-graph-physical-trust.json
+          exit $LASTEXITCODE
+      - name: Upload immutable Work Graphs physical handoff
+        id: work-graph-upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw13-work-graph-physical-${{ github.sha }}
+          path: build/nw13-work-graph-physical/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Anchor Work Graphs delivery digest outside its archive
+        shell: pwsh
+        env:
+          WORK_GRAPH_ARCHIVE_SHA256: ${{ steps.work-graph-upload.outputs.artifact-digest }}
+          WORK_GRAPH_ARCHIVE_ID: ${{ steps.work-graph-upload.outputs.artifact-id }}
+        run: |
+          $sha = ($env:WORK_GRAPH_ARCHIVE_SHA256 -replace '^sha256:', '').ToLowerInvariant()
+          if ($sha -cnotmatch '^[0-9a-f]{64}$' -or $env:WORK_GRAPH_ARCHIVE_ID -notmatch '^[0-9]+$') {
+            throw "Missing GitHub Work Graphs artifact identity"
+          }
+          $path = "build/nw13-evidence/work-graph-physical-trust.json"
+          $trust = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable
+          $trust.archive_sha256 = $sha
+          $trust.github_artifact_id = $env:WORK_GRAPH_ARCHIVE_ID
+          $trust.github_workflow_run = $env:GITHUB_RUN_ID
+          $trust.github_workflow_attempt = $env:GITHUB_RUN_ATTEMPT
+          $payload = $trust | ConvertTo-Json
+          $payload | Set-Content -LiteralPath $path -Encoding utf8
+          "### NW-13 Work Graphs physical validation trust" | Add-Content $env:GITHUB_STEP_SUMMARY
+          '```json' | Add-Content $env:GITHUB_STEP_SUMMARY
+          $payload | Add-Content $env:GITHUB_STEP_SUMMARY
+          '```' | Add-Content $env:GITHUB_STEP_SUMMARY
+      - name: Run NW-13 contracts on Windows
+        run: >-
+          python -m pytest -v
+          tests/test_nw13_geometry.py
+          tests/test_nw13_geometry_graph_cpp.py
+          tests/test_nw13_scene_animation.py
+          tests/test_nw13_particles_effects.py
+          tests/test_nw13_audio.py
+          tests/test_nw13_audio_physical.py
+          tests/test_nw13_pipeline_and_lowering.py
+          tests/test_nw13_production_render.py
+          tests/test_nw13_provenance_and_catalog.py
+          tests/test_nw13_work_graph_bundle.py
+          tests/test_nw13_physical_film.py
+      - name: Independently export, smoke-test and measure common/optional artifacts
+        shell: pwsh
+        run: |
+          $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+          if (-not (Test-Path $template)) { throw "nw_procedural_image_player.exe was not built" }
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          $probe = Get-ChildItem -Path build/nw13-probe -Filter nw11_capability_probe.exe -Recurse |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $probe) { throw "nw11_capability_probe.exe was not built" }
+          $env:PYTHONPATH = "tools"
+          python tools/nw13_artifact_measure.py `
+            --output-dir build/nw13-evidence `
+            --template $template `
+            --probe $probe `
+            --dxc $dxc
+          exit $LASTEXITCODE
+      - name: Seal the immutable physical film handoff (no physical execution)
+        shell: pwsh
+        run: |
+          $probe = Get-ChildItem -Path build/nw13-probe -Filter nw11_capability_probe.exe -Recurse |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $probe) { throw "Capability probe was not built" }
+          New-Item -ItemType Directory -Force build/nw13-physical-film | Out-Null
+          Invoke-WebRequest "https://github.com/GameTechDev/PresentMon/releases/download/v2.6.0/PresentMon-2.6.0-x64.exe" -OutFile build/nw13-physical-film/PresentMon.exe
+          Invoke-WebRequest "https://raw.githubusercontent.com/GameTechDev/PresentMon/v2.6.0/LICENSE.txt" -OutFile build/nw13-physical-film/PresentMon-LICENSE.txt
+          $runtime = python -c "import sys; print(sys.base_prefix)"
+          python tools/nw13_physical_film.py stage --repo . --emitted build/nw13-evidence --probe $probe `
+            --python-root $runtime --presentmon build/nw13-physical-film/PresentMon.exe `
+            --presentmon-license build/nw13-physical-film/PresentMon-LICENSE.txt `
+            --revision $env:GITHUB_SHA --output build/nw13-physical-film/film-physical.zip `
+            --receipt build/nw13-physical-film/film-physical.receipt.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $receipt = Get-Content build/nw13-physical-film/film-physical.receipt.json -Raw | ConvertFrom-Json
+          @(
+            "### NW-13 physical film handoff (not run on physical hardware)"
+            "Measured revision: $($receipt.revision)"
+            "Measured tree: $($receipt.tree)"
+            "Inner film-physical.zip SHA-256: $($receipt.archive_sha256)"
+            "film-physical.json SHA-256: $($receipt.index_sha256)"
+            "Packaged arms: $($receipt.arms -join ', ')"
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+      - name: Upload the sealed physical film handoff
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw13-film-physical-${{ github.sha }}
+          path: |
+            build/nw13-physical-film/film-physical.zip
+            build/nw13-physical-film/film-physical.receipt.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Build and seal the separate native-raster inspection handoff (no hosted renderer)
+        shell: pwsh
+        run: |
+          $probe = Get-ChildItem -Path build/nw13-probe -Filter nw11_capability_probe.exe -Recurse |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $probe) { throw "Capability probe was not built" }
+          $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          $runtime = python -c "import sys; print(sys.base_prefix)"
+          python tools/nw13_physical_film.py stage --repo . --emitted build/nw13-inspection-build --probe $probe `
+            --inspection-production fixtures/nw13/hotel_corridor.inspection.production.json --template $template --dxc $dxc `
+            --python-root $runtime --presentmon build/nw13-physical-film/PresentMon.exe `
+            --presentmon-license build/nw13-physical-film/PresentMon-LICENSE.txt `
+            --revision $env:GITHUB_SHA --output build/nw13-physical-film/inspection-physical.zip `
+            --receipt build/nw13-physical-film/inspection-physical.receipt.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $receipt = Get-Content build/nw13-physical-film/inspection-physical.receipt.json -Raw | ConvertFrom-Json
+          @(
+            "### NW-13 physical inspection handoff (CI built; not run in CI or on physical hardware)"
+            "Measured source revision: $($receipt.revision)"
+            "Measured source tree: $($receipt.tree)"
+            "Native raster: $($receipt.render_size -join ' x ')"
+            "Inner inspection-physical.zip SHA-256: $($receipt.archive_sha256)"
+            "film-physical.json SHA-256: $($receipt.index_sha256)"
+            "Packaged arms: $($receipt.arms -join ', ')"
+            "Image evidence: $($receipt.image_reference); no hosted image/oracle/performance claim."
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+      - name: Upload the sealed physical inspection handoff
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw13-film-inspection-physical-${{ github.sha }}
+          path: |
+            build/nw13-physical-film/inspection-physical.zip
+            build/nw13-physical-film/inspection-physical.receipt.json
+          if-no-files-found: error
+          retention-days: 14
+      # This is independent of the film validation. A failing film step
+      # still fails the job, even if these separate NW-11 steps pass.
+      - name: Build the actual NW-11 common and fallback WARP executables
+        id: nw11-warp-build
+        if: ${{ !cancelled() && steps.nw11-warp-toolchain.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $variants = @("nw11_common_baseline", "nw11_common_analytic", "nw11_fallback_common", "nw11_fallback_analytic")
+          cmake --build build/nw13-probe --parallel 2 --target $variants
+          if ($LASTEXITCODE -ne 0) { throw "Building NW-11 common/fallback WARP executables failed: $LASTEXITCODE" }
+          $artifacts = "build/nw13-nw11-commands"
+          New-Item -ItemType Directory -Force -Path "$artifacts/compiled-specializations" | Out-Null
+          foreach ($name in $variants) {
+            $candidate = @(Get-ChildItem -Path build/nw13-probe -Filter "$name.exe" -Recurse)
+            if ($candidate.Count -ne 1) { throw "Expected exactly one NW-11 $name.exe, found $($candidate.Count)" }
+            Copy-Item $candidate[0].FullName "$artifacts/$name.exe" -ErrorAction Stop
+          }
+          foreach ($name in @("nw11_torus_amplification_as_dxil", "nw11_torus_meshlet_ms_dxil", "nw11_scene_rayquery_ps_dxil", "nw11_deform_cs_dxil", "nw11_analytic_reflection_ps_dxil")) {
+            Copy-Item "build/nw13-probe/shaders/$name.dxil" "$artifacts/compiled-specializations/$name.dxil" -ErrorAction Stop
+          }
+      - name: Bind the NW-11 WARP executables to the same-revision canonical package
+        id: nw11-warp-bind
+        if: ${{ !cancelled() && steps.nw11-warp-build.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $revision = (git rev-parse HEAD).Trim()
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          python tools/canonical_export_reproducibility.py --candidate $revision --dxc $dxc --out build/nw13-nw11-proof
+          if ($LASTEXITCODE -ne 0) { throw "NW-11 canonical common package rebuild failed: $LASTEXITCODE" }
+          python tools/nw11_embed_production.py --proof build/nw13-nw11-proof --executables build/nw13-nw11-commands --commit $revision `
+            --variant nw11_common_baseline --variant nw11_common_analytic --variant nw11_fallback_common --variant nw11_fallback_analytic
+          if ($LASTEXITCODE -ne 0) { throw "NW-11 canonical production package binding failed: $LASTEXITCODE" }
+      - name: Exercise the shared NW-11 headless WARP command paths
+        if: ${{ !cancelled() && steps.nw11-warp-bind.outcome == 'success' }}
+        run: >-
+          python tools/nw11_warp_smoke.py --executables build/nw13-nw11-commands
+          --output build/nw13-evidence/nw11-warp
+      - name: Upload validation bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw13-windows-validation-${{ github.sha }}
+          path: build/nw13-evidence/
+          if-no-files-found: error
+          retention-days: 14

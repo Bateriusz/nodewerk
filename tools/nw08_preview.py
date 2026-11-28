@@ -21,6 +21,7 @@ import os
 import queue
 import shutil
 import subprocess
+import struct
 import sys
 import tempfile
 import threading
@@ -400,6 +401,25 @@ class ReferencePreviewBackend:
         width: int,
         height: int,
     ) -> PreviewFrame:
+        film = next((node for node in nw03_compiler._reachable_shader_roots(document)
+                     if node.operator_id == "nw.shader.film"), None)
+        if film is not None:
+            import nw13_film
+            start = time.perf_counter()
+            try:
+                # A Studio viewport is presentation geometry, not a request
+                # to compile a different film raster or bypass its work budget.
+                width, height = nw13_film.resolve_dispatch(document, film).extent
+                image = nw13_film.reference_image(document, film, tick, width=width, height=height)
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                raise PreviewError(f"film node {film.node_id}: {error}") from error
+            pixels = struct.pack(f"<{len(image)}f", *image)
+            return PreviewFrame(
+                tick=tick, width=width, height=height,
+                image_sha256=hashlib.sha256(pixels).hexdigest(), semantic_digest="",
+                image_data=pixels, backend=self.name, execution_kind="contract_reference",
+                pass_timings=PassTimings((PassTiming("film_reference", (time.perf_counter() - start) * 1000.0),)),
+            )
         timings: list[PassTiming] = []
         noise, torus, instances, materials = _procedural_inputs(document)
 
@@ -701,9 +721,9 @@ class RuntimePackageExporter:
         self.optimization = optimization
         self._export_function = export_function or nw05_export.export_graph
 
-    def selected_audio_payload(self) -> bytes | None:
+    def selected_audio_payload(self, document: nw03_compiler.GraphDocument) -> bytes | None:
         path = self.settings.audio_song_path
-        return nw05_export.read_audio_song(path) if path else None
+        return nw05_export.read_audio_song(path, film_document=document) if path else None
 
     def export(
         self,
@@ -1602,7 +1622,7 @@ class WindowsRuntimePreviewBackend:
         height: int,
     ) -> tuple[str, PreviewExportBundle, float]:
         try:
-            song = (self._exporter.selected_audio_payload()
+            song = (self._exporter.selected_audio_payload(document)
                     if isinstance(self._exporter, RuntimePackageExporter) else None)
         except (OSError, ValueError) as exc:
             raise PreviewError(f"invalid audio song: {exc}") from exc

@@ -1,0 +1,1717 @@
+{
+  "format": "nodewerk-operator-capability-map",
+  "schema_version": 1,
+  "reviewed_on": "2026-11-27",
+  "reviewed_nodewerk_revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+  "status": "starter_semantic_review",
+  "purpose": "Separate the reviewed current nodewerk implementation from proposed semantic families and optional backends, while preserving the complete Werkkzeug reference catalogue.",
+  "scope_notes": [
+    "This is a family-level planning map, not an exhaustive operator-by-operator equivalence result or an engine feature implementation.",
+    "existing_operator_ids are IDs present in the reviewed registry/compiler; current_scope and limitations say whether their release realization exists, is restricted, or is only represented by schema/reference evaluation.",
+    "A fixed shader override, standalone experiment, registered schema or CPU image oracle is not counted as a reusable general-purpose implementation.",
+    "Current limits such as one mesh/material, four orbital camera keys or 64 audio events describe the pinned implementation. They do not establish permanent product limits or new acceptance gates.",
+    "Proposed semantics are behavior descriptions, not committed nw.* IDs, interface spellings or guarantees of adoption.",
+    "Candidate backends are planning options, not approved integrations. Technologies may support several families and one family may require several operators/passes.",
+    "Reference query terms and prospective names are retrieval hints only. Their appearances in individual source variants and graph uses must be linked to inventory records before claiming coverage.",
+    "This review makes no physical execution, image-equivalence, performance or complete-demo reproducibility claim."
+  ],
+  "policy": {
+    "authoring_semantics": "Backend-neutral authored functions; SDK/API/vendor names belong to capability-qualified lowering selection rather than artist-facing semantic node identities.",
+    "common_fallback": "Required semantics retain a common non-RTX implementation. Optional lowerings consume the same semantic graph; common and optional artifacts remain separately exportable.",
+    "training_rule": "No nodewerk-owned training, fine-tuning, data preparation for training, per-asset/per-production model fitting or runtime/online model training. Fixed externally pretrained inference may be evaluated.",
+    "geometry": "Polygon meshes, implicit fields and other justified representations may coexist. SDF/CSG is not a general replacement for topology, selections, UVs, skeletal authoring or every historical modeling operation.",
+    "reference_preservation": "Keep all inventoried reference records. Mark coverage and replacement relations without deleting historical entries or assuming that a technology replaces an entire family.",
+    "clean_room": "Use Farbrausch sources/data to document operator intent, metadata and requirements. Do not copy, mechanically translate or port their implementation into nodewerk.",
+    "implementation_architecture": "Extend the shared graph/compiler/export/PackagePlayer/Studio and temporal/audio systems. Do not create a fixture-specific second renderer or introduce a general runtime graph interpreter.",
+    "prioritization": "Order work by shared prerequisites and actual reachable production graphs. The priorities below are suggestions and add no new frozen contracts or validation gates.",
+    "source_refs": [
+      "nw13_issue_snapshot",
+      "nw11_readme"
+    ]
+  },
+  "coverage_definitions": {
+    "current_capability": {
+      "full": "All explicitly described family semantics are realized by reviewed reusable implementations. No family is promoted to this state by this starter review.",
+      "partial": "A concrete bounded subset, restricted fixture or supporting implementation is present; stated limitations prevent a full-family claim.",
+      "none": "No reviewed reusable implementation or relevant realized fixture for this family was identified in the stated sources."
+    },
+    "reference_mapping": {
+      "unreviewed": "Individual reference operator parameter domains, output contracts, temporal behavior and downstream graph uses have not been checked for equivalence.",
+      "partial": "Reserved for a future explicit mapping covering only a stated subset of reference operator behavior.",
+      "full": "Reserved for a future explicit mapping that preserves the required authored control and downstream semantics in a declared use."
+    },
+    "current_state": {
+      "implemented": "Concrete reusable implementation exists for current_scope, without implying that the broad family is complete or every registered port is generally lowerable.",
+      "restricted_fixture": "Concrete output exists inside a constrained exporter/fixed pipeline or dedicated shader fixture; it is not a general reusable family.",
+      "experimental": "Concrete capability-qualified experimental implementation exists, without implying reusable authoring support or default adoption.",
+      "planned": "A new semantic extension is planned; supporting schemas or narrower primitives may already exist and are listed separately.",
+      "deferred": "No implementation is scheduled by this map; retain the requirement and reconsider after a real production demonstrates need."
+    }
+  },
+  "reference_usage": {
+    "status": "pending_graph_extraction",
+    "reachable_demo_operator_count": null,
+    "per_demo_usage_counts": null,
+    "rationale": "Registration count and name matching cannot identify reachable operators in .k/.wz4 production graphs. Decode/reference graph roots and dependencies before prioritizing by actual use.",
+    "replacement_relations": [],
+    "replacement_relations_note": "Intentionally empty. A family-level candidate or similar output is not yet a verified one-to-one or many-to-many replacement relation."
+  },
+  "priority_order": [
+    {
+      "priority": 1,
+      "title": "Connect a reusable production scene",
+      "families": [
+        "scene_objects",
+        "rigid_transforms",
+        "timeline_curves",
+        "camera_shots",
+        "materials",
+        "lights",
+        "primary_rendering",
+        "image_composition",
+        "scalar_control"
+      ],
+      "outcome": "Multiple independently authored objects/materials and cameras flow through the shared exporter/player, with consistent scene identities and required image channels."
+    },
+    {
+      "priority": 2,
+      "title": "Add construction required by selected scenes",
+      "families": [
+        "mesh_primitives",
+        "implicit_csg",
+        "deformation_displacement",
+        "repetition_instancing",
+        "procedural_textures",
+        "surface_attributes"
+      ],
+      "outcome": "Choose mesh and field construction based on actual graph needs; prove combinations through shared operators instead of replacing a monolithic fixture shader."
+    },
+    {
+      "priority": 3,
+      "title": "Connect spatial, temporal and audible effects",
+      "families": [
+        "shadow_visibility",
+        "reflection_environment",
+        "particles",
+        "temporal_history",
+        "postprocessing",
+        "audio"
+      ],
+      "outcome": "Actual scene-dependent visibility/reflection, occluded spatial particles, image history, postprocessing and procedural sound compose into a continuous authored sequence."
+    },
+    {
+      "priority": 4,
+      "title": "Evaluate optional enhancements and demand-led gaps",
+      "families": [
+        "image_reconstruction",
+        "indirect_illumination_ao",
+        "mesh_selection_topology",
+        "text_curves"
+      ],
+      "outcome": "Assess allowed pretrained inference and additional semantics only against concrete requirements; apply optional mesh/DXR/Work-Graphs optimizations after the corresponding shared semantic path exists."
+    }
+  ],
+  "sources": [
+    {
+      "id": "compiler_registry",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "tools/nw03_compiler.py",
+      "blob_sha": "a758111ef999a9f39682dd9972d7c8ccb56fd22c",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/tools/nw03_compiler.py",
+      "locators": [
+        "KNOWN_OPERATORS",
+        "PORT_SPECS",
+        "PARAM_RULES",
+        "_shader_expression_text",
+        "lower_to_fused_hlsl",
+        "lower_to_selective_hlsl"
+      ]
+    },
+    {
+      "id": "graph_registry_evaluation",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "src/graph/nw_graph.cpp",
+      "blob_sha": "570d6af5c0fcd59e56c485bb56efd3365bc919ba",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/src/graph/nw_graph.cpp",
+      "locators": [
+        "OperatorRegistry::CreateDefault",
+        "EvaluateNode",
+        "GraphEvaluator::Evaluate",
+        "ImageOracle"
+      ]
+    },
+    {
+      "id": "nw06_operator_contracts",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "schemas/nw06-operator-contracts.v1.json",
+      "blob_sha": "a714b2dc9162766ad2c75d347a4c9e3e2a90f167",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/schemas/nw06-operator-contracts.v1.json",
+      "locators": [
+        "operators"
+      ]
+    },
+    {
+      "id": "nw06_export",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "tools/nw06_export.py",
+      "blob_sha": "4f3ec10a1ff1ed40d26c968b1e686a306dc81604",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/tools/nw06_export.py",
+      "locators": [
+        "NW06_OPERATORS",
+        "NW06_OPERATOR_ALIASES",
+        "FIXED_SHADERS",
+        "build_package",
+        "build_package.unique_node",
+        "_parse_camera_keys",
+        "_camera_curve_encoding"
+      ]
+    },
+    {
+      "id": "nw06_procedural",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "tools/nw06_procedural.py",
+      "blob_sha": "6c7044c50aa13e12d765340a0d1e44ec84491a6a",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/tools/nw06_procedural.py",
+      "locators": [
+        "generate_noise2d",
+        "generate_torus_mesh",
+        "generate_instances",
+        "generate_materials"
+      ]
+    },
+    {
+      "id": "nw06_generator",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "shaders/nw06/nw06_generate_cs.hlsl",
+      "blob_sha": "0911ac02d8746f5eacd14b7e26bce35a39e1ea28",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/shaders/nw06/nw06_generate_cs.hlsl",
+      "locators": [
+        "Noise2D",
+        "WriteVertex",
+        "WriteIndex",
+        "GenerateGeometryCS"
+      ]
+    },
+    {
+      "id": "nw06_scene_vertex",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "shaders/nw06/nw06_scene_vs.hlsl",
+      "blob_sha": "5dc87c83056656428794396c9caabd654e23f1e2",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/shaders/nw06/nw06_scene_vs.hlsl",
+      "locators": [
+        "SampleCurve",
+        "SceneVS"
+      ]
+    },
+    {
+      "id": "nw06_scene_pixel",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "shaders/nw06/nw06_scene_ps.hlsl",
+      "blob_sha": "f0b6eeecec1ae73675606c48af1ab040b8c84772",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/shaders/nw06/nw06_scene_ps.hlsl",
+      "locators": [
+        "ScenePS"
+      ]
+    },
+    {
+      "id": "nw06_timeline",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "tools/nw06_timeline.py",
+      "blob_sha": "88c067027b306dee2882b8a4737e1f53191418bc",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/tools/nw06_timeline.py",
+      "locators": [
+        "TICKS_PER_SECOND",
+        "RationalFrameStep",
+        "Curve",
+        "EventCursor",
+        "StatelessSceneEvaluator"
+      ]
+    },
+    {
+      "id": "nw09_temporal",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "tools/nw09_temporal.py",
+      "blob_sha": "8ba474f0fb8b24f099cfe18602f1795708be9d61",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/tools/nw09_temporal.py",
+      "locators": [
+        "_history_element_layout",
+        "_step_particles",
+        "_step_feedback",
+        "TemporalRuntime"
+      ]
+    },
+    {
+      "id": "nw09_export",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "tools/nw09_export.py",
+      "blob_sha": "bd1da06fd12d03cca406c3516423f679a369aaf8",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/tools/nw09_export.py",
+      "locators": [
+        "_history_hlsl",
+        "presentation_chain",
+        "_post_pass_hlsl",
+        "build_stateful_package"
+      ]
+    },
+    {
+      "id": "nw09_docs",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "docs/nw09-temporal-state.md",
+      "blob_sha": "bdda300c44afcbf949ed1226ca99921315faa93f",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/docs/nw09-temporal-state.md",
+      "locators": [
+        "History declarations",
+        "Initialization, advancement, loop reset, seek, and replay",
+        "Export and package extension"
+      ]
+    },
+    {
+      "id": "nw10_intro",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "tools/nw10_intro.py",
+      "blob_sha": "a0b92bdc5ae4dc34a281a7d18f073def29e20c9d",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/tools/nw10_intro.py",
+      "locators": [
+        "validate_intro_graph",
+        "_intro_generated_shader",
+        "export_intro"
+      ]
+    },
+    {
+      "id": "nw10_sdf_shader",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "shaders/nw10/nw10_sdf_intro_cs.hlsl",
+      "blob_sha": "1f62ccdbe03a9bee10d444d7ba17ee3ab255bfbb",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/shaders/nw10/nw10_sdf_intro_cs.hlsl",
+      "locators": [
+        "sdSphere",
+        "sdTorus",
+        "mapScene",
+        "estimateNormal",
+        "SDFIntroCS"
+      ]
+    },
+    {
+      "id": "nw11_readme",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "src/nw11/README.md",
+      "blob_sha": "be8da29e21b182508248d1153903c096463b47ea",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/src/nw11/README.md",
+      "locators": [
+        "Optional experiment targets and shared production runtime",
+        "Active v4 experiment policy"
+      ]
+    },
+    {
+      "id": "nw11_ray_shader",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "shaders/nw11/reflection/nw11_scene_rayquery_ps.hlsl",
+      "blob_sha": "5720485b8051e74d0de26dabf1c5115576459bda",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/shaders/nw11/reflection/nw11_scene_rayquery_ps.hlsl",
+      "locators": [
+        "TraceReflectedSurface",
+        "ScenePS"
+      ]
+    },
+    {
+      "id": "nw11_reflection_fixture",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "shaders/nw11/reflection/nw11_reflection_fixture.hlsli",
+      "blob_sha": "82a33afd67d4907f81ee1e63c99f515705622279",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/shaders/nw11/reflection/nw11_reflection_fixture.hlsli",
+      "locators": [
+        "AnalyticEnvironment",
+        "ReflectionLimit",
+        "ReflectionRadiance"
+      ]
+    },
+    {
+      "id": "audio_song",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "tools/audio_song.py",
+      "blob_sha": "a1a6e3027204cd0f114d00ea4273117f0653e1b6",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/tools/audio_song.py",
+      "locators": [
+        "compile_song",
+        "decode_song"
+      ]
+    },
+    {
+      "id": "audio_synth",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "src/audio/procedural_audio.cpp",
+      "blob_sha": "9340dd8dfad6d33daca241dc4a3751d06f894617",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/src/audio/procedural_audio.cpp",
+      "locators": [
+        "DecodeSong",
+        "RenderPcm",
+        "SampleToTick",
+        "TickToSample"
+      ]
+    },
+    {
+      "id": "audio_docs",
+      "kind": "pinned_repository_file",
+      "repository": "Bateriusz/nodewerk",
+      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+      "path": "docs/procedural-audio.md",
+      "blob_sha": "7988c015dff71438dcaa57956287882a3ef536f3",
+      "url": "https://github.com/Bateriusz/nodewerk/blob/1c9e1559c8d43530c7b213461c6719b6aa43ae35/docs/procedural-audio.md",
+      "locators": [
+        "Optional procedural audio (NW-12)",
+        "Use"
+      ]
+    },
+    {
+      "id": "nw13_issue_snapshot",
+      "kind": "mutable_issue_reviewed_at_recorded_revision",
+      "url": "https://github.com/Bateriusz/nodewerk/issues/36",
+      "updated_at": "2026-11-27T18:37:41Z",
+      "reviewed_on": "2026-11-27",
+      "locators": [
+        "Goal",
+        "Final technical design sections 1–9",
+        "Compatibility and safety constraints",
+        "Dependencies and boundaries"
+      ],
+      "note": "Planning evidence only. The issue body is not pinned by the repository revision and may subsequently change."
+    }
+  ],
+  "families": [
+    {
+      "id": "scalar_control",
+      "title": "Scalar/vector control and shader expressions",
+      "existing_operator_ids": [
+        "nw.math.scalar_const",
+        "nw.math.vec2_const",
+        "nw.math.vec3_const",
+        "nw.math.vec4_const",
+        "nw.math.mat4_const",
+        "nw.math.add",
+        "nw.math.mul",
+        "nw.math.sin",
+        "nw.math.clamp01",
+        "nw.math.vec4_scale",
+        "nw.math.vec4_split",
+        "nw.math.dot",
+        "nw.control.smoothstep",
+        "nw.control.seed",
+        "nw.proc.hash_noise",
+        "nw.proc.value_noise",
+        "nw.proc.checker",
+        "nw.proc.palette",
+        "nw.shader.vec4_const",
+        "nw.shader.expr",
+        "nw.shader.add",
+        "nw.shader.mul",
+        "nw.shader.mix"
+      ],
+      "current_state": "implemented",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "CPU reference evaluation implements the listed control/math values; the restricted ShaderExpr language composes expressions and lowers reachable shader roots to compute HLSL."
+      ],
+      "limitations": [
+        "CPU graph evaluation and schema registration alone do not establish that arbitrary CPU values drive every release render parameter.",
+        "The ShaderExpr language is restricted; it is not unrestricted HLSL, a general material language or scripting."
+      ],
+      "proposed_semantics": [
+        "Reuse typed math, seeds and curve controls in the expanded scene, material and effect semantics."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Compile-time folding and specialization; existing CPU control/reference path; conventional compute HLSL."
+        ],
+        "optional": []
+      },
+      "priority": 1,
+      "source_refs": [
+        "compiler_registry",
+        "graph_registry_evaluation"
+      ],
+      "reference_query": {
+        "terms": [
+          "scalar",
+          "vector",
+          "expression",
+          "seed",
+          "math"
+        ],
+        "prospective_example_names": [],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "procedural_textures",
+      "title": "Procedural texture generation and combination",
+      "existing_operator_ids": [
+        "nw.texture.procedural",
+        "nw.texture.noise2d",
+        "nw.residency.generate_texture",
+        "nw.residency.upload_texture"
+      ],
+      "current_state": "restricted_fixture",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "The reviewed instanced exporter generates seeded multi-octave 2D value noise as a texture at initialization; CPU reference generation exists.",
+        "Noise dimensions, seed, octaves, scale, lacunarity and gain are authored parameters."
+      ],
+      "limitations": [
+        "build_package permits one texture recipe and one generated texture in the fixed 3D pipeline.",
+        "A procedural recipe or upload schema does not prove a general reusable bitmap graph.",
+        "No full Werkkzeug bitmap/filter family has been mapped."
+      ],
+      "proposed_semantics": [
+        "Composable noise, gradients, masks, color operations, coordinate transforms and texture combinations driven by selected production needs."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Compile-time or initialization compute; CPU evaluation where appropriate."
+        ],
+        "optional": []
+      },
+      "priority": 2,
+      "source_refs": [
+        "nw06_operator_contracts",
+        "nw06_export",
+        "nw06_procedural",
+        "nw06_generator"
+      ],
+      "reference_query": {
+        "terms": [
+          "bitmap",
+          "texture",
+          "noise",
+          "gradient",
+          "mask",
+          "combine"
+        ],
+        "prospective_example_names": [
+          "Perlin"
+        ],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "image_composition",
+      "title": "Image layers and scene/effect composition",
+      "existing_operator_ids": [
+        "nw.render.fullscreen",
+        "nw.render.gbuffer",
+        "nw.render.composite",
+        "nw.render.present",
+        "nw.shader.add",
+        "nw.shader.mul",
+        "nw.shader.mix"
+      ],
+      "current_state": "planned",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "Fullscreen ShaderExpr rendering exists.",
+        "G-buffer/composite port schemas and CPU image-oracle evaluation exist; these are not evidence of a reusable heterogeneous scene/layer renderer."
+      ],
+      "limitations": [
+        "The reviewed NW-06 package binds one rendered image to a prescribed bloom/tonemap chain.",
+        "The reviewed schemas do not expose the planned complete color/depth/camera-metadata composition interface."
+      ],
+      "proposed_semantics": [
+        "Compose actual rendered scene color and effect layers with explicit alpha convention and depth compatibility.",
+        "Expose typed depth and camera metadata; add motion/normal/material channels when required by a selected effect."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Shared raster/compute passes within the existing resource scheduler."
+        ],
+        "optional": []
+      },
+      "priority": 1,
+      "source_refs": [
+        "compiler_registry",
+        "graph_registry_evaluation",
+        "nw06_export",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "render target",
+          "image",
+          "layer",
+          "blend",
+          "composite"
+        ],
+        "prospective_example_names": [],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "mesh_primitives",
+      "title": "Polygonal primitives and generated mesh recipes",
+      "existing_operator_ids": [
+        "nw.mesh.recipe",
+        "nw.mesh.torus",
+        "nw.residency.generate_mesh",
+        "nw.residency.upload_mesh"
+      ],
+      "current_state": "restricted_fixture",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "Torus generation has concrete CPU and initialization-compute implementations, including indices, normals and UVs.",
+        "The 3D exporter has a concrete indexed/instanced geometry path."
+      ],
+      "limitations": [
+        "The reviewed exporter constructs TorusParameters even when accepting the generic mesh.recipe identity.",
+        "One mesh source is permitted by the fixed lowering; a vertices/indices recipe schema is not arbitrary mesh construction.",
+        "Mesh shaders do not supply missing modeling semantics."
+      ],
+      "proposed_semantics": [
+        "Add the bounded polygonal primitives actually needed by productions; allow polygon meshes and implicit surfaces to coexist.",
+        "Use representation-appropriate construction without promising one-to-one historical topology."
+      ],
+      "candidate_backends": {
+        "common": [
+          "CPU/initialization-compute generation and indexed rasterization."
+        ],
+        "optional": [
+          "Capability-qualified mesh-shader realization where useful."
+        ]
+      },
+      "priority": 2,
+      "source_refs": [
+        "compiler_registry",
+        "nw06_export",
+        "nw06_procedural",
+        "nw06_generator",
+        "nw11_readme"
+      ],
+      "reference_query": {
+        "terms": [
+          "mesh",
+          "primitive",
+          "torus",
+          "sphere",
+          "cube",
+          "cylinder",
+          "grid"
+        ],
+        "prospective_example_names": [
+          "Torus",
+          "Sphere",
+          "Cube",
+          "Cylinder",
+          "Grid"
+        ],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "mesh_selection_topology",
+      "title": "Polygon selections and topology editing",
+      "existing_operator_ids": [],
+      "current_state": "deferred",
+      "coverage": {
+        "current_capability": "none",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "No dedicated selection, extrusion, subdivision, bevel or arbitrary topology-editing operator was found in the reviewed current registry."
+      ],
+      "limitations": [
+        "Implicit CSG or smooth union does not generally preserve face/edge selection, topology, UV seams or subsequent mesh-edit behavior.",
+        "The NW-13 issue explicitly defers a general mesh-editing suite; a real production may motivate a bounded addition."
+      ],
+      "proposed_semantics": [
+        "Retain explicit uncovered requirements for selections, extrusion, subdivision, bevel and topology-aware operations.",
+        "Select a small independent implementation only when a production demonstrates the need; do not count SDF resemblance as full coverage."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Future compiler-side/CPU or compute mesh processing, if selected."
+        ],
+        "optional": []
+      },
+      "priority": 4,
+      "source_refs": [
+        "compiler_registry",
+        "graph_registry_evaluation",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "selection",
+          "extrude",
+          "subdivide",
+          "bevel",
+          "triangulate",
+          "delete face"
+        ],
+        "prospective_example_names": [
+          "Select",
+          "Extrude",
+          "Subdivide",
+          "Bevel",
+          "Triangulate",
+          "DeleteFace"
+        ],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "surface_attributes",
+      "title": "UVs, normals and surface/material attributes",
+      "existing_operator_ids": [],
+      "current_state": "restricted_fixture",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "The torus generator writes analytic normals and UVs in its vertex layout; SceneVS carries them to the raster pixel stage."
+      ],
+      "limitations": [
+        "There is no dedicated reusable UV authoring, seam editing, tangent generation or general normal-processing operator in the reviewed registry.",
+        "Automatically generated primitive attributes do not cover arbitrary UV surgery or stable selected-face material assignments."
+      ],
+      "proposed_semantics": [
+        "Preserve required UV/normal/material attributes through mesh operations and conversions.",
+        "Add bounded attribute generation/transform operations when needed; keep advanced UV editing explicitly deferred."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Compiler-side or conventional compute processing; shared vertex/mesh data."
+        ],
+        "optional": []
+      },
+      "priority": 2,
+      "source_refs": [
+        "compiler_registry",
+        "nw06_generator",
+        "nw06_scene_vertex",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "UV",
+          "normal",
+          "crease",
+          "material selection",
+          "mapping"
+        ],
+        "prospective_example_names": [
+          "Facette",
+          "Crease",
+          "UnCrease",
+          "SetMaterial"
+        ],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "implicit_csg",
+      "title": "Implicit primitives, CSG and bounded surface evaluation",
+      "existing_operator_ids": [],
+      "current_state": "restricted_fixture",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "NW-10 demonstrates a fixed sphere/torus smooth-union SDF scene through one intro shader supplied as generated_shaders_override.",
+        "The reviewed registry contains no reusable SDF or CSG operator IDs."
+      ],
+      "limitations": [
+        "NW-10's fixed shader and fixed operator-set check are an executable fixture, not an authored composable SDF/CSG vocabulary.",
+        "No general replacement claim for polygon selections, extrusion, subdivision or UV editing follows from this fixture."
+      ],
+      "proposed_semantics": [
+        "Bounded implicit sphere, box, cylinder/capsule and torus fields; union, intersection, subtraction and smooth union.",
+        "A shared realization boundary that preserves material identity and lets implicit and polygonal geometry coexist."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Bounded shader evaluation/raymarching or compute-generated geometry plus rasterization, selected for the workload."
+        ],
+        "optional": [
+          "Capability-qualified mesh or DXR realization preserving the same authored semantic; not required for common correctness."
+        ]
+      },
+      "priority": 2,
+      "source_refs": [
+        "compiler_registry",
+        "nw10_intro",
+        "nw13_issue_snapshot",
+        "nw10_sdf_shader"
+      ],
+      "reference_query": {
+        "terms": [
+          "implicit",
+          "distance field",
+          "boolean",
+          "CSG",
+          "smooth union"
+        ],
+        "prospective_example_names": [],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "deformation_displacement",
+      "title": "Deformation and procedural displacement",
+      "existing_operator_ids": [
+        "nw.animation.twist"
+      ],
+      "current_state": "restricted_fixture",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "SceneVS applies a sinusoidal, absolute-tick Y-axis twist to local vertices and normals, controlled by max_twist_degrees."
+      ],
+      "limitations": [
+        "The existing twist is embedded in the single torus/instance render path, not an arbitrary chain of geometry modifiers.",
+        "No generic bend, noise displacement or selection-aware deformation operator was found in the reviewed registry."
+      ],
+      "proposed_semantics": [
+        "Composable bounded transforms, bend, twist and seeded displacement for suitable representations.",
+        "Preserve representation-specific attributes and clarify which field/domain operations cover a historical modeling intent only partially."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Compiler specialization, conventional compute/vertex processing or bounded field evaluation."
+        ],
+        "optional": [
+          "Mesh-shader evaluation where useful; ray-traced realization only after the deformed scene is represented consistently."
+        ]
+      },
+      "priority": 2,
+      "source_refs": [
+        "nw06_operator_contracts",
+        "nw06_scene_vertex",
+        "compiler_registry",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "bend",
+          "twist",
+          "deform",
+          "displace",
+          "noise"
+        ],
+        "prospective_example_names": [
+          "Bend",
+          "TransformNonLinear",
+          "Deform",
+          "Displace",
+          "Noise"
+        ],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "repetition_instancing",
+      "title": "Repetition and procedural instancing",
+      "existing_operator_ids": [
+        "nw.scene.instances",
+        "nw.residency.generate_instances"
+      ],
+      "current_state": "restricted_fixture",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "A seeded instance recipe produces a bounded flat table of transforms and material indices for one generated mesh.",
+        "The reviewed schema bounds count to 4096; this is an existing implementation limit, not a proposed permanent product limit."
+      ],
+      "limitations": [
+        "One instances recipe is selected by build_package.",
+        "The current path is not arbitrary heterogeneous scene construction or a general repetition graph."
+      ],
+      "proposed_semantics": [
+        "Bounded Cartesian/axis repetition and procedural instancing with shared geometry and stable identities.",
+        "Keep field repetition, duplicated mesh construction and scene instancing distinct where their output semantics differ."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Initialization/compile-time generation and conventional instanced rasterization."
+        ],
+        "optional": [
+          "Mesh shaders; Work Graphs only for a workload that benefits from GPU-created work."
+        ]
+      },
+      "priority": 2,
+      "source_refs": [
+        "nw06_operator_contracts",
+        "nw06_export",
+        "nw06_procedural",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "multiply",
+          "repeat",
+          "instance",
+          "clone"
+        ],
+        "prospective_example_names": [
+          "Multiply",
+          "MultiplyNew"
+        ],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "scene_objects",
+      "title": "Scene objects, identity and heterogeneous composition",
+      "existing_operator_ids": [
+        "nw.scene.flat",
+        "nw.scene.instances",
+        "nw.render.instanced"
+      ],
+      "current_state": "restricted_fixture",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "The current concrete 3D path renders one mesh/texture/material/light/camera set with flat instances.",
+        "scene.flat has a CPU table-like authoring value; its existence is not a general scene renderer."
+      ],
+      "limitations": [
+        "build_package.unique_node rejects multiple mesh, material, camera, light, instance and render nodes in this lowering.",
+        "The reviewed path does not expose authored heterogeneous room, door, character and prop objects with independent material bindings."
+      ],
+      "proposed_semantics": [
+        "Stable scene objects binding geometry/surface, material and transform; compose heterogeneous objects and light collections.",
+        "Share geometry and preserve object/material identity for primary visibility, shadows, reflections and temporal consumers."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Shared compiler/export specialization, generated tables and existing PackagePlayer raster/compute path."
+        ],
+        "optional": [
+          "Optional mesh and DXR lowerings must consume the same semantic scene."
+        ]
+      },
+      "priority": 1,
+      "source_refs": [
+        "nw06_export",
+        "graph_registry_evaluation",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "scene",
+          "object",
+          "add",
+          "composition",
+          "material binding"
+        ],
+        "prospective_example_names": [],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "rigid_transforms",
+      "title": "Rigid transforms and articulated part animation",
+      "existing_operator_ids": [
+        "nw.math.mat4_const",
+        "nw.scene.instances",
+        "nw.animation.twist"
+      ],
+      "current_state": "planned",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "A matrix constant type, generated instance transforms and fixed analytic twist exist."
+      ],
+      "limitations": [
+        "A matrix value in the registry does not establish authored transform tracks, hierarchy composition or independent object motion in the exported renderer.",
+        "The reviewed concrete 3D path does not implement a general parent-child rigid part authoring workflow."
+      ],
+      "proposed_semantics": [
+        "Compose position/rotation/scale and bounded parent-child transforms with explicit pivots and interpolation.",
+        "Animate rigid linked parts, doors and attached props; a general skeletal editing/skinning suite remains outside this initial scope."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Compile-time/generated buffers and bounded CPU/compute evaluation in the shared player."
+        ],
+        "optional": []
+      },
+      "priority": 1,
+      "source_refs": [
+        "compiler_registry",
+        "nw06_scene_vertex",
+        "nw06_procedural",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "transform",
+          "pivot",
+          "parent",
+          "animation",
+          "rigid parts"
+        ],
+        "prospective_example_names": [
+          "Transform",
+          "TransformMatrix",
+          "TransformEx"
+        ],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "timeline_curves",
+      "title": "Time, curves, cues and action-time mapping",
+      "existing_operator_ids": [
+        "nw.curve.keyframes",
+        "nw.curve.sample"
+      ],
+      "current_state": "implemented",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "Integer 48000-tick timing, rational frame stepping, scalar curves and event-cursor semantics are implemented in shared timeline tools.",
+        "History adds fixed-step replay/reset; procedural audio supplies an optional sample-clock boundary."
+      ],
+      "limitations": [
+        "Existing scalar curves and event infrastructure do not by themselves provide the planned independently controlled action-time and camera-time authoring graph.",
+        "The reviewed renderer has a special four-key orbital camera path; it is not a general sequencer."
+      ],
+      "proposed_semantics": [
+        "Typed tracks and explicit mapping from authoritative presentation/audio ticks to action time.",
+        "Freeze, reverse and resume with declared independent camera and one-shot cue policies; propagate time discontinuities to stateful effects."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Shared timeline/audio clock, compiled schedules and bounded reconstruction."
+        ],
+        "optional": []
+      },
+      "priority": 1,
+      "source_refs": [
+        "nw06_timeline",
+        "nw06_export",
+        "nw09_docs",
+        "audio_docs",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "curve",
+          "event",
+          "time",
+          "sequence",
+          "trigger"
+        ],
+        "prospective_example_names": [],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "camera_shots",
+      "title": "Camera pose, paths and shots",
+      "existing_operator_ids": [
+        "nw.camera.perspective",
+        "nw.camera.curve"
+      ],
+      "current_state": "restricted_fixture",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "Projection parameters and a scalar orbital-angle curve are exposed.",
+        "_parse_camera_keys accepts at most four keys; the reviewed SceneVS computes an eye on a fixed-height orbit looking at the origin."
+      ],
+      "limitations": [
+        "Projection schemas are not general camera position/orientation tracks.",
+        "The current concrete path lacks independently authored camera poses, target/up tracks and shot-cut sequencing."
+      ],
+      "proposed_semantics": [
+        "Authored camera position and orientation or target/up, projection, bounded keyframes and explicit shot cuts.",
+        "Publish camera discontinuities and allow camera motion while action time is frozen."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Shared CPU/compute curve evaluation and ordinary view/projection transforms."
+        ],
+        "optional": []
+      },
+      "priority": 1,
+      "source_refs": [
+        "compiler_registry",
+        "nw06_export",
+        "nw06_scene_vertex",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "camera",
+          "spline",
+          "target",
+          "shot",
+          "cut"
+        ],
+        "prospective_example_names": [],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "materials",
+      "title": "Material description and effective surface shading",
+      "existing_operator_ids": [
+        "nw.material.describe",
+        "nw.material.standard"
+      ],
+      "current_state": "restricted_fixture",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "The concrete raster shader reads base color, roughness, metallic and specular plus one procedural albedo texture; these parameters affect its analytic shading."
+      ],
+      "limitations": [
+        "This is a single-material fixed path, not a complete material graph or a general physically based BSDF implementation.",
+        "The common ScenePS output is opaque; the reviewed family has no authored emission/local-light contribution model or complete secondary-hit material lookup."
+      ],
+      "proposed_semantics": [
+        "Multiple effective material identities, authored color/roughness/metallic/specular/emission and required procedural texture bindings.",
+        "Preserve the same material identity during mesh/implicit evaluation and primary/secondary visibility; declare whether emission contributes to illumination."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Shared raster/compute shading and compiler specialization."
+        ],
+        "optional": [
+          "Material-aware DXR hit shading; externally pretrained inference only if a concrete allowed use case warrants it."
+        ]
+      },
+      "priority": 1,
+      "source_refs": [
+        "nw06_operator_contracts",
+        "nw06_export",
+        "nw06_scene_pixel",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "material",
+          "surface",
+          "PBR",
+          "emission",
+          "texture binding"
+        ],
+        "prospective_example_names": [
+          "SetMaterial"
+        ],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "lights",
+      "title": "Light sources and direct illumination",
+      "existing_operator_ids": [
+        "nw.light.directional"
+      ],
+      "current_state": "restricted_fixture",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "One directional-light record supplies direction/color to the concrete raster scene shader."
+      ],
+      "limitations": [
+        "The fixed exporter selects a single light.",
+        "No dedicated point/spot light operator or heterogeneous light collection was found in the reviewed registry; the shader's ambient constant is not scene-derived indirect illumination."
+      ],
+      "proposed_semantics": [
+        "Bounded light collections, point/spot lights and authored intensity, color, falloff and range.",
+        "Keep visible emissive surfaces and illumination contribution explicit."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Conventional raster/compute direct lighting."
+        ],
+        "optional": [
+          "DXR visibility; sampling approaches such as RTXDI only after shared scene/light/material inputs exist and a concrete workload is selected."
+        ]
+      },
+      "priority": 1,
+      "source_refs": [
+        "compiler_registry",
+        "nw06_export",
+        "nw06_scene_pixel",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "light",
+          "point",
+          "spot",
+          "directional",
+          "illumination"
+        ],
+        "prospective_example_names": [],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "primary_rendering",
+      "title": "Primary visibility and shared rendering realization",
+      "existing_operator_ids": [
+        "nw.render.instanced",
+        "nw.render.fullscreen",
+        "nw.render.present"
+      ],
+      "current_state": "restricted_fixture",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "The common path provides indexed/instanced raster rendering and fullscreen compute-image presentation.",
+        "NW-11 provides separate mesh-shader experiment targets using generated geometry and the shared runtime."
+      ],
+      "limitations": [
+        "The reviewed 3D lowering is fixed around a single resource set.",
+        "A successful experiment target does not by itself add a general mesh-shader authoring operator or prove default adoption."
+      ],
+      "proposed_semantics": [
+        "Render the expanded semantic scene through one shared compiler/resource/player architecture.",
+        "Preserve authored geometry/material/camera identity across common and optional realizations."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Existing D3D12 raster/compute path; bounded field realization where selected."
+        ],
+        "optional": [
+          "Capability-qualified mesh-shader realization; other optional backends selected per actual workload."
+        ]
+      },
+      "priority": 1,
+      "source_refs": [
+        "nw06_export",
+        "nw06_scene_vertex",
+        "nw06_scene_pixel",
+        "nw11_readme",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "render",
+          "viewport",
+          "raster",
+          "visibility"
+        ],
+        "prospective_example_names": [],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "shadow_visibility",
+      "title": "Scene-dependent shadow visibility",
+      "existing_operator_ids": [],
+      "current_state": "planned",
+      "coverage": {
+        "current_capability": "none",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "The reviewed common ScenePS evaluates direct analytic lighting without a scene shadow query.",
+        "The existing NW-11 ray-query fixture is a bounded reflected-surface experiment, not a reusable shadow semantic."
+      ],
+      "limitations": [
+        "No public shadow operator was found in the reviewed registry.",
+        "A modern shadow algorithm can replace a historical implementation only while preserving required authored control and scene dependence."
+      ],
+      "proposed_semantics": [
+        "Bounded shadow visibility against the same current scene and transforms as primary visibility.",
+        "Choose a suitable common implementation and an optional DXR/ray-query implementation with declared behavior."
+      ],
+      "candidate_backends": {
+        "common": [
+          "A workload-appropriate non-DXR implementation, such as shadow mapping or bounded analytic/field visibility."
+        ],
+        "optional": [
+          "DXR/inline ray queries."
+        ]
+      },
+      "priority": 3,
+      "source_refs": [
+        "compiler_registry",
+        "nw06_scene_pixel",
+        "nw11_ray_shader",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "shadow",
+          "shadow volume",
+          "shadow map",
+          "occlusion"
+        ],
+        "prospective_example_names": [],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "reflection_environment",
+      "title": "Scene reflection and environment response",
+      "existing_operator_ids": [],
+      "current_state": "experimental",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "NW-11 TraceReflectedSurface performs a real inline ray query and returns a hit boolean.",
+        "ReflectionRadiance maps hits to a fixed color and misses to an analytic environment; the experiment is integrated with shared generated scene resources."
+      ],
+      "limitations": [
+        "The fixture does not resolve the actual hit object's material/radiance or provide a reusable authored reflection operator.",
+        "Its deliberately bounded reflected segment is not a general one-bounce scene reflection implementation."
+      ],
+      "proposed_semantics": [
+        "One-bounce material-aware reflected radiance from the nearest valid hit, with explicit environment/miss and roughness behavior.",
+        "Retain environment authoring even when ray tracing replaces an approximation for reflected geometry."
+      ],
+      "candidate_backends": {
+        "common": [
+          "A suitable bounded common non-DXR reflection realization with declared limitations/tolerances."
+        ],
+        "optional": [
+          "DXR/inline ray queries against the shared scene."
+        ]
+      },
+      "priority": 3,
+      "source_refs": [
+        "nw11_readme",
+        "nw11_ray_shader",
+        "nw11_reflection_fixture",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "reflection",
+          "environment",
+          "cubemap",
+          "mirror"
+        ],
+        "prospective_example_names": [],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "indirect_illumination_ao",
+      "title": "Ambient occlusion and indirect illumination",
+      "existing_operator_ids": [],
+      "current_state": "deferred",
+      "coverage": {
+        "current_capability": "none",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "No reusable scene AO or GI operator was found in the reviewed current registry.",
+        "The reviewed raster shader includes a constant ambient term; this is not geometric AO or indirect illumination."
+      ],
+      "limitations": [
+        "AO and GI are different authored/rendering semantics and cannot be marked mutually interchangeable from similar darkening.",
+        "NW-13 makes secondary visibility/AO conditional on a production need; general GI is not an implemented baseline."
+      ],
+      "proposed_semantics": [
+        "Keep AO and indirect-lighting requirements visible in the reference map.",
+        "Select bounded AO and/or an indirect-lighting model only when a production needs them; do not infer general GI from emission."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Conventional compute/raster or bounded probe/field techniques, to be chosen for the semantic."
+        ],
+        "optional": [
+          "Ray-based AO or allowed nontraining GI implementations; no online-trained radiance cache."
+        ]
+      },
+      "priority": 4,
+      "source_refs": [
+        "compiler_registry",
+        "nw06_scene_pixel",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "ambient occlusion",
+          "SSAO",
+          "GI",
+          "indirect light",
+          "radiosity"
+        ],
+        "prospective_example_names": [
+          "SSAO"
+        ],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "particles",
+      "title": "Particles and spatial effects",
+      "existing_operator_ids": [
+        "nw.particles.system"
+      ],
+      "current_state": "implemented",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "The existing History particle system stores x, y, vx, vy and age, steps at 120 Hz and bounces within image-space width/height bounds.",
+        "A generated compute path and CPU reference update exist."
+      ],
+      "limitations": [
+        "The reviewed operator has no authored scene, camera or depth input; it is not a general world-space 3D emitter/renderer.",
+        "Lifetime/emitter/material parameter schemas alone must not be read as broader realized particle behavior than _step_particles/_history_hlsl implement."
+      ],
+      "proposed_semantics": [
+        "World-space seeded emitters with position/velocity/lifetime, bounded emission, size/material and attachment to animated objects.",
+        "Render through scene cameras with depth-aware occlusion; use analytic evaluation or existing History reconstruction for transport changes."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Shared fixed-step scheduler and conventional compute plus raster/compute particle rendering."
+        ],
+        "optional": [
+          "Work Graphs only if GPU work generation is useful; ray-based interaction only if separately needed."
+        ]
+      },
+      "priority": 3,
+      "source_refs": [
+        "compiler_registry",
+        "nw09_temporal",
+        "nw09_export",
+        "nw09_docs",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "particle",
+          "emitter",
+          "sprite",
+          "spark",
+          "debris"
+        ],
+        "prospective_example_names": [],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "temporal_history",
+      "title": "Explicit temporal state and image feedback",
+      "existing_operator_ids": [
+        "nw.feedback.image",
+        "nw.particles.system"
+      ],
+      "current_state": "implemented",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "The shared History scheduler supplies previous-tick state externally, owns ping-pong resources and supports bounded replay/reset/checkpoints.",
+        "The current feedback implementation applies decay/gain and deterministic generated injection to prior image state."
+      ],
+      "limitations": [
+        "Only the two listed built-ins expose History schemas.",
+        "The current feedback operator has no authored current-image input, scene depth or camera-cut metadata.",
+        "Artistic feedback is not equivalent to temporal denoising/reconstruction."
+      ],
+      "proposed_semantics": [
+        "Feed actual current rendered images into reusable feedback/composition.",
+        "Define resets at camera cuts and time discontinuities; reuse the existing scheduler, lifetime and replay model."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Existing shared scheduler and compute passes."
+        ],
+        "optional": []
+      },
+      "priority": 3,
+      "source_refs": [
+        "compiler_registry",
+        "nw09_temporal",
+        "nw09_export",
+        "nw09_docs",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "history",
+          "feedback",
+          "trail",
+          "accumulate",
+          "delay"
+        ],
+        "prospective_example_names": [],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "postprocessing",
+      "title": "Postprocessing and color response",
+      "existing_operator_ids": [
+        "nw.post.bloom",
+        "nw.post.tonemap"
+      ],
+      "current_state": "restricted_fixture",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "Bloom and tonemapping have concrete shader/export implementations; the History export path supports downstream image post passes."
+      ],
+      "limitations": [
+        "The fixed 3D exporter requires exactly one half-resolution bloom followed by one tonemap.",
+        "The available post stack is not the full blur, distortion, depth-of-field, grading and stylization vocabulary.",
+        "DLSS/denoising does not replace intentional artistic post effects."
+      ],
+      "proposed_semantics": [
+        "Reuse bloom and tonemapping in general image composition.",
+        "Add required filtering, grading and spatial/depth-driven effects as production needs emerge, preserving their authored visual purpose."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Conventional compute/raster image passes."
+        ],
+        "optional": []
+      },
+      "priority": 3,
+      "source_refs": [
+        "nw06_operator_contracts",
+        "nw06_export",
+        "nw09_export",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "blur",
+          "bloom",
+          "glow",
+          "color",
+          "depth of field",
+          "distortion"
+        ],
+        "prospective_example_names": [
+          "Blur",
+          "DepthOfField",
+          "ColorCorrect",
+          "ColorGrade"
+        ],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "audio",
+      "title": "Procedural audio and audiovisual sequencing",
+      "existing_operator_ids": [],
+      "current_state": "implemented",
+      "coverage": {
+        "current_capability": "partial",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "NWAS v1 is an actual bounded song payload, compiled separately from the visual operator graph and embedded in the optional audio package.",
+        "The reviewed synth generates mono PCM16 using integer triangle oscillators, fixed attack/release and saturating mixing; the song limit is 64 events."
+      ],
+      "limitations": [
+        "No nw.audio.* operator IDs are implemented in the reviewed visual registry.",
+        "The current payload does not provide a multi-instrument/track/filter/automation graph or a Werkkzeug/V2 synthesizer replacement.",
+        "Existing event limits are current-version limits, not a proposed permanent design."
+      ],
+      "proposed_semantics": [
+        "Compile bounded periodic/noise sources, authored envelopes, a stable bounded filter, gain/pan, music/effect sequencing and explicit instrument/voice budgets into the shared audio system.",
+        "Preserve NWAS v1 compatibility and the authoritative sample/timeline relationship."
+      ],
+      "candidate_backends": {
+        "common": [
+          "CPU/offline-specialized synthesis and shared WASAPI/sample-clock integration."
+        ],
+        "optional": []
+      },
+      "priority": 3,
+      "source_refs": [
+        "compiler_registry",
+        "audio_song",
+        "audio_synth",
+        "audio_docs",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "audio",
+          "song",
+          "synth",
+          "oscillator",
+          "envelope",
+          "sequence"
+        ],
+        "prospective_example_names": [],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "image_reconstruction",
+      "title": "Antialiasing, reconstruction and presentation enhancement",
+      "existing_operator_ids": [],
+      "current_state": "planned",
+      "coverage": {
+        "current_capability": "none",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "No reusable image-reconstruction or vendor-inference operator was found in the reviewed registry and export paths."
+      ],
+      "limitations": [
+        "The existing image pipeline does not by itself demonstrate the motion/depth/material/history inputs required by a selected reconstruction integration.",
+        "Frame generation does not create authored simulation ticks or replace camera/particle/audio sequencing.",
+        "An allowed pretrained model is a candidate backend, not evidence that its integration exists."
+      ],
+      "proposed_semantics": [
+        "Backend-neutral image reconstruction/antialiasing with explicit resolution and history behavior.",
+        "Evaluate allowed vendor-supplied pretrained inference only after the chosen integration's required inputs are supplied; preserve the common path."
+      ],
+      "candidate_backends": {
+        "common": [
+          "A conventional image reconstruction/antialiasing path appropriate to the selected production."
+        ],
+        "optional": [
+          "DLSS Super Resolution/DLAA, Ray Reconstruction and frame-generation components may be evaluated separately, subject to actual capability/input requirements and no nodewerk-owned training."
+        ]
+      },
+      "priority": 4,
+      "source_refs": [
+        "compiler_registry",
+        "nw06_export",
+        "nw09_export",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "antialias",
+          "FXAA",
+          "reconstruct",
+          "supersampling"
+        ],
+        "prospective_example_names": [
+          "FXAA3"
+        ],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    },
+    {
+      "id": "text_curves",
+      "title": "Text, vector outlines and geometric paths",
+      "existing_operator_ids": [],
+      "current_state": "deferred",
+      "coverage": {
+        "current_capability": "none",
+        "reference_mapping": "unreviewed"
+      },
+      "current_scope": [
+        "No dedicated text, font, vector-outline or geometric-spline construction operator was found in the reviewed registry.",
+        "Scalar keyframe curves are present but do not establish geometric path/text functionality."
+      ],
+      "limitations": [
+        "A glyph mesh, bitmap text, geometric path and scalar time curve have different output contracts.",
+        "No replacement or obsolescence is claimed merely because geometry can be represented as an implicit field."
+      ],
+      "proposed_semantics": [
+        "Keep text/vector/path requirements in the reference inventory; select a bounded clean-room representation when a real production requires them."
+      ],
+      "candidate_backends": {
+        "common": [
+          "Compiler-side/CPU geometry or bitmap generation; conventional rendering."
+        ],
+        "optional": []
+      },
+      "priority": 4,
+      "source_refs": [
+        "compiler_registry",
+        "graph_registry_evaluation",
+        "nw13_issue_snapshot"
+      ],
+      "reference_query": {
+        "terms": [
+          "font",
+          "text",
+          "vector",
+          "outline",
+          "path",
+          "spline"
+        ],
+        "prospective_example_names": [
+          "Text3D",
+          "Path3D"
+        ],
+        "status": "Search hints only; not operator equivalence or reachable-demo usage."
+      }
+    }
+  ]
+}

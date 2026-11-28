@@ -19,15 +19,18 @@ def test_reference_documentation_inspected_and_preserved() -> None:
     assert "Farbrausch" in content
     assert "not intended to be a port, fork, or compatibility layer" in content
 
-    # Verify references/ directory has no local modifications
+    # The Farbrausch reference submodule is a hard boundary.  NW-13 adds only
+    # clean-room catalog review metadata under references/operator_catalog; no
+    # upstream source or asset may be modified or vendored.
     proc = subprocess.run(
-        ["git", "status", "--porcelain", "references"],
+        ["git", "status", "--porcelain", "references/farbrausch"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         check=True,
     )
-    assert proc.stdout.strip() == "", f"Forbidden modifications in references/: {proc.stdout}"
+    assert proc.stdout.strip() == "", f"Forbidden modifications in references/farbrausch: {proc.stdout}"
+    assert (REPO_ROOT / "references" / "operator_catalog" / "README.md").exists()
 
 
 def test_architecture_records_complete_and_indexed() -> None:

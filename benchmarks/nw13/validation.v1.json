@@ -1,0 +1,60 @@
+{
+  "ok": true,
+  "diagnostics": [],
+  "sources": {
+    "graph": {
+      "path": "fixtures/nw13/hotel_corridor.nwgraph",
+      "sha256": "sha256:c16b2f66f7054c6e59444b3a2cded62f557534a61696dd2c06b47579d2ea0bdb",
+      "semantic_hash": "sha256:v1:60a2dc8a56ceb13d503207cca35b832f362a69b3393557b021d6a79ee0bc6e53"
+    },
+    "geometry": {
+      "source": "graph",
+      "semantic_hash": "sha256:v1:6f712d2326d83fa1f27364acfe87a83fa7837311672fb2f25b49e9b27dc263d0",
+      "bounds": {
+        "minimum": [
+          -5.858118672887135,
+          -5.858118672887135,
+          -9.5
+        ],
+        "maximum": [
+          5.858118672887135,
+          5.858118672887135,
+          8.2
+        ]
+      },
+      "stats": {
+        "nodes": 51,
+        "repetition_instances": 4,
+        "generated_primitives": 24,
+        "evaluation_steps": 3456,
+        "memory_bytes": 27648
+      }
+    },
+    "scene": {
+      "source": "graph",
+      "sha256": "sha256:62466bb9459ac7074309e758ddc949e470905e2a2e7a596c3daaf1a6a7abf886",
+      "objects": 17,
+      "shots": [
+        "corridor_approach",
+        "room_turn"
+      ]
+    },
+    "song": {
+      "path": "fixtures/nw13/hotel_corridor.song.json",
+      "sha256": "sha256:efde0e5366b891ea33ef8d07b2c353ff3c7e4f46a92b14e66b5a5532eac04f3a",
+      "semantic_hash": "sha256:v1:33737ce61b7c7ad9fb4b195b4ec9f9b30475bc5e88f5b6e36838d491dbee714c",
+      "notes": 30,
+      "nwas_sha256": "sha256:0adedf184f606f0e17114128f26dbb5deb0a825900659f412bd30be1f6721c7f"
+    },
+    "import_inputs": {
+      "geometry": {
+        "path": "fixtures/nw13/geometry_room.json",
+        "sha256": "sha256:a7861129d21a4e08624d53a1a7c075c2f8480fc487c576b6aebc45ece63f825b"
+      },
+      "scene": {
+        "path": "fixtures/nw13/hotel_corridor.scene.json",
+        "sha256": "sha256:acd60fadb8caab0ad5c2fb941fa7d04e281c37d2280006b7beb64a4232d78433"
+      }
+    }
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "format": "nw13-operator-catalog-sources",
+  "version": 1,
+  "sources": [
+    {
+      "id": "fr_public",
+      "repo": "https://github.com/farbrausch/fr_public.git",
+      "commit": "8c8f82c2ae01133370e649bbc05916e7aceecadd",
+      "vendored": false,
+      "license": "See pinned upstream notices and per-file metadata. No historical runtime implementation or assets are vendored.",
+      "extraction_mode": "pinned_git_blob_verification",
+      "extraction_limits": [
+        "verify source blobs before interpreting declarations",
+        "no upstream source or asset bytes are copied to this repository",
+        "static parameters are partial and do not imply implementation or production equivalence"
+      ],
+      "extractors": [
+        "../../tools/werkkzeug3_catalog.py",
+        "../../tools/werkkzeug4_catalog.py"
+      ]
+    }
+  ],
+  "engines": [
+    {
+      "id": "werkkzeug3",
+      "engine": "werkkzeug3",
+      "pinned_source": "fr_public",
+      "source_commit": "8c8f82c2ae01133370e649bbc05916e7aceecadd",
+      "scope": {
+        "werkkzeug3": {
+          "engine": "werkkzeug3",
+          "separately_scoped": true,
+          "identifiable": true,
+          "description": "legacy operator editor inventory"
+        },
+        "kkrieger": {
+          "engine": "werkkzeug3",
+          "variant": "kkrieger",
+          "origin_engine": "werkkzeug3",
+          "separately_scoped": true,
+          "identifiable": true,
+          "description": "game-specific variant kept distinct from the general Werkkzeug3 inventory"
+        }
+      }
+    },
+    {
+      "id": "werkkzeug4",
+      "engine": "werkkzeug4",
+      "pinned_source": "fr_public",
+      "source_commit": "8c8f82c2ae01133370e649bbc05916e7aceecadd",
+      "scope": {
+        "werkkzeug4": {
+          "engine": "werkkzeug4",
+          "separately_scoped": true,
+          "identifiable": true,
+          "description": "successor editor operator inventory"
+        }
+      }
+    }
+  ],
+  "other_engines": [
+    {
+      "id": "theprodukkt",
+      "scope": "separate_application_not_in_operator_inventory",
+      "identifiable": true
+    }
+  ]
+}

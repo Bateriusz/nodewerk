@@ -685,11 +685,13 @@ std::string_view ToString(LogicalType type) noexcept {
     case LogicalType::TextureRecipe: return "texture_recipe";
     case LogicalType::BufferRecipe: return "buffer_recipe";
     case LogicalType::MeshRecipe: return "mesh_recipe";
+    case LogicalType::GeometryRecipe: return "geometry_recipe";
     case LogicalType::Material: return "material";
     case LogicalType::SceneTable: return "scene_table";
     case LogicalType::Camera: return "camera";
     case LogicalType::Light: return "light";
     case LogicalType::RenderImage: return "render_image";
+    case LogicalType::ViewDepth: return "view_depth";
     }
     return "scalar";
 }
@@ -704,11 +706,13 @@ std::optional<LogicalType> ParseLogicalType(std::string_view text) {
         {"texture_recipe", LogicalType::TextureRecipe},
         {"buffer_recipe", LogicalType::BufferRecipe},
         {"mesh_recipe", LogicalType::MeshRecipe},
+        {"geometry_recipe", LogicalType::GeometryRecipe},
         {"material", LogicalType::Material},
         {"scene_table", LogicalType::SceneTable},
         {"camera", LogicalType::Camera},
         {"light", LogicalType::Light},
         {"render_image", LogicalType::RenderImage},
+        {"view_depth", LogicalType::ViewDepth},
     };
     for (const auto& [name, value] : kValues) {
         if (name == text) {
@@ -1233,6 +1237,17 @@ ResourceDescriptor MeshDescriptor() {
     return descriptor;
 }
 
+ResourceDescriptor GeometryDescriptor() {
+    ResourceDescriptor descriptor;
+    descriptor.kind = "geometry_sdf";
+    descriptor.max_vertices = 262144u;
+    descriptor.max_indices = 0u;
+    descriptor.max_bytes = 32ull * 1024ull * 1024ull;
+    descriptor.format_class = "signed_distance_recipe";
+    descriptor.bounded = true;
+    return descriptor;
+}
+
 ResourceDescriptor RenderImageDescriptor() {
     ResourceDescriptor descriptor;
     descriptor.kind = "render_target";
@@ -1241,6 +1256,15 @@ ResourceDescriptor RenderImageDescriptor() {
     descriptor.max_bytes = 8192ull * 8192ull * 4ull;
     descriptor.format_class = "r8g8b8a8_unorm";
     descriptor.bounded = true;
+    return descriptor;
+}
+
+ResourceDescriptor FilmFrameDescriptor(bool depth = false) {
+    ResourceDescriptor descriptor = RenderImageDescriptor();
+    descriptor.max_width = 512u;
+    descriptor.max_height = 288u;
+    descriptor.max_bytes = 512ull * 288ull * (depth ? 4ull : 16ull);
+    descriptor.format_class = depth ? "positive_view_depth_r32_float" : "rgba32_float_opaque";
     return descriptor;
 }
 
@@ -1575,6 +1599,121 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
         schema.resource_descriptor = MeshDescriptor();
         registry.Register(std::move(schema));
     }
+
+    // ---- NW-13 bounded procedural geometry --------------------------------
+    // Geometry recipes are distinct from mesh aggregation and scene tables:
+    // they describe solid signed-distance operators whose conservative bounds
+    // are checked before evaluation.  CSG composition is not scene parenting.
+    {
+        auto geometry_leaf = [&](const char* id, const char* summary,
+                                 std::vector<ParamSpec> params) {
+            OperatorSchema schema = BaseOperator(
+                id, OperatorKind::CpuControl, summary, AllFrequencies(),
+                Frequency::Frame, "nw.lower.cpu.geometry");
+            schema.outputs = {ResourcePort(
+                "out", LogicalType::GeometryRecipe, Residency::Logical,
+                GeometryDescriptor())};
+            schema.params = std::move(params);
+            schema.resource_descriptor = GeometryDescriptor();
+            registry.Register(std::move(schema));
+        };
+        auto geometry_unary = [&](const char* id, const char* summary,
+                                  std::vector<ParamSpec> params) {
+            OperatorSchema schema = BaseOperator(
+                id, OperatorKind::CpuControl, summary, AllFrequencies(),
+                Frequency::Frame, "nw.lower.cpu.geometry");
+            schema.inputs = {ResourcePort(
+                "child", LogicalType::GeometryRecipe, Residency::Logical,
+                GeometryDescriptor())};
+            schema.outputs = {ResourcePort(
+                "out", LogicalType::GeometryRecipe, Residency::Logical,
+                GeometryDescriptor())};
+            schema.params = std::move(params);
+            schema.resource_descriptor = GeometryDescriptor();
+            registry.Register(std::move(schema));
+        };
+        auto geometry_binary = [&](const char* id, const char* summary,
+                                   std::vector<ParamSpec> params) {
+            OperatorSchema schema = BaseOperator(
+                id, OperatorKind::CpuControl, summary, AllFrequencies(),
+                Frequency::Frame, "nw.lower.cpu.geometry");
+            schema.inputs = {
+                ResourcePort("a", LogicalType::GeometryRecipe,
+                             Residency::Logical, GeometryDescriptor()),
+                ResourcePort("b", LogicalType::GeometryRecipe,
+                             Residency::Logical, GeometryDescriptor())};
+            schema.outputs = {ResourcePort(
+                "out", LogicalType::GeometryRecipe, Residency::Logical,
+                GeometryDescriptor())};
+            schema.params = std::move(params);
+            schema.resource_descriptor = GeometryDescriptor();
+            registry.Register(std::move(schema));
+        };
+
+        geometry_leaf(
+            "nw.geom.sphere", "Bounded sphere signed-distance primitive",
+            {FloatParam("radius", 1.0, true, 0.000001, 1000000.0)});
+        geometry_leaf(
+            "nw.geom.box", "Bounded axis-aligned box signed-distance primitive",
+            {VectorParam("half_extents", ParamType::Vec3)});
+        geometry_leaf(
+            "nw.geom.cylinder",
+            "Bounded Y-axis cylinder signed-distance primitive",
+            {FloatParam("radius", 1.0, true, 0.000001, 1000000.0),
+             FloatParam("half_height", 1.0, true, 0.000001, 1000000.0)});
+        geometry_leaf(
+            "nw.geom.capsule",
+            "Bounded Y-axis capsule signed-distance primitive",
+            {FloatParam("radius", 1.0, true, 0.000001, 1000000.0),
+             FloatParam("half_height", 1.0, true, 0.0, 1000000.0)});
+        geometry_leaf(
+            "nw.geom.torus", "Bounded torus signed-distance primitive",
+            {FloatParam("major_radius", 1.0, true, 0.000001, 1000000.0),
+             FloatParam("minor_radius", 0.25, true, 0.000001, 1000000.0)});
+
+        geometry_unary(
+            "nw.geom.translate", "Translate a bounded geometry recipe",
+            {VectorParam("offset", ParamType::Vec3)});
+        geometry_unary(
+            "nw.geom.rotate", "Rotate a bounded geometry recipe",
+            {EnumParam("axis", "y", {"x", "y", "z"}),
+             FloatParam("degrees", 0.0, true, -3600.0, 3600.0)});
+        geometry_unary(
+            "nw.geom.scale", "Scale a bounded geometry recipe",
+            {VectorParam("scale", ParamType::Vec3)});
+
+        geometry_binary("nw.geom.union",
+                        "Solid union of two bounded geometry recipes", {});
+        geometry_binary("nw.geom.intersection",
+                        "Solid intersection of two bounded geometry recipes",
+                        {});
+        geometry_binary("nw.geom.subtract",
+                        "Solid subtraction of two bounded geometry recipes",
+                        {});
+        geometry_binary("nw.geom.library",
+                        "Collection of named film geometry recipes", {});
+        geometry_binary(
+            "nw.geom.smooth_union",
+            "Bounded smooth union of two geometry recipes",
+            {FloatParam("k", 0.1, true, 0.0, 1000000.0)});
+        geometry_unary(
+            "nw.geom.repeat", "Finite bounded lattice repetition",
+            {VectorParam("spacing", ParamType::Vec3),
+             VectorParam("counts", ParamType::Vec3)});
+        geometry_unary(
+            "nw.geom.twist", "Bounded twist deformation",
+            {FloatParam("half_height", 1.0, true, 0.000001, 1000000.0),
+             FloatParam("max_degrees", 0.0, true, -3600.0, 3600.0)});
+        geometry_unary(
+            "nw.geom.bend", "Bounded bend deformation",
+            {FloatParam("half_width", 1.0, true, 0.000001, 1000000.0),
+             FloatParam("max_degrees", 0.0, true, -180.0, 180.0)});
+        geometry_unary(
+            "nw.geom.displace", "Seeded bounded displacement deformation",
+            {IntParam("seed", 0, true, 0.0, 4294967295.0),
+             FloatParam("amplitude", 0.0, true, 0.0, 1000000.0),
+             FloatParam("frequency", 1.0, true, 0.000001, 1000000.0)});
+    }
     {
         OperatorSchema schema = BaseOperator(
             "nw.material.standard", OperatorKind::CpuControl,
@@ -1698,6 +1837,22 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
             Port("out", LogicalType::ShaderExpr, Residency::Logical)};
         schema.params = {VectorParam("value", ParamType::Vec4)};
         schema.shader_operations = {"vec4", "const"};
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.shader.film", OperatorKind::PureShaderExpr,
+            "Bounded procedural film renderer", {Frequency::Frame},
+            Frequency::Frame, "nw.lower.shader.film");
+        schema.inputs = {ResourcePort(
+            "geometry", LogicalType::GeometryRecipe, Residency::Logical,
+            GeometryDescriptor())};
+        schema.outputs = {
+            Port("out", LogicalType::ShaderExpr, Residency::Logical)};
+        schema.params = {StringParam("scene", "{}"), StringParam("production", "{}")};
+        schema.shader_operations = {"bounded_solid_trace", "local_lighting",
+                                    "one_bounce_reflection", "depth_composite",
+                                    "bloom", "tonemap"};
         registry.Register(std::move(schema));
     }
     {
@@ -1944,6 +2099,50 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
         schema.outputs = {Port("value", LogicalType::Scalar, Residency::Cpu)};
         schema.explicit_readback = true;
         schema.produces_resource = false;
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.render.film", OperatorKind::GpuPass,
+            "Procedural film pass producing a render image",
+            {Frequency::Frame}, Frequency::Frame, "nw.lower.hlsl.render");
+        schema.inputs = {Port("shader", LogicalType::ShaderExpr, Residency::Logical)};
+        schema.outputs = {ResourcePort(
+            "image", LogicalType::RenderImage, Residency::Gpu,
+            RenderImageDescriptor())};
+        schema.produces_resource = true;
+        schema.resource_descriptor = RenderImageDescriptor();
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.render.film_frame", OperatorKind::GpuPass,
+            "Film color, positive view-space depth and camera sample",
+            FrameFrequency(), Frequency::Frame, "nw.lower.hlsl.render");
+        schema.inputs = {Port("shader", LogicalType::ShaderExpr, Residency::Logical)};
+        schema.outputs = {
+            ResourcePort("color", LogicalType::RenderImage, Residency::Gpu, FilmFrameDescriptor()),
+            ResourcePort("depth", LogicalType::ViewDepth, Residency::Gpu, FilmFrameDescriptor(true)),
+            Port("camera", LogicalType::Camera, Residency::Logical)};
+        schema.produces_resource = true;
+        schema.resource_descriptor = FilmFrameDescriptor();
+        registry.Register(std::move(schema));
+    }
+    {
+        OperatorSchema schema = BaseOperator(
+            "nw.feedback.scene_image", OperatorKind::GpuPass,
+            "Reproject one scheduler-owned scene sample with depth rejection",
+            HistoryFrequency(), Frequency::History, "nw.lower.history.scene_feedback");
+        schema.inputs = {
+            ResourcePort("color", LogicalType::RenderImage, Residency::Gpu, FilmFrameDescriptor()),
+            ResourcePort("depth", LogicalType::ViewDepth, Residency::Gpu, FilmFrameDescriptor(true)),
+            Port("camera", LogicalType::Camera, Residency::Logical)};
+        schema.outputs = {ResourcePort("out", LogicalType::RenderImage, Residency::Gpu, FilmFrameDescriptor())};
+        schema.params = {FloatParam("weight", 0.25, true, 0.0, 0.5),
+                         FloatParam("depth_tolerance", 0.035, true, 0.0001, 0.25)};
+        schema.produces_resource = true;
+        schema.resource_descriptor = FilmFrameDescriptor();
+        schema.produces_temporal_state = true;
         registry.Register(std::move(schema));
     }
     {
@@ -4508,7 +4707,8 @@ ValidationResult ValidateGraphDocument(const GraphDocument& document,
             } else {
                 const HistoryDeclaration& history = *node.history;
                 if (history.state_type != "nw.particles.v1" &&
-                    history.state_type != "nw.feedback.image.v1") {
+                    history.state_type != "nw.feedback.image.v1" &&
+                    history.state_type != "nw.feedback.scene_image.v1") {
                     diagnostics.push_back(MakeDiagnostic(
                         DiagnosticCode::InvalidParameterValue,
                         "unknown History state type '" + history.state_type + "'",
@@ -4519,7 +4719,8 @@ ValidationResult ValidateGraphDocument(const GraphDocument& document,
                             ? "nw.particles.v1"
                             : node.operator_id == "nw.feedback.image"
                                   ? "nw.feedback.image.v1"
-                                  : std::string();
+                                  : node.operator_id == "nw.feedback.scene_image"
+                                      ? "nw.feedback.scene_image.v1" : std::string();
                     if (expected.empty()) {
                         diagnostics.push_back(MakeDiagnostic(
                             DiagnosticCode::HistoryNotSupported,
@@ -4792,8 +4993,13 @@ ValidationResult ValidateGraphDocument(const GraphDocument& document,
                     node.id + "." + input.port};
                 diagnostics.push_back(std::move(diagnostic));
             }
+            const bool sampled_film_frame =
+                node.operator_id == "nw.feedback.scene_image" &&
+                source_node.operator_id == "nw.render.film_frame" &&
+                node.frequency == Frequency::History &&
+                source_node.frequency == Frequency::Frame;
             if (FrequencyRank(source_node.frequency) >
-                FrequencyRank(node.frequency)) {
+                    FrequencyRank(node.frequency) && !sampled_film_frame) {
                 Diagnostic diagnostic = MakeDiagnostic(
                     DiagnosticCode::FrequencyTransition,
                     "node '" + node.id + "' runs at frequency '" +
@@ -5490,6 +5696,33 @@ EvaluationValue ImageOracle(const GraphSnapshot& snapshot,
     return image;
 }
 
+EvaluationValue GeometryRecipe(
+    const NodeDefinition& node,
+    const std::vector<const EvaluationValue*>& inputs) {
+    CanonicalWriter writer;
+    writer.String("nwgraph.geometry-recipe.v1");
+    writer.String(node.operator_id);
+    writer.String(node.operator_version.ToString());
+    for (const auto& [name, value] : node.params) {
+        writer.String(name);
+        writer.String(ParamCanonicalText(value));
+    }
+    for (const EvaluationValue* input : inputs) {
+        writer.String(input == nullptr ? std::string()
+                                       : input->CanonicalText());
+    }
+    const auto digest = Sha256Bytes(writer.bytes().data(),
+                                    writer.bytes().size());
+    EvaluationValue out = MakeText(
+        LogicalType::GeometryRecipe,
+        "geometry-recipe:" + node.operator_id + ":sha256:v1:" +
+            HexBytes(digest.data(), digest.size()),
+        Residency::Logical);
+    out.component_count = 1u;
+    out.numbers[0] = UnitFromBytes(digest, 0u);
+    return out;
+}
+
 double SampleCurve(const std::vector<double>& samples, double t, bool step) {
     if (samples.size() < 2u) {
         return 0.0;
@@ -6059,6 +6292,12 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
                                   Residency::Logical);
         return true;
     }
+    if (op == "nw.shader.film") {
+        outputs["out"] = MakeText(LogicalType::ShaderExpr,
+                                  snapshot.StructuralHash(node.id),
+                                  Residency::Logical);
+        return true;
+    }
     if (op == "nw.shader.add" || op == "nw.shader.mul") {
         const std::string symbol = op == "nw.shader.add" ? " + " : " * ";
         outputs["out"] = MakeText(
@@ -6147,7 +6386,7 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         outputs["value"] = MakeScalar(image->numbers[0]);
         return true;
     }
-    if (op == "nw.render.fullscreen") {
+    if (op == "nw.render.fullscreen" || op == "nw.render.film") {
         outputs["image"] = ImageOracle(snapshot, node, "image", evaluated);
         return true;
     }
@@ -6369,6 +6608,22 @@ bool EvaluateNode(const GraphSnapshot& snapshot, const NodeDefinition& node,
         if (context.next_history_state != nullptr) {
             (*context.next_history_state)[node.id] = current;
         }
+        return true;
+    }
+    if (op.rfind("nw.geom.", 0) == 0) {
+        // Geometry evaluation is an authoring/compiler oracle.  The concrete
+        // signed-distance surface is produced by the backend-neutral recipe;
+        // this reference path records a deterministic structural fingerprint
+        // so seed and CSG identity tests can compare complete recipes.
+        std::vector<const EvaluationValue*> inputs;
+        if (op == "nw.geom.library" || op == "nw.geom.union" || op == "nw.geom.intersection" ||
+            op == "nw.geom.subtract" || op == "nw.geom.smooth_union") {
+            if (const EvaluationValue* a = input("a")) inputs.push_back(a);
+            if (const EvaluationValue* b = input("b")) inputs.push_back(b);
+        } else if (const EvaluationValue* child = input("child")) {
+            inputs.push_back(child);
+        }
+        outputs["out"] = GeometryRecipe(node, inputs);
         return true;
     }
 

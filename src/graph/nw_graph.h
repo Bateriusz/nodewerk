@@ -40,11 +40,13 @@ enum class LogicalType {
     TextureRecipe,
     BufferRecipe,
     MeshRecipe,
+    GeometryRecipe,
     Material,
     SceneTable,
     Camera,
     Light,
     RenderImage,
+    ViewDepth,
 };
 
 std::string_view ToString(LogicalType type) noexcept;

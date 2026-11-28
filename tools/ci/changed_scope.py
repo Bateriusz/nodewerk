@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-SCOPES = ("core", "nw01", "nw07", "nw08", "nw08a", "nw10", "nw11")
+SCOPES = ("core", "nw01", "nw07", "nw08", "nw08a", "nw10", "nw11", "nw13")
 DEFAULT_MAP = Path(__file__).resolve().parents[2] / "ci" / "impact-map.v1.json"
 
 class ImpactMapError(ValueError):

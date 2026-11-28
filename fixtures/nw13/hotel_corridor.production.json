@@ -1,0 +1,419 @@
+{
+  "format": "nw13.production",
+  "version": 1,
+  "id": "nw13.hotel_corridor",
+  "title": "After Hours - hotel room and corridor",
+  "implementation_base": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+  "graph": "fixtures/nw13/hotel_corridor.nwgraph",
+  "geometry": "fixtures/nw13/geometry_room.json",
+  "scene": "fixtures/nw13/hotel_corridor.scene.json",
+  "song": "fixtures/nw13/hotel_corridor.song.json",
+  "rendering": {
+    "width": 48,
+    "height": 27,
+    "max_steps": 76,
+    "samples": 1,
+    "epsilon": 0.002,
+    "max_distance": 48.0,
+    "shadows": true,
+    "reflection_bounces": 1,
+    "miss_radiance": [
+      0.035,
+      0.045,
+      0.065
+    ],
+    "tolerances": {
+      "max_abs_channel_error": 0.02,
+      "rmse": 0.01
+    },
+    "regions": [
+      {
+        "name": "center",
+        "rect": [
+          0.333,
+          0.333,
+          0.667,
+          0.667
+        ],
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      {
+        "name": "left",
+        "rect": [
+          0.0,
+          0.0,
+          0.333,
+          1.0
+        ],
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      },
+      {
+        "name": "right",
+        "rect": [
+          0.667,
+          0.0,
+          1.0,
+          1.0
+        ],
+        "minimum_luma": 0.01,
+        "maximum_luma": 1.5
+      }
+    ]
+  },
+  "particles": {
+    "emitter": {
+      "id": "corridor_dust",
+      "seed": 9001,
+      "count": 96,
+      "origin": [
+        0.2,
+        2.1,
+        2.5
+      ],
+      "direction": [
+        0,
+        -0.35,
+        -1
+      ],
+      "speed_min": 0.02,
+      "speed_max": 0.12,
+      "spread_degrees": 32,
+      "gravity": [
+        0.0,
+        -0.08,
+        0.0
+      ],
+      "drag": 0.1,
+      "lifetime_ticks": 4800,
+      "size_start": 0.03,
+      "size_end": 0.008,
+      "material": "lamp",
+      "depth_bias": 0.0,
+      "origin_track": {
+        "keys": [
+          {
+            "tick": 0,
+            "value": [
+              0.2,
+              2.1,
+              2.5
+            ],
+            "interpolation": "linear"
+          },
+          {
+            "tick": 120000,
+            "value": [
+              0.6,
+              1.9,
+              -1.5
+            ],
+            "interpolation": "smoothstep"
+          },
+          {
+            "tick": 288000,
+            "value": [
+              0.1,
+              2.0,
+              -4.2
+            ],
+            "interpolation": "linear"
+          }
+        ]
+      }
+    }
+  },
+  "effects": {
+    "temporal_feedback": {
+      "weight": 0.3,
+      "depth_tolerance": 0.04
+    },
+    "bloom": {
+      "threshold": 0.8,
+      "intensity": 0.2,
+      "radius": 1
+    },
+    "tonemap": {
+      "exposure": 1.1,
+      "gamma": 2.2,
+      "operator": "reinhard"
+    }
+  },
+  "fixed_ticks": [
+    0,
+    96000,
+    120000,
+    123200,
+    144000,
+    148800,
+    150400,
+    191600,
+    192000,
+    192400,
+    240000,
+    252000,
+    264000,
+    288000
+  ],
+  "transport_states": [
+    "resume",
+    "freeze",
+    "cut",
+    "reverse",
+    "resume"
+  ],
+  "transport_script": {
+    "freeze_at": 120000,
+    "resume_at": 124800,
+    "reverse_at": 240000,
+    "forward_at": 264000
+  },
+  "flash": {
+    "cue": "flash",
+    "light": "flash_light",
+    "duration_ticks": 1600
+  },
+  "optional_requests": [
+    "dxr_inline_ray_query",
+    "mesh_shader"
+  ],
+  "mappings": [
+    {
+      "feature": "room shell, corridor and parallax windows",
+      "nodes": [
+        "room_shell",
+        "corridor_wall",
+        "corridor_windows",
+        "arch",
+        "bent_wall",
+        "displaced_wall"
+      ],
+      "scene_objects": [
+        "room_shell",
+        "corridor_wall",
+        "corridor_left_wall",
+        "corridor_windows",
+        "arch",
+        "bent_wall",
+        "displaced_wall"
+      ],
+      "audio_tracks": [],
+      "catalog_entries": [
+        "werkkzeug3:WerkClasses:0x0081",
+        "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.Cube",
+        "werkkzeug3:WerkClasses:0x0095",
+        "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.Multiply",
+        "werkkzeug3:WerkClasses:0x00a0",
+        "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.Bend",
+        "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.TransformNonLinear",
+        "werkkzeug3:WerkClasses:0x0091",
+        "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.Noise",
+        "werkkzeug3:WerkClasses:0x00c0",
+        "werkkzeug3:WerkClasses:0x00c1"
+      ],
+      "provenance": "catalog_review",
+      "source_note": "independently authored primitive/repetition/composition pattern",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L3665",
+      "shot": "room/corridor establishing shots",
+      "reachable_dependencies": [
+        "room_shell",
+        "corridor_wall",
+        "corridor_windows",
+        "arch",
+        "bent_wall",
+        "displaced_wall",
+        "corridor_render",
+        "hotel_screen"
+      ],
+      "license": "Original nodewerk content under the repository license. Pinned upstream entries are declaration metadata."
+    },
+    {
+      "feature": "articulated character and held prop",
+      "nodes": [
+        "character_body",
+        "character_head",
+        "held_prop"
+      ],
+      "scene_objects": [
+        "character_body",
+        "character_head",
+        "held_prop"
+      ],
+      "audio_tracks": [],
+      "catalog_entries": [
+        "werkkzeug3:WerkClasses:0x0084",
+        "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.Sphere",
+        "werkkzeug3_kkrieger:WerkClasses:0x00c3"
+      ],
+      "provenance": "catalog_review",
+      "source_note": "kkrieger variant reviewed only for prop-follows-parent pattern",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L3693",
+      "shot": "character walk and held-prop shots",
+      "reachable_dependencies": [
+        "character_body",
+        "character_head",
+        "held_prop",
+        "corridor_render",
+        "hotel_screen"
+      ],
+      "license": "Original nodewerk content under the repository license. Pinned upstream entries are declaration metadata."
+    },
+    {
+      "feature": "hinged door and door handle",
+      "nodes": [
+        "door",
+        "door_frame",
+        "handle"
+      ],
+      "scene_objects": [
+        "door",
+        "door_frame",
+        "handle"
+      ],
+      "audio_tracks": [
+        "effect.events"
+      ],
+      "catalog_entries": [
+        "werkkzeug3:WerkClasses:0x0088",
+        "wz4:altona_wz4/wz4/wz4frlib/wz4_mesh_ops.ops:Wz4Mesh.Transform",
+        "wz4:altona_wz4/wz4/wz4frlib/wz4_demo2_ops.ops:Wz4Render.TransformPivot"
+      ],
+      "provenance": "catalog_review",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L3731",
+      "shot": "hinged-door close shot",
+      "reachable_dependencies": [
+        "door",
+        "door_frame",
+        "handle",
+        "corridor_render",
+        "hotel_screen"
+      ],
+      "license": "Original nodewerk content under the repository license. Pinned upstream entries are declaration metadata."
+    },
+    {
+      "feature": "corridor cut and camera motion around frozen action",
+      "nodes": [
+        "film"
+      ],
+      "scene_objects": [],
+      "audio_tracks": [
+        "effect.events"
+      ],
+      "catalog_entries": [
+        "werkkzeug3:WerkClasses:0x00c6",
+        "wz4:altona_wz4/wz4/wz4frlib/wz4_demo2_ops.ops:Wz4Render.Camera"
+      ],
+      "provenance": "catalog_review",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L4550",
+      "shot": "corridor approach to room turn",
+      "reachable_dependencies": [
+        "film",
+        "corridor_render",
+        "hotel_screen"
+      ],
+      "license": "Original nodewerk content under the repository license. Pinned upstream entries are declaration metadata."
+    },
+    {
+      "feature": "moving shadow and material-aware reflection",
+      "nodes": [
+        "occluder",
+        "reflected_object",
+        "mirror_panel"
+      ],
+      "scene_objects": [
+        "occluder",
+        "reflected_object",
+        "mirror_panel"
+      ],
+      "audio_tracks": [],
+      "catalog_entries": [
+        "werkkzeug3:WerkClasses:0x00c4",
+        "wz4:altona_wz4/wz4/wz4frlib/wz4_mtrl_ops.ops:Wz4Material.Material",
+        "wz4:altona_wz4/wz4/wz4frlib/wz4_modmtrl_ops.ops:Wz4Render.ModLight"
+      ],
+      "provenance": "catalog_review",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L4522",
+      "shot": "lamp and mirror reflections",
+      "reachable_dependencies": [
+        "occluder",
+        "reflected_object",
+        "mirror_panel",
+        "corridor_render",
+        "hotel_screen"
+      ],
+      "license": "Original nodewerk content under the repository license. Pinned upstream entries are declaration metadata."
+    },
+    {
+      "feature": "depth-occluded dust particles and flash feedback",
+      "nodes": [
+        "film"
+      ],
+      "scene_objects": [],
+      "audio_tracks": [],
+      "catalog_entries": [
+        "werkkzeug3:WerkClasses:0x00c5",
+        "wz4:altona_wz4/wz4/wz4frlib/fxparticle_ops.ops:Wz4Particles.SplinedParticles"
+      ],
+      "provenance": "independently_authored",
+      "source_page": "https://github.com/farbrausch/fr_public/blob/8c8f82c2ae01133370e649bbc05916e7aceecadd/werkkzeug3/werkops.cpp#L4540",
+      "shot": "dust and flash afterglow",
+      "reachable_dependencies": [
+        "film",
+        "corridor_render",
+        "hotel_screen"
+      ],
+      "license": "Original nodewerk content under the repository license. Pinned upstream entries are declaration metadata."
+    },
+    {
+      "feature": "bloom and tonemapped composite",
+      "nodes": [
+        "film"
+      ],
+      "scene_objects": [],
+      "audio_tracks": [],
+      "catalog_entries": [],
+      "provenance": "independently_authored",
+      "source_page": "fixtures/nw13/hotel_corridor.production.json",
+      "shot": "all shots",
+      "reachable_dependencies": [
+        "film",
+        "corridor_render",
+        "hotel_screen"
+      ],
+      "license": "upstream_unknown_or_independently_authored"
+    },
+    {
+      "feature": "lead, bass, percussion and event effects",
+      "nodes": [
+        "film"
+      ],
+      "scene_objects": [],
+      "audio_tracks": [
+        "music.lead",
+        "music.bass",
+        "music.percussion",
+        "effect.events"
+      ],
+      "catalog_entries": [],
+      "provenance": "independently_authored",
+      "source_page": "fixtures/nw13/hotel_corridor.production.json",
+      "shot": "full sequence",
+      "reachable_dependencies": [
+        "film",
+        "corridor_render",
+        "hotel_screen"
+      ],
+      "license": "independently_authored"
+    }
+  ],
+  "provenance": {
+    "clean_room": "original scene, graph and song authored for NW-13",
+    "farbrausch_code_copied": false,
+    "farbrausch_assets_copied": false
+  },
+  "audio_cue_bindings": {
+    "flash": "flash",
+    "doorslam": "door_hinge"
+  }
+}

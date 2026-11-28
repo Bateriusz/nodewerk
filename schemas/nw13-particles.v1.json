@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nodewerk.invalid/schemas/nw13-particles.v1.json",
+  "title": "Nodewerk NW-13 seeded spatial particles and effects v1",
+  "description": "Animated emitter, world-space simulation, lifetime, size/material controls, depth occlusion, fixed-step history, feedback, bloom and tonemapping.",
+  "type": "object",
+  "required": ["format", "version", "tick_rate_hz", "simulation_hz", "emitter", "history"],
+  "properties": {
+    "format": { "const": "nw13.particles" },
+    "version": { "const": 1 },
+    "tick_rate_hz": { "const": 48000 },
+    "simulation_hz": { "const": 120 },
+    "emitter": {
+      "type": "object",
+      "required": ["id", "seed", "count", "origin", "direction"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "count": { "type": "integer", "minimum": 1, "maximum": 65536 },
+        "origin": { "$ref": "#/$defs/vec3" },
+        "origin_track": {
+          "type": "object",
+          "required": ["keys"],
+          "properties": {
+            "keys": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 4096,
+              "items": {
+                "type": "object",
+                "required": ["tick", "value"],
+                "properties": {
+                  "tick": { "type": "integer", "minimum": 0 },
+                  "value": { "$ref": "#/$defs/vec3" },
+                  "interpolation": { "enum": ["step", "linear", "smoothstep"] }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "direction": { "$ref": "#/$defs/vec3" },
+        "speed_min": { "type": "number", "minimum": 0 },
+        "speed_max": { "type": "number", "minimum": 0 },
+        "spread_degrees": { "type": "number", "minimum": 0, "maximum": 180 },
+        "gravity": { "$ref": "#/$defs/vec3" },
+        "drag": { "type": "number", "minimum": 0, "maximum": 1 },
+        "lifetime_ticks": { "type": "integer", "minimum": 1, "maximum": 34560000 },
+        "size_start": { "type": "number", "minimum": 0 },
+        "size_end": { "type": "number", "minimum": 0 },
+        "material": { "type": "string" },
+        "depth_bias": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "history": {
+      "type": "object",
+      "required": ["reset_policy", "step_rate_hz", "max_steps"],
+      "properties": {
+        "reset_policy": { "enum": ["on-loop", "on-seek", "never", "manual"] },
+        "step_rate_hz": { "const": 120 },
+        "max_steps": { "type": "integer", "minimum": 1, "maximum": 7200 },
+        "max_memory_bytes": { "type": "integer", "minimum": 1024 }
+      },
+      "additionalProperties": false
+    },
+    "budget": {
+      "type": "object",
+      "properties": {
+        "max_memory_bytes": { "type": "integer", "minimum": 1024 },
+        "max_voices": { "type": "integer", "minimum": 1, "maximum": 65536 }
+      },
+      "additionalProperties": false
+    },
+    "effects": {
+      "type": "object",
+      "properties": {
+        "bloom": {
+          "type": "object",
+          "required": ["threshold", "intensity", "radius"],
+          "properties": {
+            "threshold": { "type": "number", "minimum": 0 },
+            "intensity": { "type": "number", "minimum": 0 },
+            "radius": { "type": "integer", "minimum": 0, "maximum": 64 }
+          },
+          "additionalProperties": false
+        },
+        "tonemap": {
+          "type": "object",
+          "required": ["exposure", "gamma", "operator"],
+          "properties": {
+            "exposure": { "type": "number", "minimum": 0 },
+            "gamma": { "type": "number", "exclusiveMinimum": 0 },
+            "operator": { "enum": ["reinhard", "aces", "linear"] }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number" }
+    }
+  }
+}

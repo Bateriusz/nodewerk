@@ -399,6 +399,7 @@ private:
         std::uint32_t constant_count = 0u;
         std::int32_t time_byte_offset = -1;
         std::int32_t simulation_tick_byte_offset = -1;
+        std::uint8_t time_tick_kind = 0u;
         std::uint64_t byte_count = 0u;
         std::uint64_t tick_value = 0u;
         std::uint32_t max_draw_count = 1u;

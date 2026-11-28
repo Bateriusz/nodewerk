@@ -16,6 +16,17 @@ the gap count, missing-sample lower bound and discontinuity. Contradictory or
 backward clock observations fail explicitly. Exact audible glitch telemetry is
 unavailable; synthesis and complete worker CPU time are reported in 100 ns units with availability.
 
+NW-13 adds a versioned NWAS v2 container decoded by the same shared
+`src/audio/procedural_audio.cpp` path. It carries selectable
+sine/square/saw/triangle/noise waveforms with seeds, ADSR envelopes, a bounded
+one-pole low-pass, equal-power pan, music/effect buses and automation keys.
+NWAS v1 remains decode-only and byte-canonical; the 48 kHz tick/sample clock is
+unchanged. The offline writer and PackagePlayer both consume the v2 decoder, and
+arbitrary chunk partitions reconstruct the filter state so output is sample
+identical. The shared `.nwp` AUDI validator and PackagePlayer package reader
+accept both NWAS v1 and v2; a v2 song is validated before package storage and
+again when the player decodes it.
+
 ## Use
 
 ```sh
@@ -164,3 +175,7 @@ pending or their raw files are available locally.
 The summary is never accepted by the private verifier.
 Hosted CI exercises the deterministic binding/alignment logic only and does not
 require an audio endpoint, real windowed Present, or GPU qualification.
+
+For authored NWAS v2 film exports, use the
+[physical film A/V cue protocol](physical-audio-cues.md) instead of the NWAS v1
+fixture/event observation format.

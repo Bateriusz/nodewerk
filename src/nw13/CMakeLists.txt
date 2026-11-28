@@ -1,0 +1,27 @@
+cmake_minimum_required(VERSION 3.24)
+project(nw13_gpu_experiments LANGUAGES CXX)
+if(NOT WIN32)
+    return()
+endif()
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+find_program(DXC NAMES dxc dxc.exe REQUIRED)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../benchmarks/toolchain-manifest.v1.json" manifest)
+string(JSON pinned GET "${manifest}" pinned_dependencies dxc_version)
+execute_process(COMMAND "${DXC}" --version OUTPUT_VARIABLE version RESULT_VARIABLE status)
+if(NOT status EQUAL 0 OR NOT version MATCHES "${pinned}")
+    message(FATAL_ERROR "NW-13 GPU experiments require offline DXC ${pinned}")
+endif()
+set(source "${CMAKE_CURRENT_SOURCE_DIR}/../../shaders/nw13/particle_routing.hlsl")
+set(baseline "${CMAKE_CURRENT_BINARY_DIR}/particle_routing_cs.dxil")
+set(graph "${CMAKE_CURRENT_BINARY_DIR}/particle_routing_lib.dxil")
+add_custom_command(
+    OUTPUT "${baseline}" "${graph}"
+    COMMAND "${DXC}" -nologo -O2 -T cs_6_0 -E Conventional -Fo "${baseline}" "${source}"
+    COMMAND "${DXC}" -nologo -O2 -T lib_6_8 -DWORK_GRAPH=1 -Fo "${graph}" "${source}"
+    DEPENDS "${source}" VERBATIM)
+add_custom_target(nw13_work_graph_shaders DEPENDS "${baseline}" "${graph}")
+add_executable(nw13_work_graph work_graph.cpp)
+target_compile_features(nw13_work_graph PRIVATE cxx_std_20)
+target_compile_definitions(nw13_work_graph PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+target_link_libraries(nw13_work_graph PRIVATE d3d12 dxgi)
+add_dependencies(nw13_work_graph nw13_work_graph_shaders)

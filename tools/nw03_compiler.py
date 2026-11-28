@@ -149,6 +149,7 @@ KNOWN_OPERATORS = {
     "nw.material.describe",
     "nw.shader.vec4_const",
     "nw.shader.expr",
+    "nw.shader.film",
     "nw.shader.add",
     "nw.shader.mul",
     "nw.shader.mix",
@@ -174,6 +175,8 @@ KNOWN_OPERATORS = {
     "nw.residency.gpu_to_cpu",
     "nw.readback.scalar",
     "nw.render.fullscreen",
+    "nw.render.film",
+    "nw.render.film_frame",
     "nw.render.gbuffer",
     "nw.render.composite",
     "nw.render.present",
@@ -183,11 +186,30 @@ KNOWN_OPERATORS = {
     # never an ordinary author-supplied graph edge.
     "nw.particles.system",
     "nw.feedback.image",
+    "nw.feedback.scene_image",
+    # NW-13 bounded procedural geometry recipes.
+    "nw.geom.sphere",
+    "nw.geom.library",
+    "nw.geom.box",
+    "nw.geom.cylinder",
+    "nw.geom.capsule",
+    "nw.geom.torus",
+    "nw.geom.translate",
+    "nw.geom.rotate",
+    "nw.geom.scale",
+    "nw.geom.union",
+    "nw.geom.intersection",
+    "nw.geom.subtract",
+    "nw.geom.smooth_union",
+    "nw.geom.repeat",
+    "nw.geom.twist",
+    "nw.geom.bend",
+    "nw.geom.displace",
 }
 
 # Operators whose schema admits the NW-09 `history` frequency.  Ordinary
 # operators remain invalid at that frequency (see `history_not_supported`).
-HISTORY_OPERATORS = {"nw.particles.system", "nw.feedback.image"}
+HISTORY_OPERATORS = {"nw.particles.system", "nw.feedback.image", "nw.feedback.scene_image"}
 
 OPERATOR_INPUTS = {
     "nw.math.add": {"a", "b"},
@@ -220,6 +242,9 @@ OPERATOR_INPUTS = {
     "nw.residency.gpu_to_cpu": {"image"},
     "nw.readback.scalar": {"image"},
     "nw.render.fullscreen": {"shader", "texture"},
+    "nw.render.film": {"shader"},
+    "nw.render.film_frame": {"shader"},
+    "nw.feedback.scene_image": {"color", "depth", "camera"},
     "nw.render.gbuffer": {"mesh", "material", "camera", "light", "shader"},
     "nw.render.composite": {"color", "normal"},
     "nw.render.present": {"image"},
@@ -234,6 +259,19 @@ OPERATOR_INPUTS = {
     },
     "nw.post.bloom": {"image"},
     "nw.post.tonemap": {"image"},
+    "nw.geom.translate": {"child"},
+    "nw.geom.rotate": {"child"},
+    "nw.geom.scale": {"child"},
+    "nw.geom.union": {"a", "b"},
+    "nw.geom.library": {"a", "b"},
+    "nw.shader.film": {"geometry"},
+    "nw.geom.intersection": {"a", "b"},
+    "nw.geom.subtract": {"a", "b"},
+    "nw.geom.smooth_union": {"a", "b"},
+    "nw.geom.repeat": {"child"},
+    "nw.geom.twist": {"child"},
+    "nw.geom.bend": {"child"},
+    "nw.geom.displace": {"child"},
 }
 
 OUTPUT_PORTS = {
@@ -260,6 +298,8 @@ OUTPUT_PORTS = {
     "nw.material.standard": {"out"},
     "nw.shader.vec4_const": {"out"},
     "nw.shader.expr": {"out"},
+    "nw.shader.film": {"out"},
+    "nw.geom.library": {"out"},
     "nw.shader.add": {"out"},
     "nw.shader.mul": {"out"},
     "nw.shader.mix": {"out"},
@@ -284,16 +324,36 @@ OUTPUT_PORTS = {
     "nw.residency.gpu_to_cpu": {"out"},
     "nw.readback.scalar": {"value"},
     "nw.render.fullscreen": {"image"},
+    "nw.render.film": {"image"},
+    "nw.render.film_frame": {"color", "depth", "camera"},
+    "nw.feedback.scene_image": {"out"},
     "nw.render.gbuffer": {"color", "normals"},
     "nw.render.composite": {"out"},
     "nw.render.present": {"out"},
     "nw.particles.system": {"out"},
     "nw.feedback.image": {"out"},
+    "nw.geom.sphere": {"out"},
+    "nw.geom.box": {"out"},
+    "nw.geom.cylinder": {"out"},
+    "nw.geom.capsule": {"out"},
+    "nw.geom.torus": {"out"},
+    "nw.geom.translate": {"out"},
+    "nw.geom.rotate": {"out"},
+    "nw.geom.scale": {"out"},
+    "nw.geom.union": {"out"},
+    "nw.geom.intersection": {"out"},
+    "nw.geom.subtract": {"out"},
+    "nw.geom.smooth_union": {"out"},
+    "nw.geom.repeat": {"out"},
+    "nw.geom.twist": {"out"},
+    "nw.geom.bend": {"out"},
+    "nw.geom.displace": {"out"},
 }
 
 SHADER_OPERATORS = {
     "nw.shader.vec4_const",
     "nw.shader.expr",
+    "nw.shader.film",
     "nw.shader.add",
     "nw.shader.mul",
     "nw.shader.mix",
@@ -393,6 +453,14 @@ PORT_SPECS: dict[str, dict[str, dict[str, tuple[str, int, str]]]] = {
         "outputs": {"out": ("material", 1, "cpu")},
     },
     "nw.shader.vec4_const": {"outputs": {"out": ("shader_expr", 1, "logical")}},
+    "nw.shader.film": {
+        "inputs": {"geometry": ("geometry", 1, "logical")},
+        "outputs": {"out": ("shader_expr", 1, "logical")},
+    },
+    "nw.geom.library": {
+        "inputs": {"a": ("geometry", 1, "logical"), "b": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
     "nw.shader.expr": {"outputs": {"out": ("shader_expr", 1, "logical")}},
     "nw.shader.add": {
         "inputs": {
@@ -479,6 +547,20 @@ PORT_SPECS: dict[str, dict[str, dict[str, tuple[str, int, str]]]] = {
         "inputs": {"image": ("image", 1, "gpu")},
         "outputs": {"value": ("scalar", 1, "cpu")},
     },
+    "nw.render.film": {
+        "inputs": {"shader": ("shader_expr", 1, "logical")},
+        "outputs": {"image": ("image", 1, "gpu")},
+    },
+    "nw.render.film_frame": {
+        "inputs": {"shader": ("shader_expr", 1, "logical")},
+        "outputs": {"color": ("image", 1, "gpu"), "depth": ("view_depth", 1, "gpu"),
+                    "camera": ("camera", 1, "logical")},
+    },
+    "nw.feedback.scene_image": {
+        "inputs": {"color": ("image", 1, "gpu"), "depth": ("view_depth", 1, "gpu"),
+                   "camera": ("camera", 1, "logical")},
+        "outputs": {"out": ("image", 1, "gpu")},
+    },
     "nw.render.fullscreen": {
         "inputs": {
             "shader": ("shader_expr", 1, "logical"),
@@ -518,9 +600,66 @@ PORT_SPECS: dict[str, dict[str, dict[str, tuple[str, int, str]]]] = {
     "nw.feedback.image": {
         "outputs": {"out": ("image", 1, "gpu")},
     },
+    # NW-13 geometry recipes are a distinct logical type from mesh recipes and
+    # scene tables.  They remain compiler/authoring data; the C++ registry is
+    # the authoritative implementation contract.
+    "nw.geom.sphere": {"outputs": {"out": ("geometry", 1, "logical")}},
+    "nw.geom.box": {"outputs": {"out": ("geometry", 1, "logical")}},
+    "nw.geom.cylinder": {"outputs": {"out": ("geometry", 1, "logical")}},
+    "nw.geom.capsule": {"outputs": {"out": ("geometry", 1, "logical")}},
+    "nw.geom.torus": {"outputs": {"out": ("geometry", 1, "logical")}},
+    "nw.geom.translate": {
+        "inputs": {"child": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.rotate": {
+        "inputs": {"child": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.scale": {
+        "inputs": {"child": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.union": {
+        "inputs": {"a": ("geometry", 1, "logical"), "b": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.intersection": {
+        "inputs": {"a": ("geometry", 1, "logical"), "b": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.subtract": {
+        "inputs": {"a": ("geometry", 1, "logical"), "b": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.smooth_union": {
+        "inputs": {"a": ("geometry", 1, "logical"), "b": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.repeat": {
+        "inputs": {"child": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.twist": {
+        "inputs": {"child": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.bend": {
+        "inputs": {"child": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
+    "nw.geom.displace": {
+        "inputs": {"child": ("geometry", 1, "logical")},
+        "outputs": {"out": ("geometry", 1, "logical")},
+    },
 }
 
 PARAM_RULES: dict[str, dict[str, dict[str, Any]]] = {
+    "nw.shader.film": {"scene": {"kind": "string"}, "production": {"kind": "string"}},
+    "nw.feedback.scene_image": {
+        "weight": {"kind": "float", "min": 0.0, "max": 0.5},
+        "depth_tolerance": {"kind": "float", "min": 0.0001, "max": 0.25},
+    },
     "nw.shader.mix": {"factor": {"kind": "float", "min": 0.0, "max": 1.0, "clamp01": True}},
     "nw.material.describe": {
         "metallic": {"kind": "float", "min": 0.0, "max": 1.0, "clamp01": True},
@@ -640,6 +779,54 @@ PARAM_RULES: dict[str, dict[str, dict[str, Any]]] = {
         "decay": {"kind": "float", "min": 0.0, "max": 1.0},
         "gain": {"kind": "float", "min": 0.0},
     },
+    "nw.geom.sphere": {
+        "radius": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+    },
+    "nw.geom.box": {
+        "half_extents": {"kind": "vec3"},
+    },
+    "nw.geom.cylinder": {
+        "radius": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+        "half_height": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+    },
+    "nw.geom.capsule": {
+        "radius": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+        "half_height": {"kind": "float", "min": 0.0, "max": 1000000.0},
+    },
+    "nw.geom.torus": {
+        "major_radius": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+        "minor_radius": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+    },
+    "nw.geom.translate": {
+        "offset": {"kind": "vec3"},
+    },
+    "nw.geom.rotate": {
+        "axis": {"kind": "enum", "values": {"x", "y", "z"}},
+        "degrees": {"kind": "float", "min": -3600.0, "max": 3600.0},
+    },
+    "nw.geom.scale": {
+        "scale": {"kind": "vec3"},
+    },
+    "nw.geom.smooth_union": {
+        "k": {"kind": "float", "min": 0.0, "max": 1000000.0},
+    },
+    "nw.geom.repeat": {
+        "spacing": {"kind": "vec3"},
+        "counts": {"kind": "vec3"},
+    },
+    "nw.geom.twist": {
+        "half_height": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+        "max_degrees": {"kind": "float", "min": -3600.0, "max": 3600.0},
+    },
+    "nw.geom.bend": {
+        "half_width": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+        "max_degrees": {"kind": "float", "min": -180.0, "max": 180.0},
+    },
+    "nw.geom.displace": {
+        "seed": {"kind": "int", "min": 0, "max": 4294967295},
+        "amplitude": {"kind": "float", "min": 0.0, "max": 1000000.0},
+        "frequency": {"kind": "float", "min": 0.000001, "max": 1000000.0},
+    },
 }
 
 SHADER_SEED_BEHAVIORS = {
@@ -696,7 +883,8 @@ class HistoryDeclaration:
                 nwp_package.canonical_json_bytes(
                     {
                         "domain": "nw09.history-layout.v2",
-                        "state_semantics": NW09_STATE_SEMANTICS,
+                        "state_semantics": (self.state_type if self.state_type == "nw.feedback.scene_image.v1"
+                                            else NW09_STATE_SEMANTICS),
                         "state_type": self.state_type,
                         "initial_value": self.initial_value,
                         "reset_policy": self.reset_policy,
@@ -1493,7 +1681,7 @@ def _validate_node_parameters(node: GraphNode) -> list[dict[str, Any]]:
 
 
 NW09_STATE_TYPES = frozenset(
-    {"nw.particles.v1", "nw.feedback.image.v1"}
+    {"nw.particles.v1", "nw.feedback.image.v1", "nw.feedback.scene_image.v1"}
 )
 
 # A History state type is bound to exactly one operator schema.  The operator
@@ -1502,6 +1690,7 @@ NW09_STATE_TYPES = frozenset(
 NW09_OPERATOR_STATE_TYPE = {
     "nw.particles.system": "nw.particles.v1",
     "nw.feedback.image": "nw.feedback.image.v1",
+    "nw.feedback.scene_image": "nw.feedback.scene_image.v1",
 }
 
 
@@ -1806,6 +1995,9 @@ def validate_graph_document(document: GraphDocument) -> list[dict[str, Any]]:
                 source.frequency in frequency_rank
                 and node.frequency in frequency_rank
                 and frequency_rank[source.frequency] > frequency_rank[node.frequency]
+                and not (node.operator_id == "nw.feedback.scene_image"
+                         and source.operator_id == "nw.render.film_frame"
+                         and node.frequency == "history" and source.frequency == "frame")
             ):
                 diagnostics.append(
                     _diagnostic(
@@ -2107,13 +2299,34 @@ def _shader_dependencies(document: GraphDocument, root: GraphNode) -> set[str]:
     return reachable
 
 
+def _lower_film_shader(document, root, entry_point, target, thread_group, dispatch_groups,
+                       image_width, image_height):
+    import nw13_film
+    dependencies = tuple(sorted(_shader_dependencies(document, root)))
+    try:
+        hlsl = nw13_film.emit(
+            document, root, entry_point=entry_point, thread_group=thread_group,
+            dispatch_groups=dispatch_groups, width=image_width, height=image_height,
+        )
+    except (KeyError, ValueError, TypeError, OSError) as error:
+        diagnostics = getattr(error, "diagnostics", []) or [
+            _diagnostic("invalid_film", str(error), node_id=root.node_id, operator_id=root.operator_id)
+        ]
+        raise CompilerError(f"film node {root.node_id}: {error}", diagnostics) from error
+    return GeneratedShader(
+        specialization_id=root.node_id, entry_point=entry_point, target=target,
+        family=PASS_FAMILY, hlsl=hlsl, source_map=(), root_expression="",
+        root_node_ids=dependencies, thread_group=nw13_film.THREAD_GROUP, execution_root=root.node_id,
+    )
+
+
 def lower_to_fused_hlsl(
     document: GraphDocument,
     *,
     target: str = SHADER_TARGET,
     entry_point: str = ENTRY_POINT,
-    thread_group: tuple[int, int, int] = THREAD_GROUP,
-    dispatch_groups: tuple[int, int, int] = DISPATCH_GROUPS,
+    thread_group: tuple[int, int, int] | None = None,
+    dispatch_groups: tuple[int, int, int] | None = None,
     image_width: int | None = None,
     image_height: int | None = None,
 ) -> tuple[list[GeneratedShader], list[dict[str, Any]]]:
@@ -2131,7 +2344,18 @@ def lower_to_fused_hlsl(
 
     generated: list[GeneratedShader] = []
     seen_keys: set[str] = set()
+    shader_threads = THREAD_GROUP if thread_group is None else thread_group
+    shader_dispatch = DISPATCH_GROUPS if dispatch_groups is None else dispatch_groups
     for root in roots:
+        if root.operator_id == "nw.shader.film":
+            try:
+                generated.append(_lower_film_shader(
+                    document, root, entry_point, target, thread_group, dispatch_groups,
+                    image_width, image_height,
+                ))
+            except CompilerError as error:
+                diagnostics.extend(error.diagnostics)
+            continue
         try:
             expression_text = _shader_expression_text(document, root)
             parsed = nw03_oracle.parse_expression(expression_text)
@@ -2152,8 +2376,8 @@ def lower_to_fused_hlsl(
         hlsl, source_map = _emit_compute_hlsl(
             hlsl_expression,
             dependency_ids,
-            thread_group=thread_group,
-            dispatch_groups=dispatch_groups,
+            thread_group=shader_threads,
+            dispatch_groups=shader_dispatch,
             entry_point=entry_point,
             image_width=image_width,
             image_height=image_height,
@@ -2167,7 +2391,7 @@ def lower_to_fused_hlsl(
             source_map=tuple(source_map),
             root_expression=expression_text,
             root_node_ids=tuple(dependency_ids),
-            thread_group=thread_group,
+            thread_group=shader_threads,
             execution_root=root.node_id,
         )
         if candidate.specialization_key in seen_keys:
@@ -2349,8 +2573,8 @@ def lower_to_selective_hlsl(
     fused_roots: Iterable[str] = (),
     target: str = SHADER_TARGET,
     entry_point: str = ENTRY_POINT,
-    thread_group: tuple[int, int, int] = THREAD_GROUP,
-    dispatch_groups: tuple[int, int, int] = DISPATCH_GROUPS,
+    thread_group: tuple[int, int, int] | None = None,
+    dispatch_groups: tuple[int, int, int] | None = None,
     image_width: int | None = None,
     image_height: int | None = None,
     texture_sample_roots: Iterable[str] = (),
@@ -2373,7 +2597,19 @@ def lower_to_selective_hlsl(
     fused = set(fused_roots)
     texture_roots = set(texture_sample_roots)
     generated: list[GeneratedShader] = []
+    shader_threads, shader_dispatch = thread_group, dispatch_groups
+    thread_group = THREAD_GROUP if shader_threads is None else shader_threads
+    dispatch_groups = DISPATCH_GROUPS if shader_dispatch is None else shader_dispatch
     for root in roots:
+        if root.operator_id == "nw.shader.film":
+            try:
+                generated.append(_lower_film_shader(
+                    document, root, entry_point, target, shader_threads, shader_dispatch,
+                    image_width, image_height,
+                ))
+            except CompilerError as error:
+                diagnostics.extend(error.diagnostics)
+            continue
         try:
             members = _shader_topological_members(document, root)
             if root.node_id in fused or len(members) == 1:
@@ -2737,7 +2973,10 @@ def compile_generated_shader(
     pinned_dxc_version: str = PINNED_DXC_VERSION,
     allow_unpinned_dxc: bool = False,
     allow_test_payloads: bool = False,
+    qualified_shader_model: str | None = None,
 ) -> dict[str, Any]:
+    if qualified_shader_model and (qualified_shader_model != shader.target or allow_test_payloads):
+        raise CompilerError("qualified compile must bind the exact real shader target")
     measured_version = query_dxc_version(dxc_executable)
     if not allow_test_payloads and str(dxc_executable).lower().endswith(".py"):
         raise CompilerError(
@@ -2790,6 +3029,7 @@ def compile_generated_shader(
             blob,
             allow_test_container=allow_test_payloads,
             reject_debug_reflection=not allow_test_payloads,
+            **({"qualified_shader_model": qualified_shader_model} if qualified_shader_model else {}),
         )
     except Exception as exc:
         raise CompilerError(
@@ -2885,6 +3125,7 @@ def _build_package(
     dxc_version: str,
     optimization: str,
     release: bool = True,
+    film_dispatch: Any = None,
 ) -> NwpPackage:
     bindings = (
         RootBinding("params", "cbv", 0, 0, 0),
@@ -2920,23 +3161,36 @@ def _build_package(
             pass_family=PASS_FAMILY,
             binding_slot=0,
             binding_space=0,
-            size_bytes=OUTPUT_BUFFER_BYTES,
+            size_bytes=(film_dispatch.width * film_dispatch.height * 16 if film_dispatch else OUTPUT_BUFFER_BYTES),
         ),
     ]
+    film_shaders = [
+        shader for shader in generated
+        if shader.specialization_id in document.nodes
+        and document.nodes[shader.specialization_id].operator_id == "nw.shader.film"
+    ]
+    film_clock = bool(film_shaders)
+    if film_clock and len(generated) != len(film_shaders):
+        raise CompilerError("film integer clock cannot share a root-constant block with legacy float-time shaders")
     parameters = [
         ParameterRecord(
             parameter_id=1,
             name="time",
-            type="float",
+            type="uint" if film_clock else "float",
             phase="frame",
             component_count=1,
-            value=struct.pack("<f", 0.0),
+            value=bytes(4),
             timeline_start_frame=0,
             timeline_end_frame=0,
             timeline_step=0,
             timeline_interpolation="none",
         )
     ]
+    if film_clock:
+        parameters.extend(
+            ParameterRecord(index, f"nw05.present.{axis}", "uint", "initialization", 1, struct.pack("<I", value))
+            for index, (axis, value) in enumerate(zip(("width", "height"), film_dispatch.extent, strict=True), start=2)
+        )
     shaders: list[ShaderRecord] = []
     for index, shader in enumerate(generated, start=1):
         shader_compiled = compiled[shader.specialization_key]
@@ -2989,6 +3243,8 @@ def _build_package(
             ),
         ),
     ]
+    if film_clock:
+        frame.insert(0, Instruction("frame.set_timeline", (InstructionOperand("u32", 1), InstructionOperand("u64", 0))))
     for shader in shaders:
         initialization.append(
             Instruction(
@@ -3003,13 +3259,13 @@ def _build_package(
             Instruction(
                 "frame.dispatch",
                 (
-                    InstructionOperand("u32", DISPATCH_GROUPS[0]),
-                    InstructionOperand("u32", DISPATCH_GROUPS[1]),
-                    InstructionOperand("u32", DISPATCH_GROUPS[2]),
+                    *(InstructionOperand("u32", group) for group in (film_dispatch.groups if film_dispatch else DISPATCH_GROUPS)),
                     InstructionOperand("shader_ref", shader.shader_id),
                 ),
             )
         )
+    if film_clock:
+        frame.append(Instruction("frame.present", (InstructionOperand("resource_ref", 2),)))
     derived = nwp_package.derive_capability_requirements(
         resources, initialization, frame, shaders, [root_signature]
     )
@@ -3136,11 +3392,55 @@ def compile_package(
     output_path = Path(output_path)
     if document is None:
         document = load_graph(graph_path)
+    film_dispatch = None
+    film_workload = None
+    film_roots = [root for root in _reachable_shader_roots(document) if root.operator_id == "nw.shader.film"]
+    if film_roots:
+        import nw13_film
+        try:
+            if len(film_roots) != 1:
+                raise ValueError("a compiled film package requires exactly one film root")
+            root = film_roots[0]
+            film_options = dict(thread_group=shader_thread_group, dispatch_groups=dispatch_groups,
+                                width=image_width, height=image_height)
+            film_data, source_dispatch, film_workload = nw13_film.admit_film(document, root, **film_options)
+            feedback = nw13_film.history.read_feedback(document)
+            if generated_shaders_override is None:
+                if feedback is not None:
+                    raise ValueError("typed film History requires the full graph exporter, not a shader-only package")
+                film_dispatch = source_dispatch
+            else:
+                # Internal pre-lowered paths must still admit the same authored
+                # dimensions and work. The typed History assembler replaces the
+                # temporary shader-only package with its actual command ABI.
+                if any(shader.thread_group != source_dispatch.thread_group for shader in generated_shaders_override):
+                    raise ValueError("pre-lowered film shader thread group disagrees with the authored dispatch")
+                actual_sources = {(shader.specialization_id, shader.entry_point): shader.hlsl
+                                  for shader in generated_shaders_override}
+                if feedback is not None:
+                    _, _, _, scene, settings, _ = film_data
+                    timing, _ = nw13_film.film_timing(scene, settings)
+                    expected = nw13_film.history.sampled_shader_sources(
+                        document, root, feedback, scene, timing, source_dispatch,
+                    )
+                else:
+                    expected = {(root.node_id, entry): nw13_film.emit(
+                        document, root, entry_point=entry, **film_options,
+                    ) for node_id, entry in actual_sources if node_id == root.node_id}
+                    if len(expected) != 1:
+                        raise ValueError("pre-lowered stateless film needs exactly one authored pass")
+                    film_dispatch = source_dispatch
+                if len(actual_sources) != len(generated_shaders_override) or actual_sources != expected:
+                    raise ValueError("pre-lowered film source disagrees with the admitted raster or passes")
+        except (KeyError, ValueError, TypeError, OSError) as exc:
+            raise CompilerError("film package admission failed", [
+                _diagnostic("invalid_film", str(exc), node_id=film_roots[0].node_id, operator_id="nw.shader.film")
+            ]) from exc
     if generated_shaders_override is None:
         generated, diagnostics = lower_to_fused_hlsl(
             document,
-            thread_group=shader_thread_group or THREAD_GROUP,
-            dispatch_groups=dispatch_groups or DISPATCH_GROUPS,
+            thread_group=shader_thread_group,
+            dispatch_groups=dispatch_groups,
             image_width=image_width,
             image_height=image_height,
         )
@@ -3296,6 +3596,7 @@ def compile_package(
             dxc_version=dxc_version,
             optimization=optimization,
             release=release,
+            film_dispatch=film_dispatch,
         )
         package_bytes = nwp_package.encode_package(package)
         valid, package_diagnostics = nwp_package.validate_package_bytes(package_bytes)
@@ -3329,8 +3630,11 @@ def compile_package(
             dxc_version=dxc_version,
             optimization=optimization,
             release=release,
+            profile_fingerprint=package.capability.profile_fingerprint,
             source_path=str(graph_path),
         )
+        if film_workload is not None:
+            report["film_workload"] = film_workload
         # Publish only after every validation succeeded.
         nwp_package.write_package_atomic(package, output_path)
         if dev_sidecar_path is not None:
@@ -3358,6 +3662,7 @@ def _build_report(
     dxc_version: str,
     optimization: str,
     release: bool,
+    profile_fingerprint: str,
     source_path: str = "",
 ) -> dict[str, Any]:
     shader_rows = []
@@ -3402,16 +3707,7 @@ def _build_report(
         "profile": {
             "id": document.profile_id,
             "requirements_digest": document.requirements_digest,
-            "profile_fingerprint": _build_package(
-                document,
-                generated,
-                compiled,
-                semantic_digest=semantic_digest,
-                dxc_identity=dxc_identity,
-                dxc_version=dxc_version,
-                optimization=optimization,
-                release=release,
-            ).capability.profile_fingerprint,
+            "profile_fingerprint": profile_fingerprint,
         },
         "compiler": {
             "fingerprint": _compiler_fingerprint(
