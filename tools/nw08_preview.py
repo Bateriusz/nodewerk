@@ -718,9 +718,9 @@ class RuntimePackageExporter:
         self.optimization = optimization
         self._export_function = export_function or nw05_export.export_graph
 
-    def selected_audio_payload(self) -> bytes | None:
+    def selected_audio_payload(self, document: nw03_compiler.GraphDocument) -> bytes | None:
         path = self.settings.audio_song_path
-        return nw05_export.read_audio_song(path) if path else None
+        return nw05_export.read_audio_song(path, film_document=document) if path else None
 
     def export(
         self,
@@ -1619,7 +1619,7 @@ class WindowsRuntimePreviewBackend:
         height: int,
     ) -> tuple[str, PreviewExportBundle, float]:
         try:
-            song = (self._exporter.selected_audio_payload()
+            song = (self._exporter.selected_audio_payload(document)
                     if isinstance(self._exporter, RuntimePackageExporter) else None)
         except (OSError, ValueError) as exc:
             raise PreviewError(f"invalid audio song: {exc}") from exc

@@ -906,6 +906,98 @@ class Transport:
         return produced
 
 
+
+@dataclass(frozen=True)
+class TimelineSpan:
+    start: int
+    end: int
+    action: int
+    direction: int
+    frozen: bool
+
+    @property
+    def speed(self) -> int:
+        return 0 if self.frozen else self.direction
+
+
+@dataclass(frozen=True)
+class FilmTimeline:
+    """Bounded authored transport on an exact 48 kHz presentation clock."""
+
+    spans: tuple[TimelineSpan, ...]
+    end_state: TimelineSpan
+    events: tuple[dict[str, Any], ...]
+
+    def at(self, presentation: int) -> dict[str, Any]:
+        span = next((item for item in self.spans if presentation < item.end), self.end_state)
+        offset = max(0, presentation - span.start) if span is not self.end_state else 0
+        return {"action_tick": span.action + offset * span.speed,
+                "direction": span.direction, "frozen": span.frozen, "generation": 0}
+
+    def cue_onsets(self, cue_id: str) -> tuple[int, ...]:
+        return tuple(event["presentation_tick"] for event in self.events
+                     if event["kind"] == "cue" and event["cue_id"] == cue_id)
+
+
+def compile_film_timeline(scene: Scene, commands: Mapping[str, int]) -> FilmTimeline:
+    """Compile one piecewise action mapping and one cue schedule, without replay."""
+    kinds = ("freeze_at", "resume_at", "reverse_at", "forward_at")
+    if not isinstance(commands, Mapping) or set(commands) - set(kinds):
+        raise SceneError("film transport commands must use the supported command names")
+    if any(type(tick) is not int or not 0 <= tick <= scene.duration_ticks for tick in commands.values()):
+        raise SceneError("film transport commands must be exact in-range presentation ticks")
+    if len(set(commands.values())) != len(commands):
+        raise SceneError("film transport accepts one command per presentation tick")
+    if len({cue["id"] for cue in scene.cues}) != len(scene.cues):
+        raise SceneError("film cue IDs must be unique")
+
+    spans: list[TimelineSpan] = []
+    events: list[dict[str, Any]] = []
+    one_shots: set[str] = set()
+    presentation, action, direction, frozen = 0, 0, 1, False
+
+    def emit_cue(cue, onset):
+        identifier = cue["id"]
+        if cue["policy"] == "one-shot":
+            if identifier in one_shots:
+                return
+            one_shots.add(identifier)
+        events.append({"kind": "cue", "cue_id": identifier, "tick": cue["tick"],
+                       "policy": cue["policy"], "generation": 0, "presentation_tick": onset})
+
+    # The initial frame is observed; subsequent spans cross (start, end]
+    # in presentation order, so a freeze/turn boundary never duplicates it.
+    for cue in scene.cues:
+        if cue["tick"] == 0:
+            emit_cue(cue, 0)
+    for end, command in [*sorted((tick, cmd) for cmd, tick in commands.items()), (scene.duration_ticks, None)]:
+        span = TimelineSpan(presentation, end, action, direction, frozen)
+        stop = action + (end - presentation) * span.speed
+        if not 0 <= stop <= scene.duration_ticks:
+            raise SceneError("film transport would leave its bounded action interval")
+        if end > presentation:
+            spans.append(span)
+        for cue in scene.cues:
+            cue_tick = cue["tick"]
+            if ((span.speed > 0 and action < cue_tick <= stop) or
+                    (span.speed < 0 and stop <= cue_tick < action)):
+                emit_cue(cue, presentation + (cue_tick - action) * span.speed)
+        presentation, action = end, stop
+        if command == "freeze_at":
+            frozen = True
+            events.append({"kind": "freeze", "tick": action, "presentation_tick": end})
+        elif command == "resume_at":
+            frozen = False
+            events.append({"kind": "resume", "tick": action, "presentation_tick": end})
+        elif command in {"reverse_at", "forward_at"}:
+            direction, frozen = (-1 if command == "reverse_at" else 1), False
+            events.append({"kind": "reverse", "tick": action, "direction": direction,
+                           "presentation_tick": end})
+
+    events.extend({"kind": "cut", "cut_tick": cut, "presentation_tick": cut} for cut in scene.cuts)
+    events.sort(key=lambda event: event["presentation_tick"])
+    return FilmTimeline(tuple(spans), TimelineSpan(presentation, presentation, action, direction, frozen), tuple(events))
+
 def action_state(scene: Scene, tick: float) -> dict[str, Any]:
     """Evaluate scene action independently from camera time."""
     return {

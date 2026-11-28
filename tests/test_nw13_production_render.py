@@ -100,9 +100,13 @@ def test_committed_fixed_tick_frames_and_contact_sheet_are_retained() -> None:
     assert any(frame["tick"] == 192000 for frame in manifest["frames"])
     assert manifest["region_checks_passed"] is True
     import hashlib
-    for source in manifest["sources"].values():
+    sources = manifest["sources"]
+    assert sources["geometry"]["source"] == sources["scene"]["source"] == "graph"
+    for source in (sources["graph"], sources["song"], *sources["import_inputs"].values()):
         path = REPO_ROOT / source["path"]
         assert source["sha256"] == "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    for frame in manifest["frames"]:
+        assert frame["sha256"] == "sha256:" + hashlib.sha256((evidence_dir / frame["file"]).read_bytes()).hexdigest()
     for name in ("frames.v1.json", "transport.v1.json"):
         sidecar = evidence_dir / f"{name}.sha256"
         assert sidecar.exists()
@@ -329,3 +333,167 @@ def test_transport_flash_drives_reference_light_and_exported_transient() -> None
     lit, _ = renderer.render(148800, action_tick=144000)
     dark, _ = renderer.render(148800, action_tick=144000, light_gain={"flash_light": 0})
     assert render.image_difference(lit, dark)["max_abs_channel_error"] > 0.02
+
+
+
+def test_studio_song_uses_the_edited_film_cue_schedule(tmp_path):
+    import nw03_compiler as compiler
+    import nw05_export
+    import nw08_editor
+    import nw08_preview
+    import nw13_audio
+
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    graph = compiler.load_graph(REPO_ROOT / document["graph"])
+    song = REPO_ROOT / document["song"]
+    exporter = nw08_preview.RuntimePackageExporter(
+        settings=nw05_export.ExportSettings(audio_song_path=str(song))
+    )
+    def flash_at(payload):
+        data = nw13_audio.decode_nwas(payload)
+        return next(note["tick"] for note in data["notes"] if note["frequency_millihz"] == 1760000)
+
+    assert flash_at(nw05_export.read_audio_song(str(song))) == 144000  # raw authored action time
+    assert exporter.selected_audio_payload(graph) == production.playback_song(REPO_ROOT, document)
+    assert flash_at(exporter.selected_audio_payload(graph)) == 148800
+
+    root = graph.nodes["film"]
+    scene = json.loads(root.params["scene"][0])
+    next(cue for cue in scene["cues"] if cue["id"] == "flash")["tick"] = 0
+    author = nw08_editor.GraphEditorSession(graph)
+    assert author.set_parameter("film", "scene", [json.dumps(scene)]).valid
+    authored = tmp_path / "edited.nwgraph"
+    authored.write_text(nw08_editor.emit_graph_text(author.document), encoding="utf-8")
+    assert flash_at(exporter.selected_audio_payload(author.document)) == 0
+    modified = {**document, "graph": str(authored)}
+    trace = production.transport_trace(modified, REPO_ROOT, ticks=[0, 1, 148800])
+    assert trace[0]["flash_active"] and not trace[-1]["flash_active"]
+    assert [event["presentation_tick"] for row in trace for event in row["events"]
+            if event.get("cue_id") == "flash"] == [0]
+    assert production.playback_song(REPO_ROOT, modified) == exporter.selected_audio_payload(author.document)
+
+
+def test_generated_film_has_exact_tick_and_camera_transition_contract():
+    import nw03_compiler as compiler
+    import nw13_film
+
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    graph = compiler.load_graph(REPO_ROOT / document["graph"])
+    root = graph.nodes["film"]
+    source = json.loads(root.params["scene"][0])
+    first, second = source["cameras"][0]["shots"]
+    first["projection"]["fov_degrees"] = 40
+    second["projection"]["fov_degrees"] = 70
+    second["transition"], second["transition_ticks"] = "smoothstep", 24000
+    root.params["scene"] = [json.dumps(source)]
+    assert scene_module.camera_state(scene_module.compile_scene(source), second["start_tick"]).fov_degrees == 70
+    shader = nw13_film.emit(graph, root, entry_point="Main", thread_group=(8, 8, 1), width=48, height=27)
+    assert "uint presentationTick" in shader and "uint actionAt(uint t)" in shader
+    assert "Camera prev=shot0(t)" in shader and "c.lens=lerp" not in shader
+    assert "float4(70.0" in shader
+
+
+def test_native_capture_rejects_truncated_or_nonfinite_readback(tmp_path):
+    import struct
+    import nw13_artifact_measure as measure
+    import nw13_evidence
+
+    path = tmp_path / "frame.rgba32f"
+    path.write_bytes(struct.pack("<4f", 0.0, 0.2, 0.3, 1.0))
+    with pytest.raises(nw13_evidence.EvidenceError, match="2x1"):
+        measure._read_capture(path, (2, 1))
+    path.write_bytes(struct.pack("<4f", 0.0, 0.2, float("nan"), 1.0))
+    with pytest.raises(nw13_evidence.EvidenceError, match="nonfinite"):
+        measure._read_capture(path, (1, 1))
+    path.write_bytes(struct.pack("<4f", 0.0, 0.2, 0.3, 0.0))
+    with pytest.raises(nw13_evidence.EvidenceError, match="alpha"):
+        measure._read_capture(path, (1, 1))
+
+
+def test_release_film_shader_validates_and_fits_declared_shader_budgets(tmp_path):
+    import os
+    import shutil
+    import nw03_compiler as compiler
+    import nw13_film
+    import offline_shader_pack
+
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("real DXC is unavailable")
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    graph = compiler.load_graph(REPO_ROOT / document["graph"])
+    shaders, diagnostics = compiler.lower_to_fused_hlsl(
+        graph, thread_group=(8, 8, 1), dispatch_groups=(6, 4, 1), image_width=48, image_height=27)
+    assert not diagnostics and len(shaders) == 1
+    common = tmp_path / "common" / "shader.dxil"
+    # The upstream Linux tarball reports its dev/commit identifier rather
+    # than the release tag; Windows export still requires the exact pin.
+    result = compiler.compile_generated_shader(shaders[0], common, dxc_executable=dxc,
+                                                allow_unpinned_dxc=os.name != "nt")
+    metadata = nw13_film.compile_inline_ray_payload(graph, tmp_path / "ray", dxc,
+                                                   allow_unpinned_dxc=os.name != "nt")
+    ray = tmp_path / "ray" / "film_inline_ray.dxil"
+    assert result["blob"] == common.read_bytes()
+    assert metadata["inline_shader_bytes"] == ray.stat().st_size
+    assert metadata["bounds_count"] == 17
+    with pytest.raises(ValueError, match="baseline requires"):
+        offline_shader_pack.validate_dxil_container(ray.read_bytes())
+    assert common.stat().st_size <= 48 * 1024
+    assert common.stat().st_size + ray.stat().st_size <= 96 * 1024
+
+
+def test_shared_export_packages_the_preview_cue_bytes_and_integer_clock(tmp_path):
+    import nw03_compiler as compiler
+    import nw05_export
+    import nw08_preview
+    import nwp_package
+    from test_nw05_export import _make_dxc
+
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    graph = REPO_ROOT / document["graph"]
+    settings = nw05_export.ExportSettings(audio_song_path=str(REPO_ROOT / document["song"]))
+    preview = nw08_preview.RuntimePackageExporter(settings=settings)
+    expected = preview.selected_audio_payload(compiler.load_graph(graph))
+    result = nw05_export.export_graph(
+        graph, tmp_path / "export", settings=settings, dxc_executable=str(_make_dxc(tmp_path)),
+        allow_test_payloads=True,
+    )
+    package = result.artifacts[nwp_package.COMMON_PROFILE_ID].package
+    assert package.audio_song == expected == production.playback_song(REPO_ROOT, document)
+    assert next(parameter for parameter in package.parameters if parameter.name == "time").type == "uint"
+
+
+def test_controlled_scene_probes_isolate_expected_shadow_and_reflection():
+    import nw13_artifact_measure as measure
+
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    graph, _ = production.film_graph(REPO_ROOT, document)
+    dimensions = tuple(document["rendering"][axis] for axis in ("width", "height"))
+    verdicts = {}
+    for name, tick, variant in measure._probe_specs(graph):
+        _, delta, channels = measure._response_channels(name, graph, variant, tick, dimensions)
+        verdicts[name] = max(abs(delta[i]) for i in channels)
+    assert verdicts["moving_occluder_shadow"] > 0.03
+    assert verdicts["off_camera_material_reflection"] > 0.15
+
+
+
+def test_native_source_must_be_tracked_and_match_selected_revision(tmp_path):
+    import subprocess
+    import nw13_artifact_measure as measure
+    import nw13_evidence
+
+    location = tmp_path / "repo"
+    location.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=location, check=True)
+    (location / "film.nwgraph").write_bytes(b"authored")
+    subprocess.run(["git", "add", "film.nwgraph"], cwd=location, check=True)
+    subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@invalid.local",
+                    "commit", "-qm", "fixture"], cwd=location, check=True)
+    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=location, text=True).strip()
+    assert measure._tracked_source(location, "film.nwgraph", revision) == ("film.nwgraph", b"authored")
+    (location / "film.nwgraph").write_bytes(b"unbound")
+    with pytest.raises(nw13_evidence.EvidenceError, match="differs"):
+        measure._tracked_source(location, "film.nwgraph", revision)
+    with pytest.raises(nw13_evidence.EvidenceError, match="tracked"):
+        measure._tracked_source(location, "../not-owned.nwgraph", revision)

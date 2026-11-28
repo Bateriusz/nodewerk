@@ -1,3 +1,7 @@
 *.hlsl text eol=lf
 *.nwgraph text eol=lf
 *.txt text eol=lf
+# Film provenance and image sidecars bind exact fixture bytes on every OS.
+fixtures/nw13/*.json text eol=lf
+fixtures/nw13/evidence/*.json text eol=lf
+fixtures/nw13/**/*.ppm -text

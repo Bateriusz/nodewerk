@@ -77,7 +77,11 @@ Scene composition, mesh aggregation and solid CSG are distinct:
 `tools/nw13_geometry.py` is the reference evaluator. Bounds are conservative
 axis-aligned boxes: a bound may be larger than the exact surface but never
 excludes a reachable point. Admission rejects excessive nodes, recursion,
-repetition, generated primitives and memory before evaluation. Reference-point,
+repetition, generated primitives and memory before evaluation. The common CPU
+and shader marches share conservative field gradient bounds over each clipped
+ray interval; strong displacement or deformation exceeding the film profile's
+gradient limit is diagnosed before export. A public bounded march can
+distinguish exhausted steps from a geometric miss. Reference-point,
 CSG identity, clean-run seed and bounds tests live in
 `tests/test_nw13_geometry.py`.
 
@@ -123,12 +127,20 @@ geometry to stable object identities. `tools/nw13_scene.py` provides:
 * fixed-tick transport with freeze, reverse, resume, cut notification and a
   declared one-shot cue policy that never duplicates a cue in one generation.
 
+The film compiler derives one exact integer timeline for shader action,
+camera cuts and audio cue bindings, including authored tick-zero cues. Studio
+and the common standalone exporter use the same graph-aware NWAS preparation;
+neither substitutes the source note's action tick for its presentation onset.
+
 ## 6. Common rendering and inline ray queries
 
 The film graph connects a named geometry library to `nw.shader.film`,
 `nw.render.film` and `nw.render.present`. The library contains the source
 solids and their dependencies. The shared optimizer and offline compiler
-specialize the film pass from those nodes. Studio can preview the graph through
+specialize the film pass from those nodes. The checked-in graph is the
+authoritative editable runtime input. Its geometry and scene companion JSON
+files are import inputs, not substitutions during evidence generation.
+Studio can preview the graph through
 the existing Windows package host or the CPU reference renderer.
 
 The SM 6.0 common compute pass traces bounded solids against the current
@@ -254,7 +266,8 @@ The bounded Work Graphs experiment is recorded in
 [`benchmarks/nw13/work-graph-experiment.v1.json`](../benchmarks/nw13/work-graph-experiment.v1.json).
 The conventional and Work Graphs arms route 1,024 deterministic candidates
 through the same visibility and shading functions. Each compares all output
-slots with a CPU oracle. The predeclared criterion requires a median GPU
+slots with a CPU oracle after explicitly invalidating the previous values
+outside the measured GPU interval. The predeclared criterion requires a median GPU
 dispatch time below 95% of the conventional arm, exact output and at most
 32 MiB of backing memory. The Windows runner logs hosted WARP baseline
 execution and leaves Work Graphs adoption pending until a matched device run.
@@ -291,7 +304,13 @@ unexecuted smoke, and independent rebuild/provenance and validation-bundle
 integrity are checked in hosted CI. The artifact runner resolves the measured
 commit from the clean checkout and retains the historical implementation base
 as a separate field. It compares independently linked outputs and their
-manifests across isolated CMake and DXC cache roots.
+manifests across isolated CMake and DXC cache roots. Once the Windows
+artifact runs, it retains exact-dimension finite RGBA32F readbacks and a
+contact sheet across its fixed cuts, cue and transport states. Native image
+checks bind a graph CPU oracle and, when supported, matched common/DXR frames.
+Controlled re-exports test moving-shadow and off-camera material response;
+two frames at identical frozen action must show the camera move. None of
+these hosted checks establishes physical presentation timing or GPU adoption.
 
 Physical GPU/audio qualification continues to use
 [ADR 0009](architecture/0009-validation-and-evidence-lifecycle.md), the

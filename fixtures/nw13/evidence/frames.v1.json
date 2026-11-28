@@ -15,9 +15,9 @@
   },
   "render_cost": {
     "objects": 17,
-    "geometry_nodes": 39,
-    "estimated_evaluation_steps": 2688,
-    "estimated_memory_bytes": 21504,
+    "geometry_nodes": 51,
+    "estimated_evaluation_steps": 3456,
+    "estimated_memory_bytes": 27648,
     "estimated_acceleration_structure_bytes": 9792,
     "startup_ms": null,
     "startup_measurement_status": "unavailable_in_headless_reference"
@@ -26,19 +26,19 @@
     {
       "tick": 0,
       "action_tick": 0,
-      "frozen": false,
       "direction": 1,
+      "frozen": false,
       "generation": 0,
       "flash_active": false,
       "events": [],
       "file": "frames/tick-000000.ppm",
-      "sha256": "sha256:2436fb7466c2e4dc36d3aeb190af8083636b234a7193b9bc2c70e5aa97811990",
+      "sha256": "sha256:3c56822100fa812e3cf0aea618d4d6e01c2fe2dacb4669290dd107cb41adea6c",
       "shot_id": "corridor_approach",
       "cut": false,
       "regions": {
         "center": 0.23616486536410403,
         "left": 0.24180617134556454,
-        "right": 0.2532770564726874
+        "right": 0.2532648163232578
       },
       "region_checks": {
         "center": true,
@@ -49,8 +49,8 @@
     {
       "tick": 96000,
       "action_tick": 96000,
-      "frozen": false,
       "direction": 1,
+      "frozen": false,
       "generation": 0,
       "flash_active": false,
       "events": [
@@ -64,13 +64,13 @@
         }
       ],
       "file": "frames/tick-096000.ppm",
-      "sha256": "sha256:f1937a4d222b94f5cb140e6339e862f44805668cf56019f2e3694f8ecb5ef754",
+      "sha256": "sha256:b909b4ddde453574a07c3ae0575531e692bb3d734c253043f93c83c49e7d3cf4",
       "shot_id": "corridor_approach",
       "cut": false,
       "regions": {
         "center": 0.2366063016309599,
         "left": 0.24247567413304702,
-        "right": 0.23675557510470466
+        "right": 0.23672771094348727
       },
       "region_checks": {
         "center": true,
@@ -81,8 +81,8 @@
     {
       "tick": 120000,
       "action_tick": 120000,
-      "frozen": true,
       "direction": 1,
+      "frozen": true,
       "generation": 0,
       "flash_active": false,
       "events": [
@@ -110,8 +110,8 @@
     {
       "tick": 123200,
       "action_tick": 120000,
-      "frozen": true,
       "direction": 1,
+      "frozen": true,
       "generation": 0,
       "flash_active": false,
       "events": [],
@@ -133,8 +133,8 @@
     {
       "tick": 144000,
       "action_tick": 139200,
-      "frozen": false,
       "direction": 1,
+      "frozen": false,
       "generation": 0,
       "flash_active": false,
       "events": [
@@ -162,8 +162,8 @@
     {
       "tick": 148800,
       "action_tick": 144000,
-      "frozen": false,
       "direction": 1,
+      "frozen": false,
       "generation": 0,
       "flash_active": true,
       "events": [
@@ -177,13 +177,13 @@
         }
       ],
       "file": "frames/tick-148800.ppm",
-      "sha256": "sha256:b0777af8c81d8c886e3577318e419f0c5d2ffe924ab56eaa36bb3c8d50243c79",
+      "sha256": "sha256:bcc8435d9a7df134df8c967b1c86c61251dcbb6de4f312408191e9bf4ea206c4",
       "shot_id": "corridor_approach",
       "cut": false,
       "regions": {
-        "center": 0.47063140661727426,
-        "left": 0.30693684232169216,
-        "right": 0.3618098375955857
+        "center": 0.4704809885412496,
+        "left": 0.3068787574800456,
+        "right": 0.3614758049373979
       },
       "region_checks": {
         "center": true,
@@ -194,8 +194,8 @@
     {
       "tick": 192000,
       "action_tick": 187200,
-      "frozen": false,
       "direction": 1,
+      "frozen": false,
       "generation": 0,
       "flash_active": false,
       "events": [
@@ -223,8 +223,8 @@
     {
       "tick": 240000,
       "action_tick": 235200,
-      "frozen": false,
       "direction": -1,
+      "frozen": false,
       "generation": 0,
       "flash_active": false,
       "events": [
@@ -261,13 +261,13 @@
     {
       "tick": 252000,
       "action_tick": 223200,
-      "frozen": false,
       "direction": -1,
+      "frozen": false,
       "generation": 0,
       "flash_active": false,
       "events": [],
       "file": "frames/tick-252000.ppm",
-      "sha256": "sha256:ff63cf3a5aaaad5fa27693eac5ed80b0c8a208378f761df4b04f223e93de0042",
+      "sha256": "sha256:14f2d2691c37a3f35efc8e5b50de505402bbe271b92e1701af791639f4fae28d",
       "shot_id": "room_turn",
       "cut": false,
       "regions": {
@@ -284,8 +284,8 @@
     {
       "tick": 264000,
       "action_tick": 211200,
-      "frozen": false,
       "direction": 1,
+      "frozen": false,
       "generation": 0,
       "flash_active": false,
       "events": [
@@ -297,12 +297,12 @@
         }
       ],
       "file": "frames/tick-264000.ppm",
-      "sha256": "sha256:d732675c4071034f24a2f20d46c43276deade08c721067a523e0fc71dc13fe01",
+      "sha256": "sha256:d9ea6e533c12ad8051d17a11f80aa5ec8bfaf34e9a1956b913d4af63809882bc",
       "shot_id": "room_turn",
       "cut": false,
       "regions": {
         "center": 0.2368832025507528,
-        "left": 0.2273345751454286,
+        "left": 0.22727588871524404,
         "right": 0.2202131751906504
       },
       "region_checks": {
@@ -314,13 +314,13 @@
     {
       "tick": 288000,
       "action_tick": 235200,
-      "frozen": false,
       "direction": 1,
+      "frozen": false,
       "generation": 0,
       "flash_active": false,
       "events": [],
       "file": "frames/tick-288000.ppm",
-      "sha256": "sha256:4a403a0ffe49f5c590f7f063cdcb0f074a5175a3fe13ad45f8c54825544b1067",
+      "sha256": "sha256:3bd93cf8ba9d2234e2dd7f8388dbbf9b6c710658c411907e77916b2950a26b2d",
       "shot_id": "room_turn",
       "cut": false,
       "regions": {
@@ -359,7 +359,7 @@
     {
       "tick": 0,
       "region": "right",
-      "value": 0.2532770564726874,
+      "value": 0.2532648163232578,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -389,7 +389,7 @@
     {
       "tick": 96000,
       "region": "right",
-      "value": 0.23675557510470466,
+      "value": 0.23672771094348727,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -489,7 +489,7 @@
     {
       "tick": 148800,
       "region": "center",
-      "value": 0.47063140661727426,
+      "value": 0.4704809885412496,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -499,7 +499,7 @@
     {
       "tick": 148800,
       "region": "left",
-      "value": 0.30693684232169216,
+      "value": 0.3068787574800456,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -509,7 +509,7 @@
     {
       "tick": 148800,
       "region": "right",
-      "value": 0.3618098375955857,
+      "value": 0.3614758049373979,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -619,7 +619,7 @@
     {
       "tick": 264000,
       "region": "left",
-      "value": 0.2273345751454286,
+      "value": 0.22727588871524404,
       "expected": {
         "minimum_luma": 0.01,
         "maximum_luma": 1.5
@@ -670,18 +670,17 @@
   "region_checks_passed": true,
   "contact_sheet": {
     "file": "contact_sheet.ppm",
-    "sha256": "sha256:b518a25ccd0043eec5cf8f2175f5bfedd48f3e6e8eb2983ffd480e539019c960"
+    "sha256": "sha256:439d581d19c81b183d84722ea6fa3148be18ad0aba9fde7f6fd47f1cf39d3d2f"
   },
   "sources": {
     "graph": {
       "path": "fixtures/nw13/hotel_corridor.nwgraph",
-      "sha256": "sha256:b82adeec12296cf3bdd110c2252fe075997173fb653f9514ee012dd9a758de73",
-      "semantic_hash": "sha256:v1:0ae64ae4c8b8d0efb451c032198e8344ab6651a69449fdcbc2bd8ab016f7cefa"
+      "sha256": "sha256:dae53c91594430041bad178cb1f5f1602e4973237fe437e22a7a93beee89a730",
+      "semantic_hash": "sha256:v1:b29c063eeab2e7283ba04029453719b6366cfae6db27fd321927e6d27c9ee34a"
     },
     "geometry": {
-      "path": "fixtures/nw13/geometry_room.json",
-      "sha256": "sha256:a7861129d21a4e08624d53a1a7c075c2f8480fc487c576b6aebc45ece63f825b",
-      "semantic_hash": "sha256:v1:59dba3c648f0a3f4b8421f4cf7cb313a8e7fe7148e928b7cfb3bc3f6602d715a",
+      "source": "graph",
+      "semantic_hash": "sha256:v1:6f712d2326d83fa1f27364acfe87a83fa7837311672fb2f25b49e9b27dc263d0",
       "bounds": {
         "minimum": [
           -5.858118672887135,
@@ -695,16 +694,16 @@
         ]
       },
       "stats": {
-        "nodes": 39,
+        "nodes": 51,
         "repetition_instances": 4,
         "generated_primitives": 24,
-        "evaluation_steps": 2688,
-        "memory_bytes": 21504
+        "evaluation_steps": 3456,
+        "memory_bytes": 27648
       }
     },
     "scene": {
-      "path": "fixtures/nw13/hotel_corridor.scene.json",
-      "sha256": "sha256:acd60fadb8caab0ad5c2fb941fa7d04e281c37d2280006b7beb64a4232d78433",
+      "source": "graph",
+      "sha256": "sha256:62466bb9459ac7074309e758ddc949e470905e2a2e7a596c3daaf1a6a7abf886",
       "objects": 17,
       "shots": [
         "corridor_approach",
@@ -717,6 +716,16 @@
       "semantic_hash": "sha256:v1:33737ce61b7c7ad9fb4b195b4ec9f9b30475bc5e88f5b6e36838d491dbee714c",
       "notes": 30,
       "nwas_sha256": "sha256:0adedf184f606f0e17114128f26dbb5deb0a825900659f412bd30be1f6721c7f"
+    },
+    "import_inputs": {
+      "geometry": {
+        "path": "fixtures/nw13/geometry_room.json",
+        "sha256": "sha256:a7861129d21a4e08624d53a1a7c075c2f8480fc487c576b6aebc45ece63f825b"
+      },
+      "scene": {
+        "path": "fixtures/nw13/hotel_corridor.scene.json",
+        "sha256": "sha256:acd60fadb8caab0ad5c2fb941fa7d04e281c37d2280006b7beb64a4232d78433"
+      }
     }
   }
 }

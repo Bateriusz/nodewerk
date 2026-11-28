@@ -309,7 +309,9 @@ def test_recorded_lowering_and_artifact_evidence_is_internally_consistent() -> N
     assert work_graph["satisfies_completion"] is False
     bundle = json.loads((REPO_ROOT / "benchmarks" / "nw13" / "artifact-bundle.v1.json").read_text(encoding="utf-8"))
     assert evidence.validate_bundle(bundle) == []
-    assert bundle["common"]["revision"] == "1c9e1559c8d43530c7b213461c6719b6aa43ae35"
+    assert bundle["revision"] is bundle["common"]["revision"] is None
+    assert bundle["implementation_base"] == "1c9e1559c8d43530c7b213461c6719b6aa43ae35"
+    assert bundle["source_state"] == "tracked_expectations_pending_native"
     assert bundle["independent_builds"] is False
     assert bundle["common"]["distribution_bytes"] is None
     assert bundle["common"]["shader_bytes"] is None
@@ -324,6 +326,7 @@ def test_recorded_lowering_and_artifact_evidence_is_internally_consistent() -> N
         assert artifact["smoke"]["status"] == "unavailable"
     ledger = json.loads((REPO_ROOT / "benchmarks" / "nw13" / "matched-arms.v1.json").read_text(encoding="utf-8"))
     assert ledger["unavailable_observations_explicit"] is True
+    assert ledger["revision"] is None
     for arm in ledger["arms"]:
         assert arm["available"] is False
         assert "gpu_time_us" in arm["unavailable"]
@@ -333,6 +336,8 @@ def test_recorded_lowering_and_artifact_evidence_is_internally_consistent() -> N
         assert arm["metrics"]["shader_bytes"] is None
     status = json.loads((REPO_ROOT / "benchmarks" / "nw13" / "evidence-status.v1.json").read_text(encoding="utf-8"))
     assert status["pending_is_not_pass"] is True
+    assert status["revision"] is None
+    assert status["implementation_base"] == bundle["implementation_base"]
     assert status["observations"]["performance"]["status"] == "unavailable"
     assert status["optional_decisions"]["omm"] == "omit"
 

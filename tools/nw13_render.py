@@ -147,6 +147,10 @@ class Renderer:
             identifier: (bounds.minimum, bounds.maximum)
             for identifier, bounds in self.geometry_bounds.items()
         })
+        self.field_domains = {key: domain.expanded(4.0 * epsilon)
+                              for key, domain in self.geometry_bounds.items()}
+        self.field_lipschitz = {key: geometry.field_lipschitz(node, self.field_domains[key])
+                                 for key, node in self.geometry_index.items()}
         self.width = width
         self.height = height
         self.max_steps = max_steps
@@ -205,21 +209,21 @@ class Renderer:
         return (-b - root, -b + root)
 
     def _march_node(self, node: Mapping[str, Any], origin: Sequence[float], direction: Sequence[float], max_distance: float) -> tuple[float, tuple[float, float, float]] | None:
-        distance = 0.0
-        point = (origin[0], origin[1], origin[2])
+        identifier = node["id"]
+        interval = geometry.ray_interval(self.field_domains[identifier], origin, direction, 0.0, max_distance)
+        if interval is None:
+            return None
+        distance, end = interval
+        lipschitz = self.field_lipschitz[identifier]
         for _ in range(self.max_steps):
+            point = tuple(origin[i] + direction[i] * distance for i in range(3))
             value = geometry.evaluate_node(node, point)
             if abs(value) <= self.epsilon:
                 return distance, point
-            step = max(abs(value) * 0.8, self.epsilon)
-            distance += step
-            if distance > max_distance:
-                return None
-            point = (
-                point[0] + direction[0] * step,
-                point[1] + direction[1] * step,
-                point[2] + direction[2] * step,
-            )
+            following = distance + geometry.bounded_field_step(value, lipschitz)
+            if following > end or following <= distance:
+                break
+            distance = following
         return None
 
     def trace(self, origin: Sequence[float], direction: Sequence[float], *, ignore: str | None = None, max_distance: float | None = None) -> Hit | None:
@@ -260,7 +264,7 @@ class Renderer:
         return best
 
     def _local_normal(self, node: Mapping[str, Any], point: Sequence[float]) -> tuple[float, float, float]:
-        delta = max(self.epsilon * 2.0, 1.0e-3)
+        delta = self.epsilon * 2.0
         dx = geometry.evaluate_node(node, (point[0] + delta, point[1], point[2])) - geometry.evaluate_node(node, (point[0] - delta, point[1], point[2]))
         dy = geometry.evaluate_node(node, (point[0], point[1] + delta, point[2])) - geometry.evaluate_node(node, (point[0], point[1] - delta, point[2]))
         dz = geometry.evaluate_node(node, (point[0], point[1], point[2] + delta)) - geometry.evaluate_node(node, (point[0], point[1], point[2] - delta))
@@ -301,7 +305,7 @@ class Renderer:
                 continue
             to_light = _sub(light.position, hit.position)
             distance = _length(to_light)
-            if distance >= light.range:
+            if not self.epsilon <= distance < light.range:
                 continue
             direction = _normalize(to_light)
             ndotl = max(0.0, _dot(normal, direction))

@@ -2320,14 +2320,15 @@ def _build_graph_derived_package(
                             )
         return None
 
+    film_clock = "nw.shader.film" in used_operators
     parameters: list[nwp.ParameterRecord] = [
         nwp.ParameterRecord(
             parameter_id=1,
             name="time",
-            type="float",
+            type="uint" if film_clock else "float",
             phase="frame",
             component_count=1,
-            value=struct.pack("<f", 0.0),
+            value=bytes(4),
             timeline_start_frame=0,
             timeline_end_frame=0,
             timeline_step=0,
@@ -3098,12 +3099,24 @@ def _finalize_size_accounting(
             )
 
 
-def read_audio_song(path: str) -> bytes:
+def read_audio_song(path: str, *, film_document: nw03.GraphDocument | None = None) -> bytes:
     document = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError("procedural song must be a JSON object")
     if document.get("format") == "nw13.instrument-sequence":
+        if film_document is not None:
+            import nw13_film
+
+            return nw13_film.compile_film_song(document, film_document)
         import nw13_audio
 
         return nw13_audio.compile_to_nwas(document)
+    if film_document is not None and any(
+        node.operator_id == "nw.shader.film"
+        and json.loads(node.params["production"][0]).get("audio_cue_bindings")
+        for node in nw03._reachable_shader_roots(film_document)
+    ):
+        raise ValueError("authored film cue bindings require a versioned instrument sequence with named effect notes")
     return audio_song.compile_song(document)
 
 
@@ -3136,13 +3149,16 @@ def export_graph(
         or settings.target_profile != nwp.COMMON_PROFILE_ID or settings.optional_profiles or settings.allow_optional_profiles
     ):
         raise ExportError("NW-13 inline ray requires a separate specialized Windows export using the common command ABI")
+    graph_path = Path(graph_path)
+    output_directory = Path(output_directory)
+    document = nw03.load_graph(graph_path)
     audio_payload = b""
     if settings.audio_song_path or audio_song_payload is not None:
         if settings.frozen_embedded_specialization:
             raise ExportError("audio requires the full versioned package reader")
         try:
             if audio_song_payload is None:
-                audio_payload = read_audio_song(settings.audio_song_path)
+                audio_payload = read_audio_song(settings.audio_song_path, film_document=document)
             else:
                 audio_song.decode_song(audio_song_payload)
                 audio_payload = audio_song_payload
@@ -3152,9 +3168,6 @@ def export_graph(
             raise ExportError("audio export requires a configured Windows player template")
         if settings.player_template and allow_test_payloads:
             raise ExportError("audio executable cannot use a test player template")
-    graph_path = Path(graph_path)
-    output_directory = Path(output_directory)
-    document = nw03.load_graph(graph_path)
     if film_optional_provenance:
         film_roots = nw03._reachable_shader_roots(document)
         if len(film_roots) != 1 or film_roots[0].operator_id != "nw.shader.film":

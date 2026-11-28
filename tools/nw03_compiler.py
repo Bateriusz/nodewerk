@@ -2944,7 +2944,10 @@ def compile_generated_shader(
     pinned_dxc_version: str = PINNED_DXC_VERSION,
     allow_unpinned_dxc: bool = False,
     allow_test_payloads: bool = False,
+    qualified_shader_model: str | None = None,
 ) -> dict[str, Any]:
+    if qualified_shader_model and (qualified_shader_model != shader.target or allow_test_payloads):
+        raise CompilerError("qualified compile must bind the exact real shader target")
     measured_version = query_dxc_version(dxc_executable)
     if not allow_test_payloads and str(dxc_executable).lower().endswith(".py"):
         raise CompilerError(
@@ -2997,6 +3000,7 @@ def compile_generated_shader(
             blob,
             allow_test_container=allow_test_payloads,
             reject_debug_reflection=not allow_test_payloads,
+            **({"qualified_shader_model": qualified_shader_model} if qualified_shader_model else {}),
         )
     except Exception as exc:
         raise CompilerError(
@@ -3130,14 +3134,22 @@ def _build_package(
             size_bytes=OUTPUT_BUFFER_BYTES,
         ),
     ]
+    film_shaders = [
+        shader for shader in generated
+        if shader.specialization_id in document.nodes
+        and document.nodes[shader.specialization_id].operator_id == "nw.shader.film"
+    ]
+    film_clock = bool(film_shaders)
+    if film_clock and len(generated) != len(film_shaders):
+        raise CompilerError("film integer clock cannot share a root-constant block with legacy float-time shaders")
     parameters = [
         ParameterRecord(
             parameter_id=1,
             name="time",
-            type="float",
+            type="uint" if film_clock else "float",
             phase="frame",
             component_count=1,
-            value=struct.pack("<f", 0.0),
+            value=bytes(4),
             timeline_start_frame=0,
             timeline_end_frame=0,
             timeline_step=0,

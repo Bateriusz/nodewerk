@@ -235,3 +235,20 @@ def test_displacement_bounds_after_nonuniform_scaling() -> None:
     assert prepared.evaluate((105, 0, 0)) < 0
     assert prepared.bounds.contains((105, 0, 0))
     assert prepared.bounds.maximum[0] == pytest.approx(110)
+
+
+
+def test_displaced_field_uses_a_conservative_step_and_reports_exhaustion():
+    sphere = {"id": "s", "operator": "nw.geom.sphere", "version": geometry.OPERATOR_VERSION,
+              "parameters": {"radius": 1}}
+    displaced = {"id": "rough", "operator": "nw.geom.displace", "version": geometry.OPERATOR_VERSION,
+                 "parameters": {"amplitude": 0.35, "frequency": 20, "seed": 9}, "children": [sphere]}
+    scene = geometry.prepare({"schema_version": 1, "root": displaced})
+    origin, direction = (-1.354, 1.054, 0), (1, 0, 0)
+    assert scene.evaluate((-0.565, 1.054, 0)) > 0
+    assert scene.evaluate((-0.553, 1.054, 0)) < 0
+    exhausted = geometry.ray_march(scene, origin, direction, max_steps=128, epsilon=0.001)
+    assert not exhausted.hit and exhausted.exhausted
+    hit = geometry.ray_march(scene, origin, direction, max_steps=256, epsilon=0.001)
+    assert hit.hit and not hit.exhausted
+    assert -0.565 < hit.point[0] < -0.553

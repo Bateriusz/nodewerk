@@ -1,7 +1,7 @@
 {
   "format": "nw13.matched-arms",
   "version": 1,
-  "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+  "revision": null,
   "same_revision": true,
   "arms": [
     {
@@ -29,35 +29,7 @@
         "image_max_abs_error": null,
         "image_rmse": null
       }
-    },
-    {
-      "arm": "optional",
-      "available": false,
-      "unavailable": [
-        "distribution_bytes",
-        "shader_bytes",
-        "startup_ms",
-        "committed_memory_bytes",
-        "vram_bytes",
-        "cpu_submit_us",
-        "gpu_time_us",
-        "image_max_abs_error",
-        "image_rmse"
-      ],
-      "metrics": {
-        "distribution_bytes": null,
-        "shader_bytes": null,
-        "startup_ms": null,
-        "committed_memory_bytes": null,
-        "vram_bytes": null,
-        "cpu_submit_us": null,
-        "gpu_time_us": null,
-        "image_max_abs_error": null,
-        "image_rmse": null
-      }
     }
   ],
-  "unavailable_observations_explicit": true,
-  "production_id": "nw13.hotel_corridor",
-  "note": "physical startup/memory/CPU/GPU/image/build-size observations are unavailable in this worktree and remain explicit nulls"
+  "unavailable_observations_explicit": true
 }

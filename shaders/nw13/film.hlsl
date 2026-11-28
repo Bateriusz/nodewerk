@@ -1,5 +1,5 @@
 // Bounded film compute pass. Emits the ordinary PackagePlayer RGBA32F buffer.
-cbuffer NwParams : register(b0) { float4 params; }
+cbuffer NwParams : register(b0) { uint presentationTick; }
 RWByteAddressBuffer outputImage : register(u0);
 #ifdef INLINE_RAY
 RaytracingAccelerationStructure objectBounds : register(t0);
@@ -8,7 +8,7 @@ RaytracingAccelerationStructure objectBounds : register(t0);
 /* FILM_SETTINGS */
 
 struct Camera { float3 eye, target, up; float4 lens; };
-struct ObjectFrame { float4x4 inverse; float3 low, high; };
+struct ObjectFrame { float4x4 inverse; float3 low, high; float stepScale; };
 struct Material { float3 base, emission, response; };
 struct Light { float3 position, color; float intensity, range; };
 struct Hit { float distance; float3 position, normal; uint objectId; };
@@ -60,17 +60,22 @@ float noise3(float3 p,uint seed) {
 /* FILM_DATA */
 
 bool traceObject(ObjectFrame pose,uint i,float3 origin,float3 ray,float begin,inout Hit hit) {
-    ObjectFrame pose=objects[i];
     float3 localOrigin=mul(pose.inverse,float4(origin,1)).xyz;
     float3 raw=mul(pose.inverse,float4(ray,0)).xyz;
     float scale=length(raw);
     float3 dir=raw/scale;
-    float3 safeDir=float3(abs(dir.x)<1e-9?1e-9:dir.x,
-                          abs(dir.y)<1e-9?1e-9:dir.y,abs(dir.z)<1e-9?1e-9:dir.z);
-    float3 a=(pose.low-localOrigin)/safeDir, b=(pose.high-localOrigin)/safeDir;
-    float3 low=min(a,b), high=max(a,b);
-    float t=max(begin*scale,max(low.x,max(low.y,low.z)));
-    float end=min(hit.distance*scale,min(high.x,min(high.y,high.z)));
+    float t=begin*scale, end=hit.distance*scale;
+    [unroll]
+    for (uint iAxis=0;iAxis<3;++iAxis) {
+        if (dir[iAxis]==0) {
+            if (localOrigin[iAxis]<pose.low[iAxis] || localOrigin[iAxis]>pose.high[iAxis]) return false;
+        } else {
+            float a=(pose.low[iAxis]-localOrigin[iAxis])/dir[iAxis];
+            float b=(pose.high[iAxis]-localOrigin[iAxis])/dir[iAxis];
+            t=max(t,min(a,b));
+            end=min(end,max(a,b));
+        }
+    }
     [loop]
     for (uint step=0;step<TRACE_STEPS && t<end;++step) {
         float3 p=localOrigin+dir*t;
@@ -78,16 +83,22 @@ bool traceObject(ObjectFrame pose,uint i,float3 origin,float3 ray,float begin,in
         if (d<=EPS) {
             hit.distance=t/scale;
             hit.position=origin+ray*hit.distance;
-            const float3 e=float3(2*EPS,0,0);
-            float3 normal=float3(
-                objectField(i,p+e.xyy)-objectField(i,p-e.xyy),
-                objectField(i,p+e.yxy)-objectField(i,p-e.yxy),
-                objectField(i,p+e.yyx)-objectField(i,p-e.yyx));
+            float3 normal=0;
+            [loop]
+            for (uint sampleIndex=0;sampleIndex<6;++sampleIndex) {
+                uint axis=sampleIndex/2;
+                float direction=sampleIndex%2==0?1:-1;
+                float3 q=p;
+                q[axis]+=direction*2*EPS;
+                normal[axis]+=direction*objectField(i,q);
+            }
             hit.normal=normalize(mul(normal,(float3x3)pose.inverse));
             hit.objectId=i;
             return true;
         }
-        t+=max(d*0.75,EPS);
+        float following=t+d*pose.stepScale;
+        if (following<=t) break;
+        t=following;
     }
     return false;
 }
@@ -126,7 +137,7 @@ bool trace(ObjectFrame objects[OBJECT_COUNT],float3 origin,float3 ray,
 float3 miss(float3 ray) {
     return MISS_RADIANCE+max(0,ray.y)*float3(0.10,0.14,0.22);
 }
-float3 direct(ObjectFrame objects[OBJECT_COUNT],Hit hit,float3 ray,float t) {
+float3 direct(ObjectFrame objects[OBJECT_COUNT],Hit hit,float3 ray,uint t) {
     Material m=materialAt(hit.objectId);
     float3 color=0.025+m.base*0.04+m.emission;
     [loop]
@@ -148,7 +159,7 @@ float3 direct(ObjectFrame objects[OBJECT_COUNT],Hit hit,float3 ray,float t) {
     }
     return color;
 }
-float3 scenePixel(int2 pixel,Camera cam,float t,float action,ObjectFrame objects[OBJECT_COUNT]) {
+float3 scenePixel(int2 pixel,Camera cam,uint t,uint action,ObjectFrame objects[OBJECT_COUNT]) {
     float2 uv=(float2(pixel)+0.5)/float2(FRAME_WIDTH,FRAME_HEIGHT);
     float3 forward=normalize(cam.target-cam.eye), right=normalize(cross(forward,cam.up));
     float3 up=normalize(cross(right,forward));
@@ -180,7 +191,7 @@ groupshared float3 tile[TILE_WIDTH*TILE_HEIGHT];
 
 [numthreads(GROUP_X,GROUP_Y,1)]
 void FILM_ENTRY(uint3 pixel:SV_DispatchThreadID, uint3 group:SV_GroupID, uint lane:SV_GroupIndex) {
-    float t=params.x, action=actionAt(t);
+    uint t=min(presentationTick,(uint)FILM_DURATION_TICKS), action=actionAt(t);
     Camera cam=cameraAt(t);
     ObjectFrame objects[OBJECT_COUNT];
     setupObjects(action,objects);
@@ -208,7 +219,9 @@ void FILM_ENTRY(uint3 pixel:SV_DispatchThreadID, uint3 group:SV_GroupID, uint la
         }
     }
     color+=bloom*(BLOOM_GAIN/max(neighbors,1u));
+#if TONEMAP_ENABLED
     color=max(color,0)*EXPOSURE;
     color=pow(color/(1+color),1.0/GAMMA);
+#endif
     outputImage.Store4((pixel.x+FRAME_WIDTH*pixel.y)*16,asuint(float4(color,1)));
 }

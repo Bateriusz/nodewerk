@@ -1,12 +1,19 @@
 {
   "format": "nw13.transport-evidence",
   "version": 1,
+  "declared_states": [
+    "resume",
+    "freeze",
+    "cut",
+    "reverse",
+    "resume"
+  ],
   "trace": [
     {
       "tick": 0,
       "action_tick": 0,
-      "frozen": false,
       "direction": 1,
+      "frozen": false,
       "generation": 0,
       "flash_active": false,
       "events": []
@@ -14,8 +21,8 @@
     {
       "tick": 96000,
       "action_tick": 96000,
-      "frozen": false,
       "direction": 1,
+      "frozen": false,
       "generation": 0,
       "flash_active": false,
       "events": [
@@ -32,8 +39,8 @@
     {
       "tick": 120000,
       "action_tick": 120000,
-      "frozen": true,
       "direction": 1,
+      "frozen": true,
       "generation": 0,
       "flash_active": false,
       "events": [
@@ -47,8 +54,8 @@
     {
       "tick": 123200,
       "action_tick": 120000,
-      "frozen": true,
       "direction": 1,
+      "frozen": true,
       "generation": 0,
       "flash_active": false,
       "events": []
@@ -56,8 +63,8 @@
     {
       "tick": 144000,
       "action_tick": 139200,
-      "frozen": false,
       "direction": 1,
+      "frozen": false,
       "generation": 0,
       "flash_active": false,
       "events": [
@@ -71,8 +78,8 @@
     {
       "tick": 148800,
       "action_tick": 144000,
-      "frozen": false,
       "direction": 1,
+      "frozen": false,
       "generation": 0,
       "flash_active": true,
       "events": [
@@ -89,8 +96,8 @@
     {
       "tick": 192000,
       "action_tick": 187200,
-      "frozen": false,
       "direction": 1,
+      "frozen": false,
       "generation": 0,
       "flash_active": false,
       "events": [
@@ -104,8 +111,8 @@
     {
       "tick": 240000,
       "action_tick": 235200,
-      "frozen": false,
       "direction": -1,
+      "frozen": false,
       "generation": 0,
       "flash_active": false,
       "events": [
@@ -128,8 +135,8 @@
     {
       "tick": 252000,
       "action_tick": 223200,
-      "frozen": false,
       "direction": -1,
+      "frozen": false,
       "generation": 0,
       "flash_active": false,
       "events": []
@@ -137,8 +144,8 @@
     {
       "tick": 264000,
       "action_tick": 211200,
-      "frozen": false,
       "direction": 1,
+      "frozen": false,
       "generation": 0,
       "flash_active": false,
       "events": [
@@ -153,8 +160,8 @@
     {
       "tick": 288000,
       "action_tick": 235200,
-      "frozen": false,
       "direction": 1,
+      "frozen": false,
       "generation": 0,
       "flash_active": false,
       "events": []

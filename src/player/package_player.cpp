@@ -498,7 +498,8 @@ void WriteTimelineTick(std::uint32_t* words,
             const float value = static_cast<float>(tick);
             std::memcpy(component_destination, &value, sizeof(value));
         } else if (tick_kind == 1u) {
-            const std::uint32_t value = static_cast<std::uint32_t>(tick);
+            const std::uint32_t value = static_cast<std::uint32_t>(
+                (std::min)(tick, static_cast<std::uint64_t>(UINT32_MAX)));
             std::memcpy(component_destination, &value, sizeof(value));
         } else if (tick_kind == 2u) {
             const std::int32_t value = static_cast<std::int32_t>(tick);
@@ -1468,6 +1469,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                     op.time_byte_offset < 0) {
                     op.time_byte_offset =
                         static_cast<std::int32_t>(byte_offset);
+                    op.time_tick_kind = tick_kind;
                 }
                 if (parameter.name == "nw09.simulation_tick" &&
                     parameter_bytes >= 4u &&
@@ -1861,6 +1863,7 @@ bool PackagePlayer::BuildFrameInstructionPlan() {
                     op.time_byte_offset < 0) {
                     op.time_byte_offset =
                         static_cast<std::int32_t>(byte_offset);
+                    op.time_tick_kind = tick_kind;
                 }
                 if (parameter.name == "nw09.simulation_tick" &&
                     parameter_bytes >= 4u &&
@@ -5020,6 +5023,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
     std::uint32_t package_constant_root = 0u;
     std::uint32_t package_constant_count = 0u;
     std::int32_t package_time_byte_offset = -1;
+    std::uint8_t package_time_tick_kind = 0u;
     std::int32_t package_simulation_tick_byte_offset = -1;
     std::array<std::uint32_t, package::kMaxRootSignatureDwordCost>
         package_constant_values{};
@@ -5239,14 +5243,11 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                         static_cast<std::uint32_t>(
                             package_time_byte_offset) + 4u <=
                             package_constant_count * 4u) {
-                        const float tick_seconds = static_cast<float>(
-                            simulation_tick *
-                            package::kTimelineTicksPerSimulationTick);
-                        std::memcpy(
-                            reinterpret_cast<std::uint8_t*>(
-                                tick_values.data()) +
-                                package_time_byte_offset,
-                            &tick_seconds, sizeof(tick_seconds));
+                        WriteTimelineTick(
+                            tick_values.data(),
+                            static_cast<std::uint32_t>(package_time_byte_offset),
+                            4u, package_time_tick_kind,
+                            simulation_tick * package::kTimelineTicksPerSimulationTick);
                         updated = true;
                     }
                     if (package_simulation_tick_byte_offset >= 0 &&
@@ -5439,6 +5440,7 @@ ExitCode PackagePlayer::ExecuteFrameInstructions(std::uint64_t tick) {
                             timeline_applied = true;
                             package_time_byte_offset =
                                 op.parameter_offsets[entry];
+                            package_time_tick_kind = op.parameter_tick_kinds[entry];
                             break;
                         }
                     }
@@ -7740,11 +7742,9 @@ bool PackagePlayer::ApplyFramePlanForTesting(std::uint64_t tick) {
             if (!timeline_applied && op.time_byte_offset >= 0 &&
                 static_cast<std::uint32_t>(op.time_byte_offset) + 4u <=
                     op.constant_count * 4u) {
-                const float time_value = static_cast<float>(frame_tick);
-                std::memcpy(
-                    reinterpret_cast<std::uint8_t*>(values.data()) +
-                        op.time_byte_offset,
-                    &time_value, sizeof(time_value));
+                WriteTimelineTick(
+                    values.data(), static_cast<std::uint32_t>(op.time_byte_offset),
+                    4u, op.time_tick_kind, frame_tick);
             }
             last_root_constants_ = values;
             last_root_constant_count_ = op.constant_count;

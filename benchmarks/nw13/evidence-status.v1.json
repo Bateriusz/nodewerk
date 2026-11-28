@@ -2,7 +2,7 @@
   "format": "nw13-evidence-status",
   "version": 1,
   "production_id": "nw13.hotel_corridor",
-  "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+  "revision": null,
   "observations": {
     "functional_execution": {
       "status": "contract_implemented",
@@ -43,5 +43,7 @@
     "desktop_ada_representative": "pending",
     "desktop_blackwell_representative": "pending"
   },
-  "pending_is_not_pass": true
+  "pending_is_not_pass": true,
+  "implementation_base": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+  "source_state": "tracked_expectations_pending_native"
 }

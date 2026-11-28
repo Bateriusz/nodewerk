@@ -230,6 +230,7 @@ class RayHit:
     distance: float
     point: Vec3
     steps: int
+    exhausted: bool = False
 
     @property
     def hit(self) -> bool:
@@ -652,6 +653,75 @@ def bounds_node(node: Mapping[str, Any], level: float = 0.0) -> AABB:
     )
 
 
+
+def field_lipschitz(node: Mapping[str, Any], domain: AABB) -> float:
+    """Conservative gradient bound throughout the ray's local clipping box."""
+    op = _operation(node)
+    params = _params(node)
+    children = _require_children(node)
+    if not children:
+        return 1.0
+    if op == "nw.geom.scale":
+        scale = _vec(params["scale"], 3, "scale")
+        child_domain = AABB(tuple(x / k for x, k in zip(domain.minimum, scale)),
+                            tuple(x / k for x, k in zip(domain.maximum, scale)))
+        # The evaluator multiplies by min(scale) and the inverse Jacobian's
+        # norm is 1/min(scale), so anisotropic scaling does not inflate L.
+        return field_lipschitz(children[0], child_domain)
+    if op == "nw.geom.translate":
+        offset = _vec(params["offset"], 3, "offset")
+        child_domain = AABB(tuple(x - d for x, d in zip(domain.minimum, offset)),
+                            tuple(x - d for x, d in zip(domain.maximum, offset)))
+        return field_lipschitz(children[0], child_domain)
+    if op == "nw.geom.rotate":
+        center = _rotate_point(domain.center, params.get("axis", "y"), -params["degrees"])
+        radius = domain.radius
+        return field_lipschitz(children[0], AABB(tuple(x - radius for x in center),
+                                                  tuple(x + radius for x in center)))
+    if op == "nw.geom.repeat":
+        spacing = _vec(params["spacing"], 3, "spacing")
+        counts = params["counts"]
+        return field_lipschitz(children[0], AABB(
+            tuple(x - (n - 1 - n // 2) * k for x, n, k in zip(domain.minimum, counts, spacing)),
+            tuple(x + (n // 2) * k for x, n, k in zip(domain.maximum, counts, spacing)),
+        ))
+    if op in {"nw.geom.twist", "nw.geom.bend"}:
+        axes = (0, 2) if op == "nw.geom.twist" else (0, 1)
+        extents = tuple(max(abs(a), abs(b)) for a, b in zip(domain.minimum, domain.maximum))
+        radial_extent = math.hypot(*(extents[i] for i in axes))
+        angle_slope = math.radians(abs(params["max_degrees"])) / params[
+            "half_height" if op == "nw.geom.twist" else "half_width"]
+        low, high = list(domain.minimum), list(domain.maximum)
+        for axis in axes:
+            low[axis], high[axis] = -radial_extent, radial_extent
+        return (1.0 + angle_slope * radial_extent) * field_lipschitz(children[0], AABB(tuple(low), tuple(high)))
+    if op == "nw.geom.displace":
+        # Each interpolated noise axis changes by at most the maximum
+        # quintic fade derivative, 15/8. Value noise is in [0,1].
+        noise_gradient = (15.0 / 4.0) * math.sqrt(3.0) * params["amplitude"] * params["frequency"]
+        return field_lipschitz(children[0], domain) + noise_gradient
+    # Min/max and smooth min are non-expansive in the max norm of their
+    # arguments. Smooth min's derivative weights are nonnegative and sum to 1.
+    return max(field_lipschitz(child, domain) for child in children)
+
+
+def ray_interval(domain: AABB, origin: Sequence[float], ray: Sequence[float],
+                 start: float, end: float) -> tuple[float, float] | None:
+    for i in range(3):
+        if ray[i] == 0.0:
+            if not domain.minimum[i] <= origin[i] <= domain.maximum[i]:
+                return None
+            continue
+        a, b = ((bound - origin[i]) / ray[i] for bound in (domain.minimum[i], domain.maximum[i]))
+        start, end = max(start, min(a, b)), min(end, max(a, b))
+        if start > end:
+            return None
+    return start, end
+
+
+def bounded_field_step(value: float, lipschitz: float) -> float:
+    return 0.95 * abs(value) / lipschitz
+
 def _prepare_node(
     node: Mapping[str, Any],
     budget: Budget,
@@ -921,15 +991,23 @@ def ray_march(
     if length == 0.0:
         raise GeometryError("ray direction must be non-zero")
     ray = tuple(float(component) / length for component in direction)
-    point = (float(origin[0]), float(origin[1]), float(origin[2]))
-    distance = 0.0
+    initial = tuple(float(value) for value in origin)
+    domain = prepared.bounds.expanded(4.0 * epsilon)
+    interval = ray_interval(domain, initial, ray, 0.0, max_distance)
+    if interval is None:
+        return RayHit(math.inf, initial, 0)
+    distance, end = interval
+    lipschitz = field_lipschitz(prepared.root, domain)
+    point = initial
     for step in range(max_steps):
+        point = tuple(initial[i] + ray[i] * distance for i in range(3))
         value = prepared.evaluate(point)
         if abs(value) <= epsilon:
             return RayHit(distance, point, step + 1)
-        distance += max(abs(value) * 0.75, epsilon)
-        if distance > max_distance:
-            break
-        point = tuple(origin[i] + ray[i] * distance for i in range(3))  # type: ignore[assignment]
-    return RayHit(math.inf, point, max_steps)
-
+        following = distance + bounded_field_step(value, lipschitz)
+        if following > end:
+            return RayHit(math.inf, point, step + 1)
+        if following <= distance:
+            return RayHit(math.inf, point, step + 1, exhausted=True)
+        distance = following
+    return RayHit(math.inf, point, max_steps, exhausted=True)

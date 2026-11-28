@@ -150,7 +150,7 @@
     }
   },
   "production_id": "nw13.hotel_corridor",
-  "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+  "implementation_base": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
   "per_device_decisions": {
     "mesh_shader": {
       "desktop_ada_representative": "pending",

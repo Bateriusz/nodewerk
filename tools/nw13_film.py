@@ -12,6 +12,7 @@ import nw13_scene as scenes
 
 OPERATOR = "nw.shader.film"
 LIBRARY = "nw.geom.library"
+MAX_FIELD_GRADIENT = 8.0
 TEMPLATE = Path(__file__).resolve().parents[1] / "shaders" / "nw13" / "film.hlsl"
 
 
@@ -91,6 +92,9 @@ def read_film(document, root):
     scene = scenes.compile_scene(scene_doc, geometry_bounds={
         key: (value.minimum, value.maximum) for key, value in bounds.items()
     })
+    if (scene.shots[0].start_tick != 0 or scene.shots[-1].end_tick != scene.duration_ticks or any(
+            a.end_tick != b.start_tick for a, b in zip(scene.shots, scene.shots[1:]))):
+        raise ValueError("film shots must be a contiguous, non-overlapping presentation sequence")
     rendering = settings["rendering"]
     width, height = int(rendering["width"]), int(rendering["height"])
     steps = int(rendering["max_steps"])
@@ -103,6 +107,9 @@ def read_film(document, root):
         raise ValueError("film common pass supports one sample and zero or one reflection bounce")
     if not (1 <= len(scene.objects) <= 32 and len(scene.lights) <= 8):
         raise ValueError("film common pass supports 1..32 objects and at most 8 lights")
+    if any(geometry.field_lipschitz(recipes[obj.geometry], bounds[obj.geometry].expanded(4 * epsilon)) > MAX_FIELD_GRADIENT
+           for obj in scene.objects.values()):
+        raise ValueError("film solid gradient bound exceeds the supported trace budget")
     if sum(len(t.keys) for obj in scene.objects.values() for t in obj.tracks.values()) > 128:
         raise ValueError("film common pass animation supports at most 128 object keys")
     emitter = None
@@ -184,46 +191,70 @@ def _track(track, default, tick):
         if b.interpolation == "step" or b.tick == a.tick:
             value = _literal(a.value)
         else:
-            t = f"saturate(({tick}-{a.tick}.0)/{b.tick-a.tick}.0)"
+            weight = f"saturate(float({tick}-{a.tick}u)/{b.tick-a.tick}.0)"
             if b.interpolation == "smoothstep":
-                t = f"smoothstep(0,1,{t})"
-            value = f"lerp({_literal(a.value)},{_literal(b.value)},{t})"
+                weight = f"smoothstep(0,1,{weight})"
+            value = f"lerp({_literal(a.value)},{_literal(b.value)},{weight})"
         compare = "<" if i == len(intervals) - 1 else "<="
-        result = f"({tick}{compare}{b.tick}.0?{value}:{result})"
-    return result
+        result = f"({tick}{compare}{b.tick}u?{value}:{result})"
+    return f"({tick}<={track.keys[0].tick}u?{_literal(track.keys[0].value)}:{result})"
 
 
-def _timeline(scene, settings):
-    commands = settings.get("transport_script", {})
-    spans = []
-    for name, speed in (("freeze_at", 0), ("resume_at", 1), ("reverse_at", -1), ("forward_at", 1)):
-        if name not in commands:
-            continue
-        tick = commands[name]
-        if type(tick) is not int or not 0 <= tick <= scene.duration_ticks:
-            raise ValueError(f"invalid film transport tick for {name}")
-        spans.append((tick, speed))
-    spans.sort()
-    spans.append((scene.duration_ticks, 0))
-    action, presentation, speed = 0, 0, 1
+def film_timing(scene, settings):
+    timeline = scenes.compile_film_timeline(scene, settings.get("transport_script", {}))
     flash = settings.get("flash")
-    cue_tick = None
-    onset = None
-    if flash:
-        cue = next((cue for cue in scene.cues if cue["id"] == flash["cue"]), None)
-        if cue is None or flash["light"] not in scene.lights or type(flash["duration_ticks"]) is not int or flash["duration_ticks"] <= 0:
-            raise ValueError("film flash requires a scene cue, light and positive duration")
-        cue_tick = cue["tick"]
-    segments = []
-    for end, next_speed in spans:
-        stop = action + (end-presentation)*speed
-        if not 0 <= min(action, stop) <= max(action, stop) <= scene.duration_ticks:
-            raise ValueError("film transport would leave its bounded action interval")
-        if onset is None and cue_tick is not None and speed and min(stop, action) <= cue_tick <= max(stop, action):
-            onset = presentation + (cue_tick-action)*speed
-        segments.append((presentation, end, action, speed))
-        action, presentation, speed = stop, end, next_speed
-    return segments, action, onset
+    if not flash:
+        return timeline, ()
+    if (not isinstance(flash, dict) or flash.get("light") not in scene.lights
+            or type(flash.get("duration_ticks")) is not int or flash["duration_ticks"] <= 0
+            or not any(cue["id"] == flash.get("cue") for cue in scene.cues)):
+        raise ValueError("film flash requires a scene cue, light and positive duration")
+    return timeline, timeline.cue_onsets(flash["cue"])
+
+
+def compile_film_song(song, document):
+    """Compile the song against the same authored graph as the visual lowering."""
+    import nw03_compiler
+    import nw13_audio
+
+    roots = [node for node in nw03_compiler._reachable_shader_roots(document)
+             if node.operator_id == OPERATOR]
+    if not roots:
+        return nw13_audio.compile_to_nwas(song)
+    if len(roots) != 1:
+        raise ValueError("procedural film audio requires exactly one reachable film graph")
+    _, _, _, scene, settings, _ = read_film(document, roots[0])
+    timeline, _ = film_timing(scene, settings)
+    bindings = settings.get("audio_cue_bindings", {})
+    if not isinstance(bindings, dict) or any(
+        not isinstance(note_id, str) or not isinstance(cue_id, str)
+        for note_id, cue_id in bindings.items()
+    ):
+        raise ValueError("film audio cue bindings must map note IDs to cue IDs")
+    # Diagnose malformed source before inspecting IDs or cloning tracks.
+    nw13_audio.compile_sequence(song)
+    seen = set()
+    tracks = []
+    for track in song["tracks"]:
+        notes = []
+        for note in track["notes"]:
+            note_id = note.get("id")
+            if note_id not in bindings:
+                notes.append(note)
+                continue
+            if track.get("bus") != "effect" or note_id in seen:
+                raise ValueError(f"film audio binding for {note_id!r} requires one unambiguous effect note")
+            seen.add(note_id)
+            cue_id = bindings[note_id]
+            onsets = timeline.cue_onsets(cue_id)
+            if not onsets:
+                raise ValueError(f"film audio cue {cue_id!r} is not reached by the authored transport")
+            notes.extend({**note, "tick": onset,
+                          "id": note_id if len(onsets) == 1 else f"{note_id}@{onset}"} for onset in onsets)
+        tracks.append({**track, "notes": notes})
+    if bindings.keys() - seen:
+        raise ValueError(f"film audio bindings reference missing notes: {sorted(bindings.keys() - seen)}")
+    return nw13_audio.compile_to_nwas({**song, "tracks": tracks})
 
 
 def _camera(scene):
@@ -234,34 +265,33 @@ def _camera(scene):
         eye = _track(shot.position_track, shot.position, "t")
         target = _track(shot.target_track, shot.target, "t")
         lens = (shot.fov_degrees, shot.aspect, shot.near, shot.far)
-        lines.append(f"Camera shot{i}(float t){{Camera c;"
+        lines.append(f"Camera shot{i}(uint t){{Camera c;"
                      f"c.eye={eye};c.target={target};c.up={_literal(shot.up)};"
                      f"c.lens={_literal(lens)};return c;}}")
-    lines.append("Camera cameraAt(float t){")
+    lines.append("Camera cameraAt(uint t){")
     for i in reversed(range(1, len(scene.shots))):
         shot = scene.shots[i]
-        lines.append(f"if(t>={shot.start_tick}.0){{Camera c=shot{i}(t);")
+        lines.append(f"if(t>={shot.start_tick}u){{Camera c=shot{i}(t);")
         if shot.transition != "cut" and shot.transition_ticks:
-            t = f"saturate((t-{shot.start_tick}.0)/{shot.transition_ticks}.0)"
+            t = f"saturate(float(t-{shot.start_tick}u)/{shot.transition_ticks}.0)"
             if shot.transition == "smoothstep":
                 t = f"smoothstep(0,1,{t})"
-            lines.append(f"Camera prev=shot{i-1}({shot.start_tick}.0);float w={t};"
-                         "c.eye=lerp(prev.eye,c.eye,w);c.target=lerp(prev.target,c.target,w);"
-                         "c.up=lerp(prev.up,c.up,w);c.lens=lerp(prev.lens,c.lens,w);")
+            lines.append(f"if(t<{shot.start_tick+shot.transition_ticks}u){{Camera prev=shot{i-1}(t);float w={t};"
+                         "c.eye=lerp(prev.eye,c.eye,w);c.target=lerp(prev.target,c.target,w);}")
         lines.append("return c;}")
     lines.append("return shot0(t);}")
     return "\n".join(lines)
 
 
-def _objects(scene, bounds, names, epsilon):
+def _objects(scene, bounds, recipes, names, epsilon):
     objects = list(scene.objects.values())
     indices = {obj.id: i for i, obj in enumerate(objects)}
     lines = [f"#define OBJECT_COUNT {len(objects)}"]
     for i, obj in enumerate(objects):
         pos, rot, scale = (_track(obj.tracks.get(f"transform.{attr}"), getattr(obj, attr), "t")
                            for attr in ("position", "rotation", "scale"))
-        lines.append(f"float4x4 local{i}(float t){{return localInverse({pos},{rot},{scale});}}")
-    lines.append("void setupObjects(float t,out ObjectFrame objects[OBJECT_COUNT]){")
+        lines.append(f"float4x4 local{i}(uint t){{return localInverse({pos},{rot},{scale});}}")
+    lines.append("void setupObjects(uint t,out ObjectFrame objects[OBJECT_COUNT]){")
     for i, obj in enumerate(objects):
         chain = f"local{i}(t)"
         parent = obj.parent
@@ -269,12 +299,19 @@ def _objects(scene, bounds, names, epsilon):
             chain = f"mul({chain},local{indices[parent]}(t))"
             parent = scene.objects[parent].parent
         bound = bounds[obj.geometry].expanded(4 * epsilon)
+        lipschitz = geometry.field_lipschitz(recipes[obj.geometry], bound)
         lines.append(f"objects[{i}].inverse={chain};"
-                     f"objects[{i}].low={_literal(bound.minimum)};objects[{i}].high={_literal(bound.maximum)};")
+                     f"objects[{i}].low={_literal(bound.minimum)};objects[{i}].high={_literal(bound.maximum)};"
+                     f"objects[{i}].stepScale={_literal(0.95/lipschitz)};")
     lines.append("}")
-    lines.append("float objectField(uint index,float3 p){switch(index){")
+    # Scalar noinline signatures are valid in DXIL; keeping the shared field
+    # specialization out of line controls size across primary/shadow/reflection
+    # rays and normal samples without changing runtime dependencies.
+    lines.append("[noinline] float objectFieldScalar(uint index,float x,float y,float z){"
+                 "float3 p=float3(x,y,z);switch(index){")
     lines.extend(f"case {i}:return {names[obj.geometry]}(p);" for i, obj in enumerate(objects))
     lines.append("default:return 1e20;}}")
+    lines.append("float objectField(uint i,float3 p){return objectFieldScalar(i,p.x,p.y,p.z);}")
     lines.append("Material materialAt(uint index){Material m;switch(index){")
     for i, obj in enumerate(objects):
         m = scene.materials[obj.material]
@@ -284,13 +321,15 @@ def _objects(scene, bounds, names, epsilon):
     return "\n".join(lines)
 
 
-def _lights(scene, settings, onset):
-    lines = [f"#define LIGHT_COUNT {len(scene.lights)}", "Light lightAt(uint index,float t){Light light;switch(index){"]
+def _lights(scene, settings, onsets):
+    lines = [f"#define LIGHT_COUNT {len(scene.lights)}", "Light lightAt(uint index,uint t){Light light;switch(index){"]
     flash = settings.get("flash")
     for i, light in enumerate(scene.lights.values()):
         intensity = _literal(light.intensity)
         if flash and light.id == flash["light"]:
-            intensity = "0" if onset is None else f"((t>={onset}.0 && t<{onset+flash['duration_ticks']}.0)?{intensity}:0)"
+            duration = flash["duration_ticks"]
+            active = " || ".join(f"(t>={onset}u && t<{min(onset+duration, scene.duration_ticks+1)}u)" for onset in onsets)
+            intensity = f"(({active})?{intensity}:0)" if active else "0"
         lines.append(f"case {i}:light.position={_literal(light.position)};light.color={_literal(light.color)};"
                      f"light.intensity={intensity};light.range={_literal(light.range)};return light;")
     lines.append("default:light.position=0;light.color=0;light.intensity=0;light.range=1;return light;}}")
@@ -299,7 +338,7 @@ def _lights(scene, settings, onset):
 
 def _particle_code(emitter, scene):
     if emitter is None:
-        return "float3 dust(float3 color,float2 uv,float depth,float action,Camera cam){return color;}"
+        return "float3 dust(float3 color,float2 uv,float depth,uint action,Camera cam){return color;}"
     # The seeded launch data is generated once. The film shader reconstructs
     # motion directly from the bounded lifetime and its absolute action tick.
     velocities = [_literal(particles._spawn(emitter, i, 0).velocity) for i in range(emitter.count)]
@@ -307,14 +346,16 @@ def _particle_code(emitter, scene):
     origin = _track(emitter.origin_track, emitter.origin, "spawnTick")
     return f"""
 static const float3 launchVelocity[{emitter.count}]={{{','.join(velocities)}}};
-float3 dust(float3 color,float2 uv,float depth,float action,Camera cam){{
+float3 dust(float3 color,float2 uv,float depth,uint action,Camera cam){{
     float3 forward=normalize(cam.target-cam.eye), right=normalize(cross(forward,cam.up));
     float3 up=normalize(cross(right,forward));
     float tangent=tan(radians(cam.lens.x)*0.5);
     float alpha=0;
+    uint step=action/400u;
     for(uint i=0;i<{emitter.count};++i){{
-        float age=fmod(floor(action/400.0)+i,{emitter.lifetime_steps}.0)/120.0;
-        float spawnTick=max(0,(floor(action/400.0)-age*120.0)*400.0);
+        uint ageSteps=(step+i)%{emitter.lifetime_steps}u;
+        float age=float(ageSteps)/120.0;
+        uint spawnTick=(step>=ageSteps?step-ageSteps:0)*400u;
         float3 p={origin}+launchVelocity[i]*age*exp(-{_literal(emitter.drag)}*age)
                  +0.5*{_literal(emitter.gravity)}*age*age-cam.eye;
         float z=dot(p,forward);
@@ -346,12 +387,14 @@ def emit(document, root, *, entry_point, thread_group, width, height):
         f"float {names[key]}(float3 p){{{_sdf(recipe,names)}}}"
         for key, recipe in recipes.items() if key in solid_ids
     )
-    segments, final_action, onset = _timeline(scene, settings)
+    timing, onsets = film_timing(scene, settings)
+    def action_expression(span):
+        offset = f"(t-{span.start}u)"
+        return f"{span.action}u" + ({-1: "-" + offset, 0: "", 1: "+" + offset}[span.speed])
     timeline = "\n".join([
-        "float actionAt(float t) {",
-        *(f"if(t<{end}.0)return {action}.0+(t-{start}.0)*({speed}.0);"
-          for start, end, action, speed in segments),
-        f"return {final_action}.0; }}",
+        "uint actionAt(uint t) {",
+        *(f"if(t<{span.end}u)return {action_expression(span)};" for span in timing.spans),
+        f"return {timing.end_state.action}u; }}",
     ])
     rendering = settings["rendering"]
     effects = settings.get("effects", {})
@@ -363,17 +406,19 @@ def emit(document, root, *, entry_point, thread_group, width, height):
     return template.replace("/* FILM_SETTINGS */", "\n".join(
         f"#define {key} {val}" for key, val in {
             "FRAME_WIDTH": width, "FRAME_HEIGHT": height, "TRACE_STEPS": int(rendering["max_steps"]),
+            "FILM_DURATION_TICKS": scene.duration_ticks,
             "GROUP_X": thread_group[0], "GROUP_Y": thread_group[1],
             "BLOOM_RADIUS": int(bloom.get("radius", 0)),
             "TRACE_LIMIT": _literal(rendering["max_distance"]), "EPS": _literal(rendering["epsilon"]),
             "SHADOWS": int(rendering["shadows"]), "REFLECTIONS": rendering["reflection_bounces"],
             "MISS_RADIANCE": _literal(rendering["miss_radiance"]), "EXPOSURE": _literal(tone.get("exposure", 1)),
-            "GAMMA": _literal(tone.get("gamma", 2.2)), "BLOOM_GAIN": _literal(bloom.get("intensity", 0)),
+            "GAMMA": _literal(tone.get("gamma", 2.2)), "TONEMAP_ENABLED": int("tonemap" in effects),
+            "BLOOM_GAIN": _literal(bloom.get("intensity", 0)),
             "BLOOM_THRESHOLD": _literal(bloom.get("threshold", 1)),
         }.items()
     )).replace("/* FILM_DATA */", "\n".join((
-        solid_functions, timeline, _camera(scene), _objects(scene, bounds, names, rendering["epsilon"]),
-        _lights(scene, settings, onset), _particle_code(emitter, scene),
+        solid_functions, timeline, _camera(scene), _objects(scene, bounds, recipes, names, rendering["epsilon"]),
+        _lights(scene, settings, onsets), _particle_code(emitter, scene),
     ))).replace("FILM_ENTRY", entry_point)
 
 
@@ -382,11 +427,9 @@ def reference_image(document, root, tick, *, width, height):
     import nw13_render
 
     prepared, _, _, scene, settings, emitter = read_film(document, root)
-    segments, action, onset = _timeline(scene, settings)
-    for start, end, initial, speed in segments:
-        if start <= tick < end:
-            action = initial + (tick - start) * speed
-            break
+    timing, onsets = film_timing(scene, settings)
+    tick = max(0, min(tick, scene.duration_ticks))
+    action = timing.at(tick)["action_tick"]
     rendering = settings["rendering"]
     renderer = nw13_render.Renderer(scene, prepared.document, width=width, height=height, **{
         key: rendering[key] for key in ("max_steps", "samples", "epsilon", "max_distance",
@@ -395,7 +438,7 @@ def reference_image(document, root, tick, *, width, height):
     flash = settings.get("flash")
     light_gain = {}
     if flash:
-        light_gain[flash["light"]] = float(onset is not None and onset <= tick < onset + flash["duration_ticks"])
+        light_gain[flash["light"]] = float(any(onset <= tick < onset + flash["duration_ticks"] for onset in onsets))
     image, depth = renderer.render(tick, action_tick=action, light_gain=light_gain)
     if emitter is not None:
         image = renderer.render_particles(image, depth, emitter.to_dict(), tick, action_tick=action, film_cycle=True)
@@ -448,7 +491,7 @@ def import_graph(geometry_document, scene_document, production, *, source_name):
                 for name, values in params.items()}
 
     root = visit(geometry_document["root"])
-    settings = {key: production[key] for key in ("rendering", "particles", "effects", "transport_script", "flash")
+    settings = {key: production[key] for key in ("rendering", "particles", "effects", "transport_script", "flash", "audio_cue_bindings")
                 if key in production}
     settings["geometry_budget"] = geometry_document.get("budget", {})
     params = {key: [json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)]
@@ -466,13 +509,16 @@ def import_graph(geometry_document, scene_document, production, *, source_name):
     return editor.emit_graph_text(document)
 
 
-def compile_inline_ray_payload(document, output, dxc):
+def compile_inline_ray_payload(document, output, dxc, *, allow_unpinned_dxc=False):
     """Compile the admitted AABB candidate query specialization and its bounds."""
     from dataclasses import replace
     import hashlib
     import nw03_compiler as compiler
 
-    root = document.nodes["film"]
+    roots = compiler._reachable_shader_roots(document)
+    if len(roots) != 1 or roots[0].operator_id != OPERATOR:
+        raise ValueError("inline ray lowering requires one reachable film root")
+    root = roots[0]
     _, _, bounds, scene, settings, _ = read_film(document, root)
     rendering = settings["rendering"]
     if rendering["max_distance"] > 64.0:
@@ -487,7 +533,9 @@ def compile_inline_ray_payload(document, output, dxc):
     shader = replace(shaders[0], hlsl="#define INLINE_RAY 1\n" + shaders[0].hlsl)
     output.mkdir(parents=True, exist_ok=True)
     dxil_path = output / "film_inline_ray.dxil"
-    compiler.compile_generated_shader(shader, dxil_path, dxc_executable=str(dxc))
+    compiler.compile_generated_shader(shader, dxil_path, dxc_executable=str(dxc),
+                                      qualified_shader_model="cs_6_5",
+                                      allow_unpinned_dxc=allow_unpinned_dxc)
     dxil = dxil_path.read_bytes()
     tuples = []
     for obj in scene.objects.values():

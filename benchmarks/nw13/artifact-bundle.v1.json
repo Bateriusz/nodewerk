@@ -2,33 +2,35 @@
   "format": "nw13.export-bundle",
   "version": 1,
   "production_id": "nw13.hotel_corridor",
-  "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+  "revision": null,
+  "source_state": "tracked_expectations_pending_native",
+  "implementation_base": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
   "common": {
     "artifact_id": "nw13.common",
     "kind": "common",
     "production_id": "nw13.hotel_corridor",
-    "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+    "revision": null,
     "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
     "requirements_digest": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
-    "lowering": "raster.indexed_instanced",
+    "lowering": "compute.bounded_solid_trace",
     "shader_model": "6_0",
     "capabilities": {
       "d3d_feature_level": "12_0",
-      "highest_shader_model": "6_5",
-      "raytracing_tier": 1.1,
+      "highest_shader_model": "6_0",
+      "raytracing_tier": null,
       "mesh_shader_tier": null,
       "work_graphs_tier": null,
       "linear_algebra_fp16": false,
       "enhanced_barriers": false
     },
-    "capability_revision": "sha256:e535acc9395d0b6a3f755717437925f094078226650d3ee49751e58171424c4f",
+    "capability_revision": "sha256:aeebea516e7101182c616f6a393a2d32c49aecee7c096c2080dbdce8217db983",
     "runtime_dependencies": [
       "d3d12",
       "dxgi"
     ],
     "budgets": {
       "max_distribution_bytes": 262144,
-      "max_shader_bytes": 16384,
+      "max_shader_bytes": 49152,
       "max_memory_bytes": 67108864
     },
     "fallback_artifact_id": null,
@@ -48,6 +50,8 @@
     "gpu_time_us": null,
     "image_max_abs_error": null,
     "image_rmse": null,
+    "image_within_tolerance": null,
+    "film_lowering": null,
     "executable_sha256": null,
     "package_sha256": null,
     "audio_song_sha256": null,
@@ -61,7 +65,7 @@
         "status": "unavailable"
       },
       "shader_bytes": {
-        "limit": 16384,
+        "limit": 49152,
         "observed": null,
         "status": "unavailable"
       },
@@ -73,108 +77,33 @@
     },
     "within_budgets": null
   },
-  "optional": [
-    {
-      "artifact_id": "nw13.optional.dxr_inline_ray_query",
-      "kind": "optional",
-      "production_id": "nw13.hotel_corridor",
-      "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
-      "profile_id": "nw.optional.d3d12.ray_query.ps6_5.v1",
-      "requirements_digest": "sha256:v1:7f18259d05889226ad52e72c36dda206a1ba58bac205417aa15ce665e78602f3",
-      "lowering": "dxr.inline_ray_query.ps6_5",
-      "shader_model": "6_5",
-      "capabilities": {
-        "d3d_feature_level": "12_0",
-        "highest_shader_model": "6_5",
-        "raytracing_tier": 1.1,
-        "mesh_shader_tier": null,
-        "work_graphs_tier": null,
-        "linear_algebra_fp16": false,
-        "enhanced_barriers": false
-      },
-      "capability_revision": "sha256:e535acc9395d0b6a3f755717437925f094078226650d3ee49751e58171424c4f",
-      "runtime_dependencies": [
-        "d3d12",
-        "dxgi"
-      ],
-      "budgets": {
-        "max_distribution_bytes": 262144,
-        "max_shader_bytes": 20480,
-        "max_memory_bytes": 100663296,
-        "max_ray_length": 64.0,
-        "max_samples": 8,
-        "max_bounces": 1,
-        "max_blas_bytes": 33554432
-      },
-      "fallback_artifact_id": "nw11.fallback.ray.analytic.d3d12.fl12_0.sm6_0.v1",
-      "distribution_bytes": null,
-      "shader_bytes": null,
-      "sections": null,
-      "imports": null,
-      "smoke": {
-        "executed": false,
-        "status": "unavailable",
-        "headless": null
-      },
-      "startup_ms": null,
-      "committed_memory_bytes": null,
-      "vram_bytes": null,
-      "cpu_submit_us": null,
-      "gpu_time_us": null,
-      "image_max_abs_error": null,
-      "image_rmse": null,
-      "executable_sha256": null,
-      "package_sha256": null,
-      "audio_song_sha256": null,
-      "manifest_sha256": null,
-      "dependency_identities": null,
-      "measurement_status": "unavailable",
-      "budget_checks": {
-        "distribution_bytes": {
-          "limit": 262144,
-          "observed": null,
-          "status": "unavailable"
-        },
-        "shader_bytes": {
-          "limit": 20480,
-          "observed": null,
-          "status": "unavailable"
-        },
-        "committed_memory_bytes": {
-          "limit": 100663296,
-          "observed": null,
-          "status": "unavailable"
-        }
-      },
-      "within_budgets": null
-    }
-  ],
+  "optional": [],
   "fallback": {
     "artifact_id": "nw13.common.fallback",
     "kind": "fallback",
     "production_id": "nw13.hotel_corridor",
-    "revision": "1c9e1559c8d43530c7b213461c6719b6aa43ae35",
+    "revision": null,
     "profile_id": "nw.common.d3d12.fl12_0.sm6_0.v1",
     "requirements_digest": "sha256:v1:d2c53aeaebb76024b3ec89f59814a00e84aaa5131e190a802ede0a956302e17a",
-    "lowering": "raster.indexed_instanced",
+    "lowering": "compute.bounded_solid_trace",
     "shader_model": "6_0",
     "capabilities": {
       "d3d_feature_level": "12_0",
-      "highest_shader_model": "6_5",
-      "raytracing_tier": 1.1,
+      "highest_shader_model": "6_0",
+      "raytracing_tier": null,
       "mesh_shader_tier": null,
       "work_graphs_tier": null,
       "linear_algebra_fp16": false,
       "enhanced_barriers": false
     },
-    "capability_revision": "sha256:e535acc9395d0b6a3f755717437925f094078226650d3ee49751e58171424c4f",
+    "capability_revision": "sha256:aeebea516e7101182c616f6a393a2d32c49aecee7c096c2080dbdce8217db983",
     "runtime_dependencies": [
       "d3d12",
       "dxgi"
     ],
     "budgets": {
       "max_distribution_bytes": 262144,
-      "max_shader_bytes": 16384,
+      "max_shader_bytes": 49152,
       "max_memory_bytes": 67108864
     },
     "fallback_artifact_id": null,
@@ -194,6 +123,8 @@
     "gpu_time_us": null,
     "image_max_abs_error": null,
     "image_rmse": null,
+    "image_within_tolerance": null,
+    "film_lowering": null,
     "executable_sha256": null,
     "package_sha256": null,
     "audio_song_sha256": null,
@@ -207,7 +138,7 @@
         "status": "unavailable"
       },
       "shader_bytes": {
-        "limit": 16384,
+        "limit": 49152,
         "observed": null,
         "status": "unavailable"
       },
@@ -219,67 +150,32 @@
     },
     "within_budgets": null
   },
-  "diagnostics": [
-    {
-      "category": "optional_lowering",
-      "severity": "error",
-      "code": "nw13_optional_unsupported",
-      "message": "mesh shaders require queried mesh shader tier >= 1",
-      "requested": "mesh_shader",
-      "tier": null
-    }
-  ],
+  "diagnostics": [],
   "independent_builds": false,
-  "validation": {
-    "ok": true,
-    "diagnostics": [],
-    "sources": {
-      "graph": {
-        "path": "fixtures/nw13/hotel_corridor.nwgraph",
-        "sha256": "sha256:8c312bc752037fd7759d63b98ca1eac42bc96aa7d8651f1163f7d2f3feaec887",
-        "semantic_hash": "sha256:v1:98496e6dbada6943755e4145e6b9757e2ba8061182e937c365cdac1fe72a32c8"
-      },
-      "geometry": {
-        "path": "fixtures/nw13/geometry_room.json",
-        "sha256": "sha256:f8d8e843bdd6746d1be575d9d9875bcad750d6a786658de5dae2fa7e32a1ec5f",
-        "semantic_hash": "sha256:v1:d22cc129697a46000d5f8ed0f5f72112532de12b3a9217008d1e5d9340cf7478",
-        "bounds": {
-          "minimum": [
-            -5.858118672887135,
-            -5.858118672887135,
-            -9.5
-          ],
-          "maximum": [
-            5.858118672887135,
-            5.858118672887135,
-            8.2
-          ]
-        },
-        "stats": {
-          "nodes": 38,
-          "repetition_instances": 4,
-          "generated_primitives": 4,
-          "evaluation_steps": 2464,
-          "memory_bytes": 19712
-        }
-      },
-      "scene": {
-        "path": "fixtures/nw13/hotel_corridor.scene.json",
-        "sha256": "sha256:e422152ffed5ff18a4910aae84a06e5faa79e4a03e5ae643edd7ac6f2c292ad5",
-        "objects": 12,
-        "shots": [
-          "corridor_approach",
-          "room_turn"
-        ]
-      },
-      "song": {
-        "path": "fixtures/nw13/hotel_corridor.song.json",
-        "sha256": "sha256:efde0e5366b891ea33ef8d07b2c353ff3c7e4f46a92b14e66b5a5532eac04f3a",
-        "semantic_hash": "sha256:v1:33737ce61b7c7ad9fb4b195b4ec9f9b30475bc5e88f5b6e36838d491dbee714c",
-        "notes": 30,
-        "nwas_sha256": "sha256:6e229d9bb2e31a44e5e6fed7424f0c623936ffb8c744da7aa47d5b89ef59e3c0"
-      }
-    }
+  "independent_observations": null,
+  "unreachable_weight": {
+    "reachable": false,
+    "measurement_status": "unavailable",
+    "additional_release_code_bytes": null,
+    "additional_shader_bytes": null,
+    "additional_imports": null,
+    "additional_package_sections": null,
+    "additional_dependencies": null
   },
-  "bundle_sha256": "sha256:22c7e49f570024f551ff2fec0da6936ab60bf51f9469268feb7cfbbeb164407c"
+  "native_edit_proof": null,
+  "optional_requests": [
+    "dxr_inline_ray_query",
+    "mesh_shader"
+  ],
+  "optional_rebuilds": {},
+  "measured_sources": null,
+  "native_fixed_ticks": {
+    "common": null,
+    "optional": {}
+  },
+  "native_scene_probes": {
+    "common": null,
+    "optional": {}
+  },
+  "bundle_sha256": "sha256:4499e2286dcf37d87c453ab9cd8c0738c0c291634f3f470091690ee736e30977"
 }
