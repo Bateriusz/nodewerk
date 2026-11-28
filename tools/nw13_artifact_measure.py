@@ -498,6 +498,71 @@ def _tracked_source(repo_root, selected, revision):
     return relative, committed
 
 
+def _stateless_size_control(graph, destination):
+    """Derive a same-source film with only its sampled presentation path removed."""
+    control = deepcopy(graph)
+    feedback = nw13_history.read_feedback(control)
+    if feedback is None:
+        return None
+    source = control.nodes[feedback.source_id]
+    present = next(node for node in nw13_history.active_nodes(control) if node.operator_id == "nw.render.present")
+    source.operator_id = "nw.render.film"
+    present.inputs["image"] = (source.node_id, "image")
+    del control.nodes[feedback.node_id]
+    control.layout.pop(feedback.node_id, None)
+    destination.write_text(nw08_editor.emit_graph_text(control), encoding="utf-8", newline="\n")
+    return destination
+
+
+def _retain_common_size_rejection(error, *, parsed_graph, source_identity, revision, build, output,
+                                  template, dxc, audio):
+    if error.rejected_size is None:
+        return
+    def write_record(control):
+        record = evidence.seal_bundle({
+            "format": "nw13.rejected-common-distribution", "version": 1, "revision": revision,
+            "status": "rejected_byte_ceiling", "smoke_executed": False, "acceptance_claimed": False,
+            "gate_totals_comparable": False,
+            "gate_totals_comparison_note": (
+                "Stateful and stateless exporters account for different files and phases. "
+                "Compare actual shared components, not these gate totals."
+            ),
+            "measured_sources": source_identity, "common": error.rejected_size, "stateless_control": control,
+        })
+        path = output / "common-budget-rejection.v1.json"
+        nw05_export._write_bytes(path, (json.dumps(record, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+
+    # Never lose the measured rejected arm if the extra control blocks.
+    write_record({"status": "unavailable_until_built"})
+    control_graph = _stateless_size_control(parsed_graph, build / "stateless-size-control.nwgraph")
+    control = {"status": "not_applicable"}
+    if control_graph is not None:
+        control = {"graph_sha256": _sha256(control_graph.read_bytes()), "smoke_executed": False}
+        try:
+            # Identical compiler/template, song, and hard ceiling. Even if
+            # this control fits, keep its bytes outside the published bundle.
+            measured = _export(control_graph, build / "stateless-size-export", build / "stateless-size-build",
+                               template, dxc, audio)
+            artifact = measured.artifacts[nwp.COMMON_PROFILE_ID]
+            control.update(status="within_ceiling_not_run",
+                           bytes=nw05_export.size_observation(
+                               artifact.size_report, artifact.executable_bytes, profile=nwp.COMMON_PROFILE_ID,
+                               accounting_phase="stateless-finalized",
+                           ))
+        except nw05_export.ExportError as control_error:
+            control.update(status="rejected_byte_ceiling" if control_error.rejected_size else "unavailable",
+                           diagnostic_codes=[note["code"] for note in control_error.diagnostics])
+            if control_error.rejected_size is not None:
+                control["bytes"] = control_error.rejected_size
+        except (OSError, nw03_compiler.CompilerError, evidence.EvidenceError) as control_error:
+            control.update(status="unavailable", error_type=type(control_error).__name__)
+    write_record(control)
+    print(json.dumps({"budget_rejection": error.rejected_size["distribution"],
+                      "accounting_phase": error.rejected_size["distribution_accounting"]["phase"],
+                      "stateless_control": control.get("status"), "gate_totals_comparable": False},
+                     sort_keys=True), flush=True)
+
+
 def write_evidence(
     *, repo_root: Path, production_path: Path, output_dir: Path,
     template: Path | None = None, dxc: Path | None = None,
@@ -543,9 +608,16 @@ def write_evidence(
                 "song": {"path": song_name, "sha256": _sha256(song_bytes), "nwas_sha256": _sha256(audio)},
             }
             dimensions = tuple(document["rendering"][axis] for axis in ("width", "height"))
-            common, rebuilds = _independent_observations(
-                graph, output_dir, build / "independent", template, dxc, audio, dimensions, adapter=adapter,
-            )
+            try:
+                common, rebuilds = _independent_observations(
+                    graph, output_dir, build / "independent", template, dxc, audio, dimensions, adapter=adapter,
+                )
+            except nw05_export.ExportError as error:
+                _retain_common_size_rejection(
+                    error, parsed_graph=parsed_graph, source_identity=source_identity, revision=revision,
+                    build=build, output=output_dir, template=template, dxc=dxc, audio=audio,
+                )
+                raise
             common_dir = output_dir / "common-fixed-ticks"
             common_frames = _native_frame_set(document, parsed_graph, output_dir / "independent-a",
                                               common_dir, adapter)
@@ -650,7 +722,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             dxc=root / args.dxc if args.dxc else None, probe=root / args.probe if args.probe else None,
             expected_revision=args.revision,
         )
-    except evidence.EvidenceError as error:
+    except (evidence.EvidenceError, nw05_export.ExportError) as error:
         parser.exit(1, f"{error}: {error.diagnostics}\n")
     print(json.dumps({key: result["bundle"][key] for key in ("revision", "independent_builds", "diagnostics")}, sort_keys=True))
     return 0

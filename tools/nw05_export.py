@@ -112,10 +112,12 @@ class ExportError(RuntimeError):
         diagnostics: Sequence[dict[str, Any]] | None = None,
         *,
         dependency_path: Sequence[str] = (),
+        rejected_size: Mapping[str, Any] | None = None,
     ):
         super().__init__(message)
         self.diagnostics = list(diagnostics or [])
         self.dependency_path = list(dependency_path)
+        self.rejected_size = rejected_size
 
 
 @dataclass(frozen=True)
@@ -475,6 +477,83 @@ def analyze_package_size(
             optimizer.OPTIONAL_IMPLEMENTATIONS
         ),
     }
+
+
+def size_observation(size_report: Mapping[str, Any], executable: bytes | None, *,
+                     profile: str, accounting_phase: str) -> dict[str, Any]:
+    """Attribute measured bytes while preserving the gate's exact counting convention."""
+    distribution = size_report["distribution"]
+    if accounting_phase == "stateful-prepublication":
+        manifest_entry = "link-manifest.json"
+        # This is one actual file: the stateful gate counts it once as a
+        # separate manifest and again as an auxiliary entry. Preserve the gate.
+        repeated_entries = [manifest_entry] if manifest_entry in distribution["artifact_files"] else []
+        excluded = ["size-report.json"]
+    elif accounting_phase in {"stateless-pre-finalization", "stateless-finalized"}:
+        stem = _profile_file_stem(profile)
+        manifest_entry = f"{stem}.manifest.json"
+        repeated_entries = []
+        excluded = []
+        if accounting_phase == "stateless-pre-finalization":
+            excluded = [name for name in _artifact_auxiliary_names(stem, common=profile == nwp.COMMON_PROFILE_ID)
+                        if name not in distribution["artifact_files"]]
+            if profile == nwp.COMMON_PROFILE_ID:
+                excluded.append("any in-directory export report requested by the caller")
+    else:
+        raise ValueError(f"unknown size accounting phase: {accounting_phase}")
+    result: dict[str, Any] = {
+        "distribution": distribution,
+        "distribution_accounting": {
+            "phase": accounting_phase,
+            "counted_manifest_path": manifest_entry,
+            "counted_auxiliary_paths": dict(distribution["artifact_files"]),
+            "counted_more_than_once": repeated_entries,
+            "not_counted_at_this_phase": excluded,
+            "total_kind": "exporter_gate_total_not_unique_file_inventory",
+        },
+        "shader_blob_bytes": size_report["content"]["shader_blob_bytes"],
+        "package_sha256": size_report["package_sha256"],
+        "package_sections": size_report["section_summary"],
+        "executable": None,
+    }
+    if executable is not None:
+        parsed = None
+        try:
+            parsed = dependency_check.parse_pe64_sections_and_imports(executable)
+        except (ValueError, struct.error):
+            # Test/invalid templates have no attributable PE sections. Never
+            # substitute estimates for a missing PE ledger.
+            pass
+        embedded_package, embedded_manifest = extract_embedded_package(executable)
+        result["executable"] = {
+            "sha256": hashlib.sha256(executable).hexdigest(),
+            "byte_count": len(executable),
+            "linked_pe_bytes": len(executable) - len(embedded_package) - len(embedded_manifest) - EMBED_FOOTER_SIZE,
+            "embedded_package_bytes": len(embedded_package),
+            "embedded_manifest_bytes": len(embedded_manifest),
+            "footer_bytes": EMBED_FOOTER_SIZE,
+            "sections": None if parsed is None else [
+                {key: row[key] for key in ("name", "raw_size_bytes", "virtual_size_bytes")}
+                for row in parsed["sections"]
+            ],
+            "runtime_import_libraries": None if parsed is None else sorted(
+                {name.lower() for field in ("imports_by_dll", "delay_imports_by_dll") for name in parsed[field]}
+            ),
+        }
+    return result
+
+
+def _byte_ceiling_error(profile: str, size_report: Mapping[str, Any], executable: bytes | None,
+                        dependency_path: Sequence[str], *, accounting_phase: str, label: str | None = None) -> ExportError:
+    distribution = size_report["distribution"]
+    return ExportError(
+        f"artifact '{label or profile}' exceeds the byte ceiling "
+        f"({distribution['total_distributed_bytes']} > {distribution['byte_ceiling']})",
+        [nwp.package_diagnostic("export_byte_ceiling_exceeded", "distributed bytes exceed the configured ceiling")],
+        dependency_path=dependency_path, rejected_size=size_observation(
+            size_report, executable, profile=profile, accounting_phase=accounting_phase,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3072,17 +3151,8 @@ def _finalize_size_accounting(
         distribution = artifact.size_report["distribution"]
         total = distribution["total_distributed_bytes"]
         if total > settings.byte_ceiling:
-            raise ExportError(
-                f"artifact '{profile_id}' exceeds the byte ceiling "
-                f"({total} > {settings.byte_ceiling})",
-                [
-                    nwp.package_diagnostic(
-                        "export_byte_ceiling_exceeded",
-                        "distributed bytes exceed the configured ceiling",
-                    )
-                ],
-                dependency_path=["budget", profile_id, "byte_ceiling"],
-            )
+            raise _byte_ceiling_error(profile_id, artifact.size_report, artifact.executable_bytes,
+                                      ["budget", profile_id, "byte_ceiling"], accounting_phase="stateless-finalized")
         # Memory budget remains based on the queried physical realization.
         if artifact.physical_realization.peak_bytes > settings.memory_budget:
             raise ExportError(
@@ -3629,18 +3699,9 @@ def export_graph(
                 dependency_path=["budget", "stateful_extension", "memory_budget"],
             )
         if not size_report["distribution"]["within_byte_ceiling"]:
-            raise ExportError(
-                "artifact 'common' exceeds the byte ceiling "
-                f"({size_report['distribution']['total_distributed_bytes']} > "
-                f"{settings.byte_ceiling})",
-                [
-                    nwp.package_diagnostic(
-                        "export_byte_ceiling_exceeded",
-                        "distributed bytes exceed the configured ceiling",
-                    )
-                ],
-                dependency_path=["budget", "stateful_extension", "byte_ceiling"],
-            )
+            raise _byte_ceiling_error(nwp.COMMON_PROFILE_ID, size_report, executable_bytes,
+                                      ["budget", "stateful_extension", "byte_ceiling"],
+                                      accounting_phase="stateful-prepublication", label="common")
         # Only publish an artifact after every budget check succeeded, so a
         # rejected export cannot leave a partially updated stateful closure.
         output_directory.mkdir(parents=True, exist_ok=True)
@@ -4046,18 +4107,9 @@ def export_graph(
             # Budget validation runs again after auxiliary/size-report bytes
             # are finalized below; this early check catches obvious failures.
             if not size_report["distribution"]["within_byte_ceiling"]:
-                raise ExportError(
-                    f"artifact '{profile_id}' exceeds the byte ceiling "
-                    f"({size_report['distribution']['total_distributed_bytes']} > "
-                    f"{settings.byte_ceiling})",
-                    [
-                        nwp.package_diagnostic(
-                            "export_byte_ceiling_exceeded",
-                            "distributed bytes exceed the configured ceiling",
-                        )
-                    ],
-                    dependency_path=["budget", profile_id, "byte_ceiling"],
-                )
+                raise _byte_ceiling_error(profile_id, size_report, executable_bytes,
+                                          ["budget", profile_id, "byte_ceiling"],
+                                          accounting_phase="stateless-pre-finalization")
             if physical.peak_bytes > settings.memory_budget:
                 raise ExportError(
                     f"artifact '{profile_id}' exceeds the memory budget "

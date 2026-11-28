@@ -669,3 +669,59 @@ def test_portable_cpp_package_player_accepts_bounded_nonmonotonic_film_ticks(tmp
     result = subprocess.run([str(binary), str(package_path)], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert "7 bounded predecessor steps" in result.stdout
+
+
+def test_over_budget_common_retains_rejected_bytes_and_same_source_control(tmp_path, monkeypatch):
+    import nw03_compiler as compiler
+    import nw05_export as export
+    import nw09_export
+    import nw13_artifact_measure as measure
+    import nw13_history
+
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    source = REPO_ROOT / document["graph"]
+    graph = compiler.load_graph(source)
+    audio = production.playback_song(REPO_ROOT, document, graph=graph)
+    output, build = tmp_path / "evidence", tmp_path / "private-build"
+    output.mkdir()
+    build.mkdir()
+    tool = nw09_export._test_dxc(tmp_path / "dxc")
+    settings = export.ExportSettings(byte_ceiling=1)
+    with pytest.raises(export.ExportError, match="exceeds the byte ceiling") as common:
+        export.export_graph(source, output / "rejected", allow_test_payloads=True, dxc_executable=tool,
+                            settings=settings, audio_song_payload=audio)
+    assert common.value.rejected_size["distribution"]["byte_ceiling"] == 1
+
+    def native_call_simulated(control_graph, private_output, native_build, template, dxc, same_audio):
+        control = compiler.load_graph(control_graph)
+        assert nw13_history.read_feedback(control) is None and nw13_history.read_feedback(graph) is not None
+        assert control.nodes["film"].params == graph.nodes["film"].params
+        assert control.settings == graph.settings
+        assert audio == same_audio == production.playback_song(REPO_ROOT, document, graph=control)
+        assert private_output.is_relative_to(build)
+        return export.export_graph(control_graph, private_output, allow_test_payloads=True, dxc_executable=tool,
+                                   settings=settings, audio_song_payload=audio)
+
+    monkeypatch.setattr(measure, "_export", native_call_simulated)
+    measure._retain_common_size_rejection(common.value, parsed_graph=graph, source_identity={"graph": "fixture"},
+                                         revision="fixture-revision", build=build, output=output,
+                                         template=None, dxc=None, audio=audio)
+    assert [path.name for path in output.iterdir()] == ["common-budget-rejection.v1.json"]
+    record = json.loads((output / "common-budget-rejection.v1.json").read_bytes())
+    assert record["status"] == "rejected_byte_ceiling" and record["common"] == common.value.rejected_size
+    assert record["smoke_executed"] is False and record["acceptance_claimed"] is False
+    assert record["stateless_control"]["status"] == "rejected_byte_ceiling"
+    assert record["stateless_control"]["smoke_executed"] is False
+    assert record["stateless_control"]["bytes"]["distribution"]["byte_ceiling"] == 1
+    assert "HIST" in record["common"]["package_sections"]
+    assert "HIST" not in record["stateless_control"]["bytes"]["package_sections"]
+    assert record["gate_totals_comparable"] is False and "gate_totals_delta" not in record
+    sampled_accounting = record["common"]["distribution_accounting"]
+    stateless_accounting = record["stateless_control"]["bytes"]["distribution_accounting"]
+    assert sampled_accounting["phase"] == "stateful-prepublication"
+    assert sampled_accounting["counted_manifest_path"] == "link-manifest.json"
+    assert sampled_accounting["counted_more_than_once"] == ["link-manifest.json"]
+    assert sampled_accounting["not_counted_at_this_phase"] == ["size-report.json"]
+    assert stateless_accounting["phase"] == "stateless-pre-finalization"
+    assert stateless_accounting["counted_manifest_path"] != "link-manifest.json"
+    assert stateless_accounting["counted_more_than_once"] == []

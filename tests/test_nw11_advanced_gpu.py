@@ -1413,6 +1413,9 @@ def test_nw11_windows_ci_runs_command_path_and_binds_toolchain_payloads() -> Non
     assert "canonical_export_reproducibility.py --candidate $revision" in nw13
     assert "nw11_embed_production.py --proof build/nw13-nw11-proof" in nw13
     assert 'warp or common_regression' not in nw13
+    for prerequisite in ("nw11-warp-toolchain", "nw11-warp-build", "nw11-warp-bind"):
+        assert f"!cancelled() && steps.{prerequisite}.outcome == 'success'" in nw13
+    assert "continue-on-error" not in nw13
     assert "nw11_toolchain_identity.py" in workflow
     assert "nw11_shader_payloads.py" in workflow
     assert "nw11_pe_dependencies.py" in workflow

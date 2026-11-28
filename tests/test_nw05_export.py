@@ -787,12 +787,39 @@ def test_byte_budget_failure_preserves_prior_artifact_and_writes_diagnostic(
     dxc = _make_dxc(tmp_path / "toolchain")
     first = _export(tmp_path, dxc=dxc)
     before = _hashes(tmp_path / "out")
-    with pytest.raises(nw05_export.ExportError):
+    with pytest.raises(nw05_export.ExportError) as denied:
         _export(
             tmp_path,
             dxc=dxc,
             settings=_settings(tmp_path, byte_ceiling=1),
         )
+    rejected = denied.value.rejected_size
+    assert rejected is not None and rejected["distribution"]["within_byte_ceiling"] is False
+    dist, pe = rejected["distribution"], rejected["executable"]
+    assert dist["byte_ceiling"] == 1
+    assert pe["linked_pe_bytes"] == (tmp_path / "template.exe").stat().st_size
+    assert pe["embedded_package_bytes"] == dist["package_bytes"]
+    assert pe["embedded_manifest_bytes"] == dist["manifest_bytes"]
+    assert pe["byte_count"] == sum(pe[key] for key in (
+        "linked_pe_bytes", "embedded_package_bytes", "embedded_manifest_bytes", "footer_bytes"))
+    assert dist["total_distributed_bytes"] == sum(dist[key] for key in (
+        "package_bytes", "manifest_bytes", "executable_bytes", "artifact_file_bytes"))
+    accounting = rejected["distribution_accounting"]
+    assert accounting["phase"] == "stateless-pre-finalization"
+    assert "size-report.json" in accounting["not_counted_at_this_phase"]
+    assert accounting["counted_more_than_once"] == []
+    assert accounting["counted_auxiliary_paths"] == dist["artifact_files"]
+    finalized_total = first.artifacts[nwp.COMMON_PROFILE_ID].size_report["distribution"]["total_distributed_bytes"]
+    # The gate can also fail only when later reports are included. Do not
+    # label its inputs like the early rejection above.
+    partial_limit = (dist["total_distributed_bytes"] + finalized_total) // 2
+    assert dist["total_distributed_bytes"] < partial_limit < finalized_total
+    with pytest.raises(nw05_export.ExportError) as late:
+        _export(tmp_path, dxc=dxc, settings=_settings(tmp_path, byte_ceiling=partial_limit))
+    late_size = late.value.rejected_size
+    assert late_size["distribution_accounting"]["phase"] == "stateless-finalized"
+    assert late_size["distribution_accounting"]["not_counted_at_this_phase"] == []
+    assert "size-report.json" in late_size["distribution_accounting"]["counted_auxiliary_paths"]
     assert _hashes(tmp_path / "out") == before
     report = json.loads((tmp_path / "out-report.json").read_text(encoding="utf-8"))
     assert report["success"] is False

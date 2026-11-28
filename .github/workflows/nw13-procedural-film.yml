@@ -132,14 +132,19 @@ jobs:
         run: |
           cmake --build --preset nw07-release --target nw06_capability_check --parallel 2
           cmake --build --preset nw07-release --target nw_procedural_image_player --parallel 2
-      - name: Build the optional capability probe and bounded Work Graphs experiment
+      - name: Configure NW-11 command paths and build the capability probe
+        id: nw11-warp-toolchain
         shell: pwsh
         run: |
           $cl = (Get-Command cl.exe -ErrorAction Stop).Source
           cmake -S src/nw11 -B build/nw13-probe -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_COMPILER=$cl"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build build/nw13-probe --target nw11_capability_probe --parallel 2
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          exit $LASTEXITCODE
+      - name: Build and run the bounded Work Graphs experiment
+        shell: pwsh
+        run: |
+          $cl = (Get-Command cl.exe -ErrorAction Stop).Source
           cmake -S src/nw13 -B build/nw13-work-graph -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_COMPILER=$cl"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build build/nw13-work-graph --target nw13_work_graph --parallel 2
@@ -173,7 +178,11 @@ jobs:
             --probe $probe `
             --dxc $dxc
           exit $LASTEXITCODE
+      # This is independent of the film's byte budget. A failing film step
+      # still fails the job, even if these separate NW-11 steps pass.
       - name: Build the actual NW-11 common and fallback WARP executables
+        id: nw11-warp-build
+        if: ${{ !cancelled() && steps.nw11-warp-toolchain.outcome == 'success' }}
         shell: pwsh
         run: |
           $variants = @("nw11_common_baseline", "nw11_common_analytic", "nw11_fallback_common", "nw11_fallback_analytic")
@@ -190,6 +199,8 @@ jobs:
             Copy-Item "build/nw13-probe/shaders/$name.dxil" "$artifacts/compiled-specializations/$name.dxil" -ErrorAction Stop
           }
       - name: Bind the NW-11 WARP executables to the same-revision canonical package
+        id: nw11-warp-bind
+        if: ${{ !cancelled() && steps.nw11-warp-build.outcome == 'success' }}
         shell: pwsh
         run: |
           $revision = (git rev-parse HEAD).Trim()
@@ -200,6 +211,7 @@ jobs:
             --variant nw11_common_baseline --variant nw11_common_analytic --variant nw11_fallback_common --variant nw11_fallback_analytic
           if ($LASTEXITCODE -ne 0) { throw "NW-11 canonical production package binding failed: $LASTEXITCODE" }
       - name: Exercise the shared NW-11 headless WARP command paths
+        if: ${{ !cancelled() && steps.nw11-warp-bind.outcome == 'success' }}
         run: >-
           python tools/nw11_warp_smoke.py --executables build/nw13-nw11-commands
           --output build/nw13-evidence/nw11-warp
