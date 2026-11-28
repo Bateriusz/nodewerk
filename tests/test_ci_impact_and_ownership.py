@@ -22,6 +22,7 @@ def mapping():
         (["tools/nw10_pe_ledger.py", "tests/test_nw10_pe_ledger.py"], {"nw10"}, False),
         (["tools/nw08_editor.py"], {"nw08", "nw08a"}, False),
         (["tools/nw08a_presentation_cases.py"], {"nw08a"}, False),
+        (["tools/werkkzeug4_catalog.py", "tests/test_werkkzeug3_catalog.py"], {"nw13"}, False),
         (["tools/nw07_export.py"], {"nw07", "nw08", "nw08a", "nw10", "nw11"}, False),
         (["tools/nw01/bootstrap-windows.ps1"], {"nw01", "nw07", "nw08", "nw08a", "nw10", "nw11"}, False),
         (["src/player/package_player.cpp", "shaders/common.hlsl"], set(changed_scope.SCOPES), False),

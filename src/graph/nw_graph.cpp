@@ -1839,6 +1839,9 @@ OperatorRegistry OperatorRegistry::CreateDefault() {
         schema.outputs = {
             Port("out", LogicalType::ShaderExpr, Residency::Logical)};
         schema.params = {StringParam("scene", "{}"), StringParam("production", "{}")};
+        schema.shader_operations = {"bounded_solid_trace", "local_lighting",
+                                    "one_bounce_reflection", "depth_composite",
+                                    "bloom", "tonemap"};
         registry.Register(std::move(schema));
     }
     {

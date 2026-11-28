@@ -134,6 +134,15 @@
       ],
       "broad_gate": "ci.yml:schema-and-contract-checks",
       "platform_gate": "nw13-procedural-film.yml:headless-warp-and-evidence"
+    },
+    {
+      "name": "operator-catalog",
+      "patterns": [
+        "tests/test_werkkzeug3_catalog.py",
+        "tests/test_werkkzeug4_catalog.py"
+      ],
+      "broad_gate": "ci.yml:schema-and-contract-checks",
+      "platform_gate": "nw13-procedural-film.yml:contracts-and-headless-images"
     }
   ]
 }

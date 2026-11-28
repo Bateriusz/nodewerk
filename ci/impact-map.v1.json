@@ -148,6 +148,9 @@
       "patterns": [
         "tools/nw13_*.py",
         "tools/operator_catalog.py",
+        "tools/reference_operator_catalog.py",
+        "tools/werkkzeug[34]_catalog.py",
+        "tests/test_werkkzeug[34]_catalog.py",
         "tests/test_nw13_*",
         "benchmarks/nw13/**",
         "schemas/nw13*",
