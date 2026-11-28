@@ -147,6 +147,11 @@
     "nw13": {
       "patterns": [
         "tools/nw13_*.py",
+        "tools/nw13_run_work_graphs.ps1",
+        "tools/nw11_pack_python_runtime.py",
+        "tools/nw11_pe_dependencies.py",
+        "tools/nw11_contract.py",
+        "tools/nw13/**",
         "shaders/nw13/**",
         "src/nw13/**",
         "tests/nw13_*",

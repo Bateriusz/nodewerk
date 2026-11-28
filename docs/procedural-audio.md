@@ -175,3 +175,7 @@ pending or their raw files are available locally.
 The summary is never accepted by the private verifier.
 Hosted CI exercises the deterministic binding/alignment logic only and does not
 require an audio endpoint, real windowed Present, or GPU qualification.
+
+For authored NWAS v2 film exports, use the
+[physical film A/V cue protocol](physical-audio-cues.md) instead of the NWAS v1
+fixture/event observation format.

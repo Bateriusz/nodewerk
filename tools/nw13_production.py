@@ -9,6 +9,7 @@ sheet plus an evidence manifest.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import subprocess
@@ -107,14 +108,18 @@ def validate_production(repo_root: Path, production: Mapping[str, Any]) -> dict[
             diagnostics.append({"category": "production_validation", "severity": "error", "code": "production_missing_input", "message": f"missing {path}"})
     if diagnostics:
         return {"ok": False, "diagnostics": diagnostics, "sources": {}}
-    graph, (prepared, _, _, scene, settings, _) = film_graph(repo_root, production)
+    graph, (prepared, _, _, scene, _, _) = film_graph(repo_root, production)
     song_document = json.loads(song_path.read_text(encoding="utf-8"))
     song = nw13_audio.compile_sequence(song_document)
-    graph_dimensions = tuple(int(graph.settings[f"nw05_output_{key}"]) for key in ("width", "height"))
+    _, dispatch, workload = nw13_film.admit_film(graph, next(node for node in nw03_compiler._reachable_shader_roots(graph)
+                                                           if node.operator_id == nw13_film.OPERATOR))
     evidence_dimensions = tuple(production["rendering"][key] for key in ("width", "height"))
-    authored_dimensions = tuple(settings["rendering"][key] for key in ("width", "height"))
-    if graph_dimensions != evidence_dimensions or graph_dimensions != authored_dimensions:
+    if dispatch.extent != evidence_dimensions:
         raise ProductionError("authored graph, renderer and evidence dimensions must match")
+    if dispatch.profile != production["rendering"].get("work_profile", "verification-v1"):
+        raise ProductionError("authored graph and evidence work profiles must match")
+    if production.get("presentation", {"mode": "native-client"}) not in ({"mode": "native-client"}, {"mode": "maximized"}):
+        raise ProductionError("film presentation mode must be native-client or maximized")
     node_ids = set(graph.nodes)
     mapping = production.get("mappings", [])
     for item in mapping:
@@ -157,6 +162,7 @@ def validate_production(repo_root: Path, production: Mapping[str, Any]) -> dict[
     return {
         "ok": not diagnostics,
         "diagnostics": diagnostics,
+        "film_workload": workload,
         "sources": {
             "graph": {"path": str(graph_path.relative_to(repo_root)), "sha256": _sha256_file(graph_path), "semantic_hash": nw13_pipeline.semantic_hash(graph)},
             "geometry": {"source": "graph", "semantic_hash": nw13_geometry.semantic_hash(prepared.document),
@@ -209,7 +215,7 @@ def render_evidence(
     graph, (_, _, _, scene, settings, _) = film_graph(repo_root, production)
     rendering = settings["rendering"]
     expected = production["rendering"]
-    width, height = int(graph.settings["nw05_output_width"]), int(graph.settings["nw05_output_height"])
+    width, height = validation["film_workload"]["raster"]
     root = next(node for node in nw03_compiler._reachable_shader_roots(graph) if node.operator_id == nw13_film.OPERATOR)
     oracle = nw13_film.FrameOracle(graph, root, width=width, height=height)
     output = _resolve(repo_root, str(output_dir))
@@ -279,6 +285,7 @@ def render_evidence(
         "alpha_convention": "straight",
         "tolerances": expected.get("tolerances", {"max_abs_channel_error": 0.02, "rmse": 0.01}),
         "render_cost": {
+            "dispatch_workload": validation["film_workload"],
             "objects": len(scene.objects),
             "geometry_nodes": validation["sources"]["geometry"]["stats"]["nodes"],
             "estimated_evaluation_steps": validation["sources"]["geometry"]["stats"]["evaluation_steps"],
@@ -293,6 +300,8 @@ def render_evidence(
         "contact_sheet": {"file": sheet_path.name, "sha256": _sha256_file(sheet_path)},
         "sources": validation["sources"],
     }
+    if production.get("presentation"):
+        manifest["presentation_request"] = production["presentation"]
     manifest_path = output / "frames.v1.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     manifest["manifest_sha256"] = _sha256_file(manifest_path)
@@ -321,3 +330,32 @@ def transport_trace(production: Mapping[str, Any], repo_root: Path, *,
         })
         previous = tick
     return result
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Report authored film raster admission, not GPU timing")
+    parser.add_argument("--repo-root", type=Path, default=Path("."))
+    parser.add_argument("--production", type=Path, default=Path("fixtures/nw13/hotel_corridor.inspection.production.json"))
+    args = parser.parse_args(argv)
+    root = args.repo_root.resolve()
+    document = load_production(root, args.production)
+    validation = validate_production(root, document)
+    if not validation["ok"]:
+        parser.exit(1, json.dumps(validation["diagnostics"]) + "\n")
+    graph, _ = film_graph(root, document)
+    film_root = next(node for node in nw03_compiler._reachable_shader_roots(graph)
+                     if node.operator_id == nw13_film.OPERATOR)
+    report = {
+        "format": "nw13.film-raster-admission", "version": 1, "status": "static_admission_not_gpu_measurement",
+        "production_id": document["id"], "sources": validation["sources"],
+        "admitted_dispatch": validation["film_workload"],
+        "presentation_request": document.get("presentation", {"mode": "native-client"}),
+        "inspection_policy_projections": nw13_film.project_inspection_rasters(
+            graph, film_root, ((48, 27), (160, 90), (320, 180), (512, 288), (640, 360), (1280, 720), (1920, 1080))),
+    }
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

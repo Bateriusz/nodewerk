@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record NW-12 physical WASAPI/display audio evidence.
+"""Record physical WASAPI/display evidence for NWAS v1 and authored film v2.
 
 This is the physical-validation harness for the bounded procedural audio
 fixture.  It deliberately separates three observations that must never be
@@ -40,6 +40,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT / "tools") not in sys.path:
     sys.path.insert(0, str(ROOT / "tools"))
 
+from audio_capture_media import inspect_capture  # noqa: E402
+import audio_presentation_cues as cues  # noqa: E402
 import hardware_evidence_host  # noqa: E402
 import nwp_package as nwp  # noqa: E402
 from audio_song import compile_song, decode_song  # noqa: E402
@@ -49,6 +51,12 @@ PUBLIC_SUMMARY_FORMAT = "nodewerk-nw12-audio-physical-public-summary"
 PUBLIC_SUMMARY_SCHEMA = "nw12-audio-physical-public-summary.schema.json"
 PUBLIC_LIMITATION = "The private capture archive is not included; this summary cannot certify acceptance."
 VERSION = 1
+FILM_VERSION = 2
+FILM_FORMAT = "nodewerk-nw13-audio-physical-evidence"
+FILM_PUBLIC_SUMMARY_FORMAT = "nodewerk-nw13-audio-physical-public-summary"
+FILM_BASE = "1c9e1559c8d43530c7b213461c6719b6aa43ae35"
+FILM_BUNDLE_FORMAT = "nw13.physical-film-bundle"
+FILM_VARIANTS = ("common", "fallback", "dxr")
 TICKS_PER_SECOND = 48_000
 DEFAULT_DISPLAY_FRAME_RATE = 60
 OBSERVATION_FORMAT = "nodewerk-audio-display-observation"
@@ -170,6 +178,8 @@ def evidence_reference(
         "alignment_definition": PROTOCOL["alignment_definition"],
     }
     if verified is not None:
+        if verified.get("version") == FILM_VERSION:
+            reference.pop("evidence_record")  # NW-12 has its own historical benchmark slot.
         reference["status"] = "reported_historical"
         reference["artifact_match"] = ("executable_package_song" if playback_artifact_matches
                                        else "package_and_song_only")
@@ -259,7 +269,7 @@ def load_verified_evidence(
     if not evidence_path.is_file():
         return None
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-    if isinstance(evidence, Mapping) and evidence.get("format") == PUBLIC_SUMMARY_FORMAT:
+    if isinstance(evidence, Mapping) and evidence.get("format") in (PUBLIC_SUMMARY_FORMAT, FILM_PUBLIC_SUMMARY_FORMAT):
         return None  # Publication has no authority in a private acceptance workflow.
     evidence = verify_evidence(
         evidence, package_bytes=package_bytes, song_bytes=song_bytes,
@@ -329,24 +339,51 @@ def _as_ticks(value: Any, field: str) -> int:
     return value
 
 
+def _capture_clock(observation: Mapping[str, Any]) -> dict[str, int]:
+    clock = observation.get("capture_clock")
+    keys = {"audio_origin_tick", "video_origin_tick", "playback_start_tick"}
+    if not isinstance(clock, Mapping) or clock.keys() != keys:
+        raise ValueError("film observation requires explicit audio and video capture clock origins and playback start")
+    result = {key: _as_ticks(clock[key], f"capture_clock.{key}") for key in sorted(keys)}
+    origins = (result["audio_origin_tick"], result["video_origin_tick"])
+    if min(origins) != 0 or max(result.values()) >= (1 << 63):
+        raise ValueError("capture clock origins must be bounded relative to the first file timeline zero")
+    if result["playback_start_tick"] < max(origins):
+        raise ValueError("both capture files must start before or at the measured playback start")
+    return result
+
+
 def evaluate_alignment(
     observation: Mapping[str, Any],
     song: Mapping[str, Any],
     display_frame_rate: int | Fraction = DEFAULT_DISPLAY_FRAME_RATE,
+    *, presentation_cues: Mapping[str, Any] | None = None, song_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Compute absolute impulse/flash alignment from a real A/V observation."""
     if display_frame_rate <= 0 or display_frame_rate > 480:
         raise ValueError("display_frame_rate must be in 1..480")
-    if observation.get("format") != OBSERVATION_FORMAT or observation.get(
-        "version"
-    ) != 1:
+    song_version = song.get("version", 1)
+    if (not isinstance(observation, Mapping) or observation.get("format") != OBSERVATION_FORMAT
+            or type(observation.get("version")) is not int or observation["version"] != song_version):
         raise ValueError("unexpected display observation format")
     if observation.get("sample_rate") != TICKS_PER_SECOND:
         raise ValueError("display observation must use the 48000 Hz timebase")
-    events = song.get("events", [])
+    clock = None
+    if song_version == FILM_VERSION:
+        events = cues.validate_schedule(presentation_cues, song, song_sha256=song_sha256)
+        tick_field = "presentation_tick"
+        clock = _capture_clock(observation)
+    elif song_version == VERSION:
+        events = song.get("events")
+        tick_field = "event_tick"
+        if not isinstance(events, list) or not events:
+            raise ValueError("physical A/V needs a nonempty NWAS v1 event schedule")
+    else:
+        raise ValueError("unsupported physical A/V song version")
     impulses = observation.get("impulses")
     if not isinstance(impulses, list) or len(impulses) != len(events):
-        raise ValueError("observation must contain one impulse per song event")
+        subject = "emitted presentation cue" if song_version == FILM_VERSION else "song event"
+        raise ValueError(f"observation must contain one impulse per {subject}")
     rate = Fraction(display_frame_rate)
     tolerance = Fraction(TICKS_PER_SECOND, 1) / rate
     deltas: list[int] = []
@@ -354,24 +391,31 @@ def evaluate_alignment(
     for index, (event, impulse) in enumerate(zip(events, impulses)):
         if not isinstance(impulse, Mapping):
             raise ValueError("each impulse must contain its measured onsets")
-        event_tick = _as_ticks(impulse.get("event_tick"), f"impulses[{index}].event_tick")
+        event_tick = _as_ticks(impulse.get(tick_field), f"impulses[{index}].{tick_field}")
+        cue = {}
+        if song_version == FILM_VERSION:
+            if impulse.get("cue_id") != event["cue_id"]:
+                raise ValueError(f"impulse {index} does not identify the emitted presentation cue")
+            cue["cue_id"] = event["cue_id"]
         audio_tick = _as_ticks(impulse.get("audio_tick"), f"impulses[{index}].audio_tick")
         display_tick = _as_ticks(
             impulse.get("display_tick"), f"impulses[{index}].display_tick"
         )
-        if event_tick != int(event["tick"]):
-            raise ValueError(
-                f"impulse {index} event tick {event_tick} does not match song onset "
-                f"{event['tick']}"
-            )
+        expected_tick = event["presentation_tick"] if song_version == FILM_VERSION else event["tick"]
+        if event_tick != expected_tick:
+            subject = "its emitted presentation cue" if song_version == FILM_VERSION else "song onset"
+            raise ValueError(f"impulse {index} does not match {subject} at tick {expected_tick}")
+        if clock is not None and min(audio_tick, display_tick) < clock["playback_start_tick"] + event_tick:
+            raise ValueError(f"impulse {index} precedes its scheduled presentation cue on the capture clock")
         if index and (audio_tick <= previous_audio or display_tick <= previous_display):
             raise ValueError("observed audio and display onsets must be strictly increasing")
         previous_audio, previous_display = audio_tick, display_tick
-        normalized.append({"event_tick": event_tick, "audio_tick": audio_tick,
+        normalized.append({**cue, tick_field: event_tick, "audio_tick": audio_tick,
                            "display_tick": display_tick})
         deltas.append(display_tick - audio_tick)
-    maximum = max((abs(delta) for delta in deltas), default=0)
+    maximum = max(abs(delta) for delta in deltas)
     return {
+        **({"capture_clock": clock} if clock is not None else {}),
         "display_refresh_hz": float(rate),
         "tolerance_ticks": float(tolerance),
         "sample_rate": TICKS_PER_SECOND,
@@ -410,7 +454,7 @@ def _windows_11(os_info: Any) -> bool:
             and type(os_info.get("product_type")) is int and os_info["product_type"] == 1)
 
 
-def probe_environment() -> dict[str, Any]:
+def probe_environment(*, include_host_identity: bool = False) -> dict[str, Any]:
     """Query host identity only. Playback determines the endpoint and display."""
     result: dict[str, Any] = {
         "status": "unavailable",
@@ -423,7 +467,10 @@ def probe_environment() -> dict[str, Any]:
         "$ErrorActionPreference='Stop';"
         "$os=Get-CimInstance Win32_OperatingSystem;"
         "[pscustomobject]@{version=$os.Version;build=$os.BuildNumber;"
-        "product_type=$os.ProductType}|ConvertTo-Json -Compress"
+        "product_type=$os.ProductType"
+        + (";host=(Get-ItemPropertyValue -Path 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography' -Name MachineGuid)"
+           if include_host_identity else "")
+        + "}|ConvertTo-Json -Compress"
     )
     try:
         completed = hardware_evidence_host.run_windows_text(
@@ -433,6 +480,11 @@ def probe_environment() -> dict[str, Any]:
         if completed.returncode == 0:
             os_info = json.loads(completed.stdout)
             if _windows_11(os_info):
+                host = os_info.pop("host", None)
+                if include_host_identity and isinstance(host, str) and re.fullmatch(r"[0-9a-fA-F-]{36}", host):
+                    result["host_id_sha256"] = sha256_bytes(
+                        f"nodewerk-audio-host-v1:{host.lower()}".encode("ascii")
+                    )
                 result["os"] = os_info
                 result["reason"] = "selected outputs are available only from the playback process"
     except (OSError, subprocess.TimeoutExpired, ValueError):
@@ -488,6 +540,7 @@ def build_evidence(
     run_id: str | None = None,
     run_sha256: str | None = None,
     player_returncode: int | None = None,
+    presentation_cues: Mapping[str, Any] | None = None,
     _archive: _CaptureArchive | None = None,
     _archive_paths: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -500,6 +553,13 @@ def build_evidence(
     if payload is None or payload != song_bytes:
         raise ValueError("package AUDI payload does not match the selected song")
     song = decode_song(song_bytes)
+    film = song["version"] == FILM_VERSION
+    if film and _archive is not None:
+        presentation_cues = _archive.run.get("presentation_cues")
+    if not film and presentation_cues is not None:
+        raise ValueError("NWAS v1 does not accept film presentation cues")
+    if film and presentation_cues is not None:
+        cues.validate_schedule(presentation_cues, song, song_sha256=sha256_bytes(song_bytes))
     unavailable: list[dict[str, str]] = []
     unavailable_telemetry: list[dict[str, str]] = []
     environment = playback_environment(environment or probe_environment(), telemetry_text,
@@ -516,6 +576,12 @@ def build_evidence(
                             "reason": "no independently recorded artifact build identity was supplied"})
     else:
         validate_physical_inputs(build_identity, _identity_hashes(artifact), provenance)
+    if film and presentation_cues is None:
+        unavailable.append({"field": "presentation_cues",
+                            "reason": "no source-bound emitted film presentation cues were retained"})
+    if film and not _valid_hash(environment.get("host_id_sha256")):
+        unavailable.append({"field": "environment.host_id_sha256",
+                            "reason": "the actual film playback host identity is unavailable"})
     if _archive is None or _archive_paths is None:
         unavailable.append({"field": "archive_files",
                             "reason": "the original run, observation JSON and both media must be retained beside the report"})
@@ -588,8 +654,10 @@ def build_evidence(
                 "reason": "no real displayed impulse/flash observation was supplied",
             }
         )
-    elif environment["status"] == "available":
-        alignment = evaluate_alignment(observation, song, _refresh(environment["display"]))
+    elif environment["status"] == "available" and (not film or presentation_cues is not None):
+        alignment = evaluate_alignment(observation, song, _refresh(environment["display"]),
+                                       presentation_cues=presentation_cues,
+                                       song_sha256=artifact["song_sha256"])
         if not alignment["within_one_displayed_frame"]:
             unavailable.append(
                 {
@@ -642,6 +710,13 @@ def build_evidence(
         ),
     }
 
+    if film:
+        evidence.update(format=FILM_FORMAT, version=FILM_VERSION, task="NW-13",
+                        implementation_base=FILM_BASE, song_nwas_hex=song_bytes.hex(),
+                        presentation_cues=presentation_cues,
+                        protocol={"tool": PROTOCOL["tool"], "clock": "wasapi_endpoint",
+                                  "sample_rate": TICKS_PER_SECOND,
+                                  "measurement": "emitted film presentation cues and external A/V onsets"})
     if player_returncode is not None:
         mark_player_result(evidence, player_returncode)
     _validate_report(evidence)
@@ -661,12 +736,14 @@ def _verify_measured_evidence(evidence: Mapping[str, Any]) -> None:
     if not isinstance(provenance, Mapping):
         raise ValueError("verified evidence requires build provenance")
     source = evidence.get("source_head_sha")
+    film = evidence["version"] == FILM_VERSION
     if (not _valid_hash(source, 40) or source != provenance.get("source_revision")
-            or provenance.get("tracked_files_clean") is not True
-            or provenance.get("nw11_incorporated") is not True
-            or provenance.get("implementation_base") != IMPLEMENTATION_BASE
-            or provenance.get("nw11_merge_revision") != IMPLEMENTATION_BASE
-            or provenance.get("implementation_base_tree") != IMPLEMENTATION_BASE_TREE):
+            or (film and provenance.get("source_binding") != "attested_film_bundle")
+            or (not film and (provenance.get("tracked_files_clean") is not True
+                or provenance.get("nw11_incorporated") is not True
+                or provenance.get("implementation_base") != IMPLEMENTATION_BASE
+                or provenance.get("nw11_merge_revision") != IMPLEMENTATION_BASE
+                or provenance.get("implementation_base_tree") != IMPLEMENTATION_BASE_TREE))):
         raise ValueError("verified evidence requires a clean source head binding")
     digest_fields = _identity_hashes(artifact)
     if not all(_valid_hash(value) for value in digest_fields.values()):
@@ -675,13 +752,24 @@ def _verify_measured_evidence(evidence: Mapping[str, Any]) -> None:
     if not isinstance(identity, Mapping):
         raise ValueError("verified evidence requires the artifact build identity")
     validate_physical_inputs(identity, digest_fields, provenance)
+    if identity["version"] != evidence["version"]:
+        raise ValueError("artifact identity protocol does not match the report version")
     if (type(evidence.get("player_returncode")) is not int or evidence["player_returncode"] != 0
             or evidence.get("physical_evidence") != "verified"
             or evidence.get("satisfies_completion") is not True):
         raise ValueError("verified evidence requires successful playback and matching status")
 
     song = evidence.get("song")
-    compiled = compile_song(song)
+    if film:
+        compiled = _versioned_film_song(evidence)
+        schedule = evidence.get("presentation_cues")
+        cues.validate_schedule(schedule, song, song_sha256=digest_fields["song_sha256"])
+        if (schedule["graph_sha256"] != identity["graph_sha256"]
+                or cues.digest(schedule) != identity["presentation_cues_sha256"]):
+            raise ValueError("film cue schedule does not match the attested artifact/source")
+    else:
+        compiled = compile_song(song)
+        schedule = None
     if (digest_fields["song_sha256"] != sha256_bytes(compiled)
             or artifact.get("song_bytes") != len(compiled)
             or artifact.get("duration_ticks") != song["duration_ticks"]):
@@ -700,7 +788,8 @@ def _verify_measured_evidence(evidence: Mapping[str, Any]) -> None:
             or endpoint.get("clock") != "wasapi_endpoint"
             or not _positive_int(endpoint.get("final_tick"))
             or endpoint["final_tick"] < song["duration_ticks"]
-            or not _positive_int(display.get("present_count"))):
+            or not _positive_int(display.get("present_count"))
+            or (film and not _valid_hash(environment.get("host_id_sha256")))):
         raise ValueError("verified evidence requires the active playback endpoint and display")
     protocol = evidence.get("protocol") or {}
     if (not isinstance(protocol, Mapping) or protocol.get("clock") != "wasapi_endpoint"
@@ -721,7 +810,8 @@ def _verify_measured_evidence(evidence: Mapping[str, Any]) -> None:
             or not all(_valid_hash(capture.get(f"{kind}_sha256")) for kind in ("audio", "video"))):
         raise ValueError("verified evidence requires the same run, original observation and both raw capture hashes")
     recomputed = evaluate_alignment(
-        {"format": OBSERVATION_FORMAT, "version": 1, **alignment}, song, _refresh(display)
+        {"format": OBSERVATION_FORMAT, "version": evidence["version"], **alignment}, song,
+        _refresh(display), presentation_cues=schedule, song_sha256=digest_fields["song_sha256"],
     )
     if alignment != recomputed or recomputed["within_one_displayed_frame"] is not True:
         raise ValueError("verified evidence requires measured in-frame alignment")
@@ -752,10 +842,15 @@ def _validate_report(
     executable_bytes: bytes | None = None,
 ) -> dict[str, Any]:
     """Validate the persisted report, but do not certify its external inputs."""
-    if (not isinstance(evidence, Mapping) or evidence.get("format") != FORMAT
-            or type(evidence.get("version")) is not int or evidence["version"] != VERSION):
-        raise ValueError("unexpected NW-12 physical evidence format")
-    if (evidence.get("task") != "NW-12" or evidence.get("nw11_incorporated") is not True
+    if not isinstance(evidence, Mapping) or type(evidence.get("version")) is not int:
+        raise ValueError("unexpected NW-12 physical evidence format or NW-13 successor")
+    film = evidence["version"] == FILM_VERSION and evidence.get("format") == FILM_FORMAT
+    if not film and (evidence.get("format") != FORMAT or evidence["version"] != VERSION):
+        raise ValueError("unexpected NW-12 physical evidence format or NW-13 successor")
+    if film:
+        if evidence.get("task") != "NW-13" or evidence.get("implementation_base") != FILM_BASE:
+            raise ValueError("evidence must identify NW-13 and its implementation base")
+    elif (evidence.get("task") != "NW-12" or evidence.get("nw11_incorporated") is not True
             or evidence.get("implementation_base") != IMPLEMENTATION_BASE):
         raise ValueError("evidence must identify NW-12 on the NW-11 implementation base")
     status = evidence.get("verification_status")
@@ -767,6 +862,19 @@ def _validate_report(
     for field, value in _identity_hashes(artifact).items():
         if value is not None and not _valid_hash(value):
             raise ValueError(f"invalid artifact.{field}")
+    if film:
+        retained_song = _versioned_film_song(evidence)
+        if (artifact.get("song_sha256") != sha256_bytes(retained_song)
+                or artifact.get("song_bytes") != len(retained_song)
+                or artifact.get("duration_ticks") != evidence["song"]["duration_ticks"]):
+            raise ValueError("NWAS v2 evidence does not bind the exact embedded payload")
+        if package_bytes is not None and nwp.decode_package(package_bytes).audio_song != retained_song:
+            raise ValueError("supplied package does not embed the observed NWAS v2 bytes")
+        if executable_bytes is not None:
+            _, linked, embedded_cues, manifest_hash = _embedded_playback(executable_bytes, package_bytes)
+            if (linked != retained_song or embedded_cues != evidence.get("presentation_cues")
+                    or (evidence.get("build_identity") or {}).get("manifest_sha256") != manifest_hash):
+                raise ValueError("supplied player does not embed the observed film binding")
     unavailable = evidence.get("unavailable") or []
     if status == "verified_physical":
         if unavailable:
@@ -847,68 +955,223 @@ def _artifact_identity(player: Path, package: Path, song: Path) -> dict[str, str
             "package_sha256": sha256_file(package), "song_sha256": sha256_file(song)}
 
 
+def _versioned_film_song(evidence: Mapping[str, Any]) -> bytes:
+    encoded = evidence.get("song_nwas_hex")
+    # NWAS v2 has bounded instruments, notes and automation.
+    if (not isinstance(encoded, str) or len(encoded) > 32 * 1024
+            or re.fullmatch(r"(?:[0-9a-f]{2})+", encoded) is None):
+        raise ValueError("verified film evidence requires the exact embedded NWAS v2 bytes")
+    raw = bytes.fromhex(encoded)
+    decoded = decode_song(raw)
+    if decoded["version"] != FILM_VERSION or decoded != evidence.get("song"):
+        raise ValueError("decoded NWAS v2 differs from the retained embedded payload")
+    return raw
+
+
+def _embedded_playback(
+    executable: bytes, expected_package: bytes | None,
+) -> tuple[bytes, bytes, Mapping[str, Any] | None, str]:
+    # Reuse the portable, checksummed PE overlay reader, not the export toolchain.
+    from nw11_production_binding import embedded_payloads
+
+    _, package, manifest_bytes = embedded_payloads(executable)
+    if expected_package is not None and expected_package != package:
+        raise ValueError("player embedded package does not match supplied artifacts")
+    song = nwp.decode_package(package).audio_song
+    manifest = json.loads(manifest_bytes)
+    audio = manifest.get("audio") if isinstance(manifest, Mapping) else None
+    if song is None or not isinstance(audio, Mapping):
+        raise ValueError("player does not embed procedural audio")
+    song_hash = sha256_bytes(song)
+    model = decode_song(song)
+    if audio.get("song_sha256") != song_hash or audio.get("version") != model["version"]:
+        raise ValueError("player audio manifest does not match its embedded song")
+    schedule = audio.get("presentation_cues")
+    if model["version"] == FILM_VERSION:
+        cues.validate_schedule(schedule, model, song_sha256=song_hash)
+    elif schedule is not None:
+        raise ValueError("NWAS v1 must not claim a film cue schedule")
+    return package, song, schedule, sha256_bytes(manifest_bytes)
+
+
 def validate_physical_inputs(identity: Mapping[str, Any], artifact: Mapping[str, str],
                              provenance: Mapping[str, Any]) -> None:
-    """Bind downloaded CI artifacts to their actual build checkout and bytes."""
+    """Bind downloaded CI artifacts to their actual build source and bytes."""
     if (not isinstance(identity, Mapping)
             or identity.get("format") != "nodewerk-audio-physical-inputs"
-            or type(identity.get("version")) is not int or identity["version"] != 1):
+            or type(identity.get("version")) is not int or identity["version"] not in (VERSION, FILM_VERSION)):
         raise ValueError("invalid physical input manifest")
     if (not all(_valid_hash(value) for value in _identity_hashes(artifact).values())
             or identity.get("artifact") != artifact):
         raise ValueError("physical input artifact SHA-256 mismatch")
     for field, key in (("source_commit", "source_revision"), ("source_tree", "source_tree")):
         value = identity.get(field)
-        if (not isinstance(value, str) or len(value) != 40
-                or any(c not in "0123456789abcdef" for c in value)
-                or value != provenance.get(key)):
-            raise ValueError(f"physical input {field} does not match the checked-out source")
+        if not _valid_hash(value, 40) or value != provenance.get(key):
+            raise ValueError(f"physical input {field} does not match the build source")
+    if identity["version"] == FILM_VERSION and (
+        provenance.get("source_binding") != "attested_film_bundle"
+        or identity.get("variant") not in FILM_VARIANTS
+        or identity.get("film_bundle_sha256") != provenance.get("film_bundle_sha256")
+        or not all(_valid_hash(identity.get(key)) for key in
+                   ("film_bundle_sha256", "manifest_sha256", "graph_sha256", "presentation_cues_sha256"))
+    ):
+        raise ValueError("invalid source/variant-bound film audio inputs")
 
 
-def run_playback(*, player: Path, package: Path, song: Path, output: Path,
-                 timeout: int = 120, identity_path: Path | None = None) -> dict[str, Any]:
+def _bundle_path(root: Path, relative: Any) -> tuple[str, Path]:
+    if not isinstance(relative, str) or not relative or "\\" in relative or ":" in relative:
+        raise ValueError("film bundle inventory path must stay inside the bundle")
+    name = PurePosixPath(relative)
+    if not name.parts or name.is_absolute() or ".." in name.parts or name.as_posix() != relative:
+        raise ValueError("film bundle inventory path must stay inside the bundle")
+    destination = (root / Path(*name.parts)).resolve()
+    if not destination.is_relative_to(root):
+        raise ValueError("film bundle inventory path must stay inside the bundle")
+    return relative, destination
+
+
+def _film_build_inputs(
+    bundle_path: Path, bundle_sha256: str, variant: str, *,
+    player: Path, package_path: Path, artifact: Mapping[str, str],
+    manifest_sha256: str, schedule: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Recheck the selected arm against the independently pinned CI manifest."""
+    raw_bundle = bundle_path.read_bytes()
+    if not _valid_hash(bundle_sha256) or sha256_bytes(raw_bundle) != bundle_sha256:
+        raise ValueError("film bundle must match its externally verified manifest SHA-256")
+    bundle = json.loads(raw_bundle)
+    if (not isinstance(bundle, Mapping) or bundle.get("format") != FILM_BUNDLE_FORMAT
+            or type(bundle.get("version")) is not int or bundle["version"] != 1
+            or not _valid_hash(bundle.get("revision"), 40) or not _valid_hash(bundle.get("tree"), 40)
+            or variant not in FILM_VARIANTS or not isinstance(bundle.get("arms"), Mapping)
+            or not isinstance(bundle.get("files"), Mapping)):
+        raise ValueError("invalid attested physical film bundle")
+    arm = bundle["arms"].get(variant)
+    if not isinstance(arm, Mapping):
+        raise ValueError("selected physical film variant was not staged")
+    root = bundle_path.parent.resolve()
+    for key, check_path, digest in (
+        ("executable", player, artifact["executable_sha256"]),
+        ("package", package_path, artifact["package_sha256"]),
+        ("manifest", None, manifest_sha256),
+    ):
+        rel, selected = _bundle_path(root, arm.get(key))
+        if (arm.get(f"{key}_sha256") != digest or bundle["files"].get(rel) != digest
+                or (check_path is not None and selected != check_path.resolve())
+                or sha256_file(selected) != digest):
+            raise ValueError(f"selected film variant {key} does not match the attested bundle")
+    graph_hash = arm.get("graph_sha256", bundle.get("graph_sha256"))
+    if arm.get("song_sha256") != artifact["song_sha256"] or graph_hash != schedule["graph_sha256"]:
+        raise ValueError("film cue schedule or song is not bound to the staged graph and variant")
+    provenance = {"source_revision": bundle["revision"], "source_tree": bundle["tree"],
+                  "source_binding": "attested_film_bundle", "film_bundle_sha256": bundle_sha256}
+    identity = {
+        "format": "nodewerk-audio-physical-inputs", "version": FILM_VERSION,
+        "source_commit": bundle["revision"], "source_tree": bundle["tree"],
+        "artifact": dict(artifact), "film_bundle_sha256": bundle_sha256, "variant": variant,
+        "manifest_sha256": manifest_sha256, "graph_sha256": graph_hash,
+        "presentation_cues_sha256": cues.digest(schedule),
+    }
+    validate_physical_inputs(identity, artifact, provenance)
+    return identity, provenance
+
+
+def _film_observation_binding(run: Mapping[str, Any]) -> dict[str, Any] | None:
+    identity = run.get("build_identity")
+    provenance = run.get("provenance")
+    artifact = run.get("artifact")
+    if (not isinstance(provenance, Mapping) or not isinstance(artifact, Mapping)
+            or not isinstance(identity, Mapping) or identity.get("version") != FILM_VERSION):
+        raise ValueError("film run lacks source/variant provenance")
+    validate_physical_inputs(identity, artifact, provenance)
+    environment = playback_environment(run["environment"], run["stdout"], run["returncode"])
+    host = environment.get("host_id_sha256")
+    if (environment["status"] != "available" or not _valid_hash(host)
+            or run.get("presentation_mode") != "maximized"):
+        return None
+    return {
+        "source_commit": identity["source_commit"], "source_tree": identity["source_tree"],
+        "variant": identity["variant"], "executable_sha256": artifact["executable_sha256"],
+        "presentation_cues_sha256": identity["presentation_cues_sha256"],
+        "host_id_sha256": host, "display_id_sha256": environment["display"]["id_sha256"],
+        "audio_endpoint_id_sha256": environment["audio_endpoint"]["id_sha256"],
+    }
+
+
+def run_playback(*, player: Path, package: Path, song: Path | None, output: Path,
+                 timeout: int = 120, identity_path: Path | None = None,
+                 film_bundle: Path | None = None, film_bundle_sha256: str | None = None,
+                 variant: str | None = None) -> dict[str, Any]:
     """Launch once while the operator records a simultaneous external A/V capture."""
     if os.name != "nt":
         raise RuntimeError("physical WASAPI/display evidence requires Windows")
-    player, package, song = (p.resolve(strict=True) for p in (player, package, song))
+    player, package = (p.resolve(strict=True) for p in (player, package))
     if output.exists():
         raise FileExistsError(output)
-    import nw05_export
-    payload, manifest = nw05_export.extract_embedded_package(player.read_bytes())
-    if payload != package.read_bytes() or nwp.decode_package(payload).audio_song != song.read_bytes():
-        raise ValueError("player embedded package/song does not match supplied artifacts")
-    audio = json.loads(manifest).get("audio") or {}
-    if audio.get("song_sha256") != sha256_file(song):
-        raise ValueError("player audio manifest does not match supplied song")
-    artifact = _artifact_identity(player, package, song)
-    provenance = provenance_snapshot()
-    if not provenance.get("tracked_files_clean") or not provenance.get("source_revision"):
-        raise ValueError("physical playback requires a clean tracked source checkout")
-    identity = (json.loads(identity_path.read_text(encoding="utf-8"))
-                if identity_path is not None else None)
-    if identity is not None:
-        validate_physical_inputs(identity, artifact, provenance)
-        ancestry = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", IMPLEMENTATION_BASE, "HEAD"],
-            cwd=ROOT, capture_output=True,
+    player_bytes, package_bytes = player.read_bytes(), package.read_bytes()
+    _, song_bytes, schedule, manifest_sha256 = _embedded_playback(player_bytes, package_bytes)
+    if song is not None and song.read_bytes() != song_bytes:
+        raise ValueError("player embedded song does not match the supplied NWAS payload")
+    film = schedule is not None
+    artifact = {"executable_sha256": sha256_bytes(player_bytes),
+                "package_sha256": sha256_bytes(package_bytes),
+                "song_sha256": sha256_bytes(song_bytes)}
+    if film:
+        if identity_path is not None or film_bundle is None or not film_bundle_sha256 or not variant:
+            raise ValueError("NWAS v2 needs --film-bundle, --film-bundle-sha256 and --variant")
+        identity, provenance = _film_build_inputs(
+            film_bundle, film_bundle_sha256, variant, player=player, package_path=package,
+            artifact=artifact, manifest_sha256=manifest_sha256, schedule=schedule,
         )
-        if ancestry.returncode != 0:
-            raise ValueError("build source must contain the NW-11 implementation base")
-    host = probe_environment()
+    else:
+        if film_bundle is not None or film_bundle_sha256 is not None or variant is not None:
+            raise ValueError("NWAS v1 uses the original physical identity, not a film bundle")
+        if song is None:
+            raise ValueError("NWAS v1 physical playback requires the original --song")
+        provenance = provenance_snapshot()
+        if not provenance.get("tracked_files_clean") or not provenance.get("source_revision"):
+            raise ValueError("physical playback requires a clean tracked source checkout")
+        identity = (json.loads(identity_path.read_text(encoding="utf-8"))
+                    if identity_path is not None else None)
+        if identity is not None:
+            validate_physical_inputs(identity, artifact, provenance)
+            if identity["version"] != VERSION:
+                raise ValueError("NWAS v1 needs the original build identity format")
+            ancestry = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", IMPLEMENTATION_BASE, "HEAD"],
+                cwd=ROOT, capture_output=True,
+            )
+            if ancestry.returncode != 0:
+                raise ValueError("build source must contain the NW-11 implementation base")
+    host = probe_environment(include_host_identity=True) if film else probe_environment()
     run_id = uuid.uuid4().hex
     print(f"Audio capture run ID: {run_id}", flush=True)
-    completed = subprocess.run([str(player), "--audio-evidence"], capture_output=True,
-                               timeout=timeout)
-    if _artifact_identity(player, package, song) != artifact:
+    command = [str(player), "--audio-evidence"]
+    if film:
+        command.append("--maximized")
+        print(f"Film presentation cues: {json.dumps(schedule['cues'])}", flush=True)
+    completed = subprocess.run(command, capture_output=True, timeout=timeout)
+    if (sha256_file(player) != artifact["executable_sha256"]
+            or sha256_file(package) != artifact["package_sha256"]
+            or (song is not None and sha256_file(song) != artifact["song_sha256"])):
         raise ValueError("playback artifacts changed during execution")
-    if provenance_snapshot() != provenance:
+    if film:
+        if (_film_build_inputs(
+                film_bundle, film_bundle_sha256, variant, player=player, package_path=package,
+                artifact=artifact, manifest_sha256=manifest_sha256, schedule=schedule,
+        ) != (identity, provenance) or probe_environment(include_host_identity=True) != host):
+            raise ValueError("film bundle or playback host changed during execution")
+    elif provenance_snapshot() != provenance:
         raise ValueError("source checkout changed during execution")
-    result = {"format": "nodewerk-audio-physical-run", "version": 1, "run_id": run_id,
-              "artifact": artifact, "provenance": provenance, "build_identity": identity,
+    result = {"format": "nodewerk-audio-physical-run", "version": FILM_VERSION if film else VERSION,
+              "run_id": run_id, "artifact": artifact, "provenance": provenance, "build_identity": identity,
               "environment": host,
               "stdout": hardware_evidence_host.decode_windows_output(completed.stdout),
               "stderr": hardware_evidence_host.decode_windows_output(completed.stderr),
               "returncode": completed.returncode}
+    if film:
+        result.update(presentation_mode="maximized", presentation_cues=schedule)
+        result["observation_binding"] = _film_observation_binding(result)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("x", encoding="utf-8") as stream:
         json.dump(result, stream, indent=2, sort_keys=True)
@@ -918,23 +1181,60 @@ def run_playback(*, player: Path, package: Path, song: Path, output: Path,
 def validate_capture_binding(run: Mapping[str, Any], observation: Mapping[str, Any],
                              audio_capture: Path, video_capture: Path) -> None:
     if (not isinstance(run, Mapping) or run.get("format") != "nodewerk-audio-physical-run"
-            or type(run.get("version")) is not int or run["version"] != 1):
+            or type(run.get("version")) is not int or run["version"] not in (VERSION, FILM_VERSION)):
         raise ValueError("invalid physical run format")
     run_id = run.get("run_id")
     if not _valid_hash(run_id, 32) or not isinstance(observation, Mapping) or observation.get("run_id") != run_id:
         raise ValueError("observation does not identify the recorded playback run")
+    if run["version"] == FILM_VERSION:
+        binding = _film_observation_binding(run)
+        if (binding is None or run.get("observation_binding") != binding
+                or observation.get("binding") != binding or observation.get("version") != FILM_VERSION):
+            raise ValueError("film observation is not bound to the same source, variant, host, display and endpoint")
     capture = observation.get("capture")
     if not isinstance(capture, Mapping):
         raise ValueError("observation is missing raw capture hashes")
-    audio_hash = sha256_file(audio_capture)
-    if capture.get("audio_sha256") != audio_hash:
+    multiplexed = audio_capture.resolve() == video_capture.resolve()
+    check_container = run["version"] == FILM_VERSION
+    audio = inspect_capture(audio_capture, {"audio", "video"} if multiplexed else {"audio"},
+                            check_container=check_container)
+    if capture.get("audio_sha256") != audio.sha256:
         raise ValueError("audio capture SHA-256 mismatch")
-    video_hash = audio_hash if audio_capture.resolve() == video_capture.resolve() else sha256_file(video_capture)
-    if capture.get("video_sha256") != video_hash:
+    video = audio if multiplexed else inspect_capture(video_capture, {"video"}, check_container=check_container)
+    if capture.get("video_sha256") != video.sha256:
         raise ValueError("video capture SHA-256 mismatch")
+    if check_container:
+        clock = _capture_clock(observation)
+        if (audio.sha256 == video.sha256
+                and (clock["audio_origin_tick"] or clock["video_origin_tick"])):
+            raise ValueError("a multiplexed capture must share a single zero clock origin")
+        impulses = observation.get("impulses")
+        if not isinstance(impulses, list) or not impulses:
+            raise ValueError("observation must contain one impulse per emitted presentation cue")
+        timelines = (("audio_tick", "audio", audio.tracks["audio"]),
+                     ("display_tick", "video", video.tracks["video"]))
+        playback_start = clock["playback_start_tick"]
+        for _, kind, timeline in timelines:
+            if not timeline.contains(playback_start - clock[f"{kind}_origin_tick"], TICKS_PER_SECOND):
+                raise ValueError(f"measured playback start is outside the retained {kind} presentation range")
+        for index, impulse in enumerate(impulses):
+            if not isinstance(impulse, Mapping):
+                raise ValueError("each impulse must contain its measured onsets")
+            scheduled = playback_start + _as_ticks(
+                impulse.get("presentation_tick"), f"impulses[{index}].presentation_tick",
+            )
+            for field, kind, timeline in timelines:
+                origin = clock[f"{kind}_origin_tick"]
+                if not timeline.contains(scheduled - origin, TICKS_PER_SECOND):
+                    raise ValueError(f"scheduled cue is outside the retained {kind} presentation range")
+                onset = _as_ticks(impulse.get(field), f"impulses[{index}].{field}")
+                if not timeline.contains(onset - origin, TICKS_PER_SECOND):
+                    raise ValueError(f"observed {field} is outside the retained {kind} presentation range")
+                if onset < scheduled:
+                    raise ValueError(f"observed {field} precedes its scheduled presentation cue on the capture clock")
 
 
-def record(*, player: Path, package: Path, song: Path, output: Path,
+def record(*, player: Path, package: Path, song: Path | None, output: Path,
            run_path: Path, observation_path: Path, audio_capture: Path,
            video_capture: Path
            ) -> dict[str, Any]:
@@ -942,18 +1242,36 @@ def record(*, player: Path, package: Path, song: Path, output: Path,
     files = ArchiveFiles(run_path, observation_path, audio_capture, video_capture)
     archive = _read_capture_archive(files)
     run = archive.run
-    if run.get("artifact") != _artifact_identity(player, package, song):
+    player_bytes, package_bytes = player.read_bytes(), package.read_bytes()
+    if run["version"] == FILM_VERSION:
+        _, linked_song, schedule, manifest_hash = _embedded_playback(player_bytes, package_bytes)
+        if (run.get("presentation_cues") != schedule
+                or (run.get("build_identity") or {}).get("manifest_sha256") != manifest_hash):
+            raise ValueError("film run does not match the embedded presentation cue schedule")
+    elif song is None:
+        raise ValueError("NWAS v1 physical evidence requires the original --song")
+    else:
+        linked_song = song.read_bytes()
+    if song is not None and song.read_bytes() != linked_song:
+        raise ValueError("supplied song does not match the observed embedded NWAS bytes")
+    artifact = {"executable_sha256": sha256_bytes(player_bytes),
+                "package_sha256": sha256_bytes(package_bytes), "song_sha256": sha256_bytes(linked_song)}
+    if run.get("artifact") != artifact:
         raise ValueError("physical run artifact identity mismatch")
+    if decode_song(linked_song)["version"] != run["version"]:
+        raise ValueError("physical run protocol does not match its embedded song version")
     provenance = run["provenance"]
-    if not provenance.get("tracked_files_clean"):
+    if run["version"] == VERSION and not provenance.get("tracked_files_clean"):
         raise ValueError("physical run source checkout was not clean")
+    if run["version"] == FILM_VERSION:
+        validate_physical_inputs(run.get("build_identity"), artifact, provenance)
     relative_paths = files.relative_to(output)
     if relative_paths is not None:
         ArchiveFiles.from_report(output, {"archive_files": relative_paths})
     evidence = build_evidence(
-        package_bytes=package.read_bytes(), song_bytes=song.read_bytes(),
+        package_bytes=package_bytes, song_bytes=linked_song,
         source_head_sha=provenance.get("source_revision"),
-        executable_bytes=player.read_bytes(), telemetry_text=run["stdout"],
+        executable_bytes=player_bytes, telemetry_text=run["stdout"],
         environment=run["environment"], provenance=provenance,
         build_identity=run.get("build_identity"), player_returncode=run["returncode"],
         _archive=archive, _archive_paths=relative_paths,
@@ -978,8 +1296,15 @@ def _verify_archive(evidence: Mapping[str, Any], archive: _CaptureArchive) -> No
     environment = playback_environment(run["environment"], run["stdout"], run["returncode"])
     if environment != evidence["environment"]:
         raise ValueError("archived run does not match the active playback environment")
+    film = evidence["version"] == FILM_VERSION
+    if run["version"] != evidence["version"] or (
+        film and run["presentation_cues"] != evidence.get("presentation_cues")
+    ):
+        raise ValueError("archived film cue schedule does not match the verified evidence")
     measured = evaluate_alignment(archive.bound_observation(), evidence["song"],
-                                  _refresh(environment["display"]))
+                                  _refresh(environment["display"]),
+                                  presentation_cues=evidence.get("presentation_cues") if film else None,
+                                  song_sha256=evidence["artifact"]["song_sha256"])
     if measured != evidence["alignment"]:
         raise ValueError("recorded alignment does not match the original measured onsets")
     telemetry = parse_player_telemetry(run["stdout"])
@@ -995,12 +1320,12 @@ def _project_verified_report(evidence: Mapping[str, Any]) -> dict[str, Any]:
     artifact, alignment = evidence["artifact"], evidence["alignment"]
     environment = evidence["environment"]
     display, capture = environment["display"], alignment["capture"]
-    return {
-        "format": PUBLIC_SUMMARY_FORMAT,
-        "version": 1,
-        "task": "NW-12",
-        "implementation_base": IMPLEMENTATION_BASE,
-        "implementation_base_tree": IMPLEMENTATION_BASE_TREE,
+    film = evidence["version"] == FILM_VERSION
+    summary = {
+        "format": FILM_PUBLIC_SUMMARY_FORMAT if film else PUBLIC_SUMMARY_FORMAT,
+        "version": evidence["version"],
+        "task": evidence["task"],
+        "implementation_base": evidence["implementation_base"],
         "verification_status": "reported_historical",
         "reported_decision": "verified_physical",
         "archive_rechecked": False,
@@ -1023,6 +1348,15 @@ def _project_verified_report(evidence: Mapping[str, Any]) -> dict[str, Any]:
         "measurements": {key: evidence["measurements"][key] for key in _INT_TELEMETRY.values()},
         "limitation": PUBLIC_LIMITATION,
     }
+    if film:
+        identity = evidence["build_identity"]
+        summary.update(variant=identity["variant"],
+                       film_bundle_sha256=identity["film_bundle_sha256"],
+                       graph_sha256=identity["graph_sha256"],
+                       presentation_cues_sha256=identity["presentation_cues_sha256"])
+    else:
+        summary["implementation_base_tree"] = IMPLEMENTATION_BASE_TREE
+    return summary
 
 
 def summarize_private_evidence(path: Path, *, archive_files: ArchiveFiles | None = None) -> dict[str, Any]:
@@ -1038,15 +1372,19 @@ def _parser() -> argparse.ArgumentParser:
     record_parser = sub.add_parser("record", help="record a physical observation")
     record_parser.add_argument("--player", type=Path, required=True)
     record_parser.add_argument("--package", type=Path, required=True)
-    record_parser.add_argument("--song", type=Path, required=True)
+    record_parser.add_argument("--song", type=Path, help="original NWAS v1 song (optional for embedded NWAS v2)")
     record_parser.add_argument("--output", type=Path, required=True)
     record_parser.add_argument("--run", type=Path, required=True)
     record_parser.add_argument("--observation", type=Path, required=True)
     record_parser.add_argument("--capture-audio", type=Path, required=True)
     record_parser.add_argument("--capture-video", type=Path, required=True)
     run_parser = sub.add_parser("run", help="launch a single physical playback while capturing A/V")
-    for name in ("player", "package", "song", "output"):
+    for name in ("player", "package", "output"):
         run_parser.add_argument("--" + name, type=Path, required=True)
+    run_parser.add_argument("--song", type=Path, help="original NWAS v1 song (optional for embedded NWAS v2)")
+    run_parser.add_argument("--film-bundle", type=Path, help="verified film-physical.json from the staged NW-13 bundle")
+    run_parser.add_argument("--film-bundle-sha256", help="independently verified SHA-256 of film-physical.json")
+    run_parser.add_argument("--variant", choices=FILM_VARIANTS)
     run_parser.add_argument("--timeout", type=int, default=120)
     run_parser.add_argument("--identity", type=Path, help="identity.json from the CI physical inputs artifact")
     verify_parser = sub.add_parser("verify", help="verify a recorded observation profile")
@@ -1077,7 +1415,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "run":
         result = run_playback(player=args.player, package=args.package, song=args.song,
-                              output=args.output, timeout=args.timeout, identity_path=args.identity)
+                              output=args.output, timeout=args.timeout, identity_path=args.identity,
+                              film_bundle=args.film_bundle, film_bundle_sha256=args.film_bundle_sha256,
+                              variant=args.variant)
         return 0 if result["returncode"] == 0 else 1
     if args.command == "record":
         evidence = record(

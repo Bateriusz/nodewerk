@@ -159,6 +159,19 @@ def emit_composite(spec, scene, timing, width, height):
     ).replace("/* CAMERA */", nw13_film._camera(scene))
 
 
+def sampled_shader_sources(document, root, spec, scene, timing, dispatch):
+    """Versioned sample and composition sources for the same admitted raster."""
+    import nw13_film
+
+    return {
+        ("nw13.0.sample." + root.node_id, "FilmSample"): nw13_film.emit(
+            document, root, entry_point="FilmSample", thread_group=dispatch.thread_group,
+            dispatch_groups=dispatch.groups, width=dispatch.width, height=dispatch.height,
+        ),
+        ("nw13.1.compose." + spec.node_id, "FilmFeedback"): emit_composite(spec, scene, timing, *dispatch.extent),
+    }
+
+
 def build_stateful_package(document, *, optimized, allow_test_payloads, frames_in_flight,
                            packaged_checkpoint_ticks, dxc_executable, optimization,
                            allow_unpinned_dxc, cache_dir):
@@ -177,23 +190,22 @@ def build_stateful_package(document, *, optimized, allow_test_payloads, frames_i
     try:
         spec = read_feedback(document)
         root_node = document.nodes[spec.film_id]
-        _, _, _, scene, settings, _ = nw13_film.read_film(document, root_node)
-        width, height = (int(document.settings[f"nw05_output_{key}"]) for key in ("width", "height"))
-        if (width, height) != tuple(settings["rendering"][key] for key in ("width", "height")):
-            raise ValueError("film frame views and export dimensions must agree")
+        data, dispatch, workload = nw13_film.admit_film(document, root_node)
+        _, _, _, scene, settings, _ = data
+        width, height = dispatch.extent
         timing, _ = nw13_film.film_timing(scene, settings)
-        group = (8, 8, 1)
+        group = dispatch.thread_group
+        sources = sampled_shader_sources(document, root_node, spec, scene, timing, dispatch)
         generated = [
             compiler.GeneratedShader(
                 specialization_id="nw13.0.sample." + spec.film_id, entry_point="FilmSample", target="cs_6_0",
                 family=compiler.PASS_FAMILY,
-                hlsl=nw13_film.emit(document, root_node, entry_point="FilmSample", thread_group=group,
-                                    width=width, height=height),
+                hlsl=sources[("nw13.0.sample." + spec.film_id, "FilmSample")],
                 source_map=(), root_expression="", root_node_ids=(spec.film_id, spec.source_id), thread_group=group,
             ),
             compiler.GeneratedShader(
                 specialization_id="nw13.1.compose." + spec.node_id, entry_point="FilmFeedback", target="cs_6_0",
-                family=compiler.PASS_FAMILY, hlsl=emit_composite(spec, scene, timing, width, height),
+                family=compiler.PASS_FAMILY, hlsl=sources[("nw13.1.compose." + spec.node_id, "FilmFeedback")],
                 source_map=(), root_expression="", root_node_ids=(spec.node_id,), thread_group=group,
             ),
         ]
@@ -203,6 +215,8 @@ def build_stateful_package(document, *, optimized, allow_test_payloads, frames_i
             compiled = compiler.compile_package(
                 document.source_name, path, document=document,
                 generated_shaders_override=generated,
+                shader_thread_group=group, dispatch_groups=dispatch.groups,
+                image_width=width, image_height=height,
                 semantic_digest_override=optimized.materialized_semantic_digest(),
                 semantic_digest_test_identity=allow_test_payloads,
                 allow_test_payloads=allow_test_payloads, allow_unpinned_dxc=allow_unpinned_dxc,
@@ -291,6 +305,7 @@ def build_stateful_package(document, *, optimized, allow_test_payloads, frames_i
             "simulation_hz": 120, "timeline_ticks_per_second": 48_000, "timeline_ticks_per_simulation_tick": STEP_TICKS,
         },
         "present_geometry": {"width": width, "height": height},
+        "film_workload": workload,
         "timeline_duration_ticks": scene.duration_ticks,
         "pending_retirement_bytes": state.state_bytes * frames_in_flight,
         "packaged_checkpoint_byte_cost": 0,

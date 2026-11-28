@@ -67,9 +67,12 @@ jobs:
           tests/test_nw13_scene_animation.py
           tests/test_nw13_particles_effects.py
           tests/test_nw13_audio.py
+          tests/test_nw13_audio_physical.py
           tests/test_nw13_pipeline_and_lowering.py
           tests/test_nw13_production_render.py
           tests/test_nw13_provenance_and_catalog.py
+          tests/test_nw13_work_graph_bundle.py
+          tests/test_nw13_physical_film.py
       - name: Regenerate fixed-tick frames and contact sheet
         run: |
           PYTHONPATH=tools python - <<'PY'
@@ -149,8 +152,51 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build build/nw13-work-graph --target nw13_work_graph --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/nw13_work_graph.py build/nw13-work-graph/nw13_work_graph.exe --warp --output build/nw13-evidence/work-graph-warp.json
+          python tools/nw13_work_graph.py warp --executable build/nw13-work-graph/nw13_work_graph.exe --revision $env:GITHUB_SHA --output build/nw13-evidence/work-graph-warp.json
           exit $LASTEXITCODE
+      - name: Stage the same-revision offline Work Graphs validation bundle
+        shell: pwsh
+        run: |
+          $pythonRoot = python -c "import sys; print(sys.base_prefix)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $probes = @(Get-ChildItem -Path build/nw13-probe -Filter nw11_capability_probe.exe -Recurse)
+          if ($probes.Count -ne 1) { throw "Expected exactly one same-build capability probe" }
+          python tools/nw13_work_graph.py stage --repo . --build build/nw13-work-graph `
+            --probe $probes[0].FullName --python-root $pythonRoot `
+            --warp-record build/nw13-evidence/work-graph-warp.json `
+            --bundle build/nw13-work-graph-physical --revision $env:GITHUB_SHA `
+            --trust build/nw13-evidence/work-graph-physical-trust.json
+          exit $LASTEXITCODE
+      - name: Upload immutable Work Graphs physical handoff
+        id: work-graph-upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw13-work-graph-physical-${{ github.sha }}
+          path: build/nw13-work-graph-physical/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Anchor Work Graphs delivery digest outside its archive
+        shell: pwsh
+        env:
+          WORK_GRAPH_ARCHIVE_SHA256: ${{ steps.work-graph-upload.outputs.artifact-digest }}
+          WORK_GRAPH_ARCHIVE_ID: ${{ steps.work-graph-upload.outputs.artifact-id }}
+        run: |
+          $sha = ($env:WORK_GRAPH_ARCHIVE_SHA256 -replace '^sha256:', '').ToLowerInvariant()
+          if ($sha -cnotmatch '^[0-9a-f]{64}$' -or $env:WORK_GRAPH_ARCHIVE_ID -notmatch '^[0-9]+$') {
+            throw "Missing GitHub Work Graphs artifact identity"
+          }
+          $path = "build/nw13-evidence/work-graph-physical-trust.json"
+          $trust = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable
+          $trust.archive_sha256 = $sha
+          $trust.github_artifact_id = $env:WORK_GRAPH_ARCHIVE_ID
+          $trust.github_workflow_run = $env:GITHUB_RUN_ID
+          $trust.github_workflow_attempt = $env:GITHUB_RUN_ATTEMPT
+          $payload = $trust | ConvertTo-Json
+          $payload | Set-Content -LiteralPath $path -Encoding utf8
+          "### NW-13 Work Graphs physical validation trust" | Add-Content $env:GITHUB_STEP_SUMMARY
+          '```json' | Add-Content $env:GITHUB_STEP_SUMMARY
+          $payload | Add-Content $env:GITHUB_STEP_SUMMARY
+          '```' | Add-Content $env:GITHUB_STEP_SUMMARY
       - name: Run NW-13 contracts on Windows
         run: >-
           python -m pytest -v
@@ -159,9 +205,12 @@ jobs:
           tests/test_nw13_scene_animation.py
           tests/test_nw13_particles_effects.py
           tests/test_nw13_audio.py
+          tests/test_nw13_audio_physical.py
           tests/test_nw13_pipeline_and_lowering.py
           tests/test_nw13_production_render.py
           tests/test_nw13_provenance_and_catalog.py
+          tests/test_nw13_work_graph_bundle.py
+          tests/test_nw13_physical_film.py
       - name: Independently export, smoke-test and measure common/optional artifacts
         shell: pwsh
         run: |
@@ -178,6 +227,76 @@ jobs:
             --probe $probe `
             --dxc $dxc
           exit $LASTEXITCODE
+      - name: Seal the immutable physical film handoff (no physical execution)
+        shell: pwsh
+        run: |
+          $probe = Get-ChildItem -Path build/nw13-probe -Filter nw11_capability_probe.exe -Recurse |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $probe) { throw "Capability probe was not built" }
+          New-Item -ItemType Directory -Force build/nw13-physical-film | Out-Null
+          Invoke-WebRequest "https://github.com/GameTechDev/PresentMon/releases/download/v2.6.0/PresentMon-2.6.0-x64.exe" -OutFile build/nw13-physical-film/PresentMon.exe
+          Invoke-WebRequest "https://raw.githubusercontent.com/GameTechDev/PresentMon/v2.6.0/LICENSE.txt" -OutFile build/nw13-physical-film/PresentMon-LICENSE.txt
+          $runtime = python -c "import sys; print(sys.base_prefix)"
+          python tools/nw13_physical_film.py stage --repo . --emitted build/nw13-evidence --probe $probe `
+            --python-root $runtime --presentmon build/nw13-physical-film/PresentMon.exe `
+            --presentmon-license build/nw13-physical-film/PresentMon-LICENSE.txt `
+            --revision $env:GITHUB_SHA --output build/nw13-physical-film/film-physical.zip `
+            --receipt build/nw13-physical-film/film-physical.receipt.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $receipt = Get-Content build/nw13-physical-film/film-physical.receipt.json -Raw | ConvertFrom-Json
+          @(
+            "### NW-13 physical film handoff (not run on physical hardware)"
+            "Measured revision: $($receipt.revision)"
+            "Measured tree: $($receipt.tree)"
+            "Inner film-physical.zip SHA-256: $($receipt.archive_sha256)"
+            "film-physical.json SHA-256: $($receipt.index_sha256)"
+            "Packaged arms: $($receipt.arms -join ', ')"
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+      - name: Upload the sealed physical film handoff
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw13-film-physical-${{ github.sha }}
+          path: |
+            build/nw13-physical-film/film-physical.zip
+            build/nw13-physical-film/film-physical.receipt.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Build and seal the separate native-raster inspection handoff (no hosted renderer)
+        shell: pwsh
+        run: |
+          $probe = Get-ChildItem -Path build/nw13-probe -Filter nw11_capability_probe.exe -Recurse |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $probe) { throw "Capability probe was not built" }
+          $template = Join-Path $PWD "build/nw07-release/staging/procedural_image_player/nw_procedural_image_player.exe"
+          $dxc = (Get-Command dxc.exe -ErrorAction Stop).Source
+          $runtime = python -c "import sys; print(sys.base_prefix)"
+          python tools/nw13_physical_film.py stage --repo . --emitted build/nw13-inspection-build --probe $probe `
+            --inspection-production fixtures/nw13/hotel_corridor.inspection.production.json --template $template --dxc $dxc `
+            --python-root $runtime --presentmon build/nw13-physical-film/PresentMon.exe `
+            --presentmon-license build/nw13-physical-film/PresentMon-LICENSE.txt `
+            --revision $env:GITHUB_SHA --output build/nw13-physical-film/inspection-physical.zip `
+            --receipt build/nw13-physical-film/inspection-physical.receipt.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $receipt = Get-Content build/nw13-physical-film/inspection-physical.receipt.json -Raw | ConvertFrom-Json
+          @(
+            "### NW-13 physical inspection handoff (CI built; not run in CI or on physical hardware)"
+            "Measured source revision: $($receipt.revision)"
+            "Measured source tree: $($receipt.tree)"
+            "Native raster: $($receipt.render_size -join ' x ')"
+            "Inner inspection-physical.zip SHA-256: $($receipt.archive_sha256)"
+            "film-physical.json SHA-256: $($receipt.index_sha256)"
+            "Packaged arms: $($receipt.arms -join ', ')"
+            "Image evidence: $($receipt.image_reference); no hosted image/oracle/performance claim."
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+      - name: Upload the sealed physical inspection handoff
+        uses: actions/upload-artifact@v4
+        with:
+          name: nw13-film-inspection-physical-${{ github.sha }}
+          path: |
+            build/nw13-physical-film/inspection-physical.zip
+            build/nw13-physical-film/inspection-physical.receipt.json
+          if-no-files-found: error
+          retention-days: 14
       # This is independent of the film validation. A failing film step
       # still fails the job, even if these separate NW-11 steps pass.
       - name: Build the actual NW-11 common and fallback WARP executables

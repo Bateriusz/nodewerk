@@ -877,7 +877,8 @@ def _specialized_implementation_mask(
         | (256 if flags["NW06_COMPILE_TONEMAP"] else 0)
     )
 
-def _attach_audio_manifest(manifest: dict[str, Any], song: bytes) -> None:
+def _attach_audio_manifest(manifest: dict[str, Any], song: bytes,
+                           presentation_cues: Mapping[str, Any] | None = None) -> None:
     """Explicit opt-in CPU/audio capability; the GPU profile is unchanged."""
     if not song:
         return
@@ -897,6 +898,8 @@ def _attach_audio_manifest(manifest: dict[str, Any], song: bytes) -> None:
         "song_sha256": hashlib.sha256(song).hexdigest(),
         "song_bytes": len(song), "package_section": "AUDI",
     }
+    if presentation_cues is not None:
+        manifest["audio"]["presentation_cues"] = dict(presentation_cues)
     retained = manifest["retained"]
     for key, values in (
         ("code", ["audio.procedural_pcm", "audio.wasapi_output"]),
@@ -1871,7 +1874,9 @@ def _graph_render_dimensions(
     document: nw03.GraphDocument,
     optimized: optimizer.OptimizedGraph,
 ) -> tuple[int, int]:
-    """Resolve presentation dimensions from explicit settings, then the texture.
+    """Resolve the rendered raster, never the actual presentation window.
+
+    Film uses the authored dispatch contract rather than legacy settings.
 
     The precedence below is part of the NW-06/NW-07 contract and must not be
     reordered by later graph passes:
@@ -1891,6 +1896,17 @@ def _graph_render_dimensions(
     deliberately does not opt into presentation-sized output, so an accidental
     graph-pass rename cannot silently change the certified artifact size.
     """
+
+    film_roots = [document.nodes[node.node_id] for node in optimized.nodes
+                  if node.operator_id == "nw.shader.film"]
+    if film_roots:
+        import nw13_film
+        try:
+            if len(film_roots) != 1:
+                raise ValueError("a film export requires exactly one authored film root")
+            return nw13_film.resolve_dispatch(document, film_roots[0]).extent
+        except (KeyError, ValueError, TypeError) as error:
+            raise ExportError(str(error), dependency_path=["graph", film_roots[0].node_id, "raster"]) from error
 
     def setting_dimension(name: str, default: int) -> int:
         raw = str(document.settings.get(name, default)).strip()
@@ -2912,13 +2928,19 @@ def _compile_profile_package(
         apply_accepted_fusions=not has_composed_shader,
     )
     width, height = _graph_render_dimensions(document, optimized)
-    film = any(node.operator_id == "nw.shader.film" for node in optimized.nodes)
-    thread_group = (8, 8, 1) if film else (max(1, min(1024, width)), 1, 1)
-    dispatch_groups = (
-        (width + thread_group[0] - 1) // thread_group[0],
-        (height + thread_group[1] - 1) // thread_group[1],
-        1,
-    )
+    film_root = next((document.nodes[node.node_id] for node in optimized.nodes
+                      if node.operator_id == "nw.shader.film"), None)
+    if film_root is not None:
+        import nw13_film
+        dispatch = nw13_film.resolve_dispatch(document, film_root, width=width, height=height)
+        thread_group, dispatch_groups = dispatch.thread_group, dispatch.groups
+    else:
+        thread_group = (max(1, min(1024, width)), 1, 1)
+        dispatch_groups = (
+            (width + thread_group[0] - 1) // thread_group[0],
+            (height + thread_group[1] - 1) // thread_group[1],
+            1,
+        )
     texture_sample_roots = {
         connection[0]
         for node in document.nodes.values()
@@ -3306,6 +3328,7 @@ def export_graph(
             # explicit Present. Dead film must not change unrelated exports.
             settings = replace(settings, byte_ceiling=None)
     audio_payload = b""
+    presentation_cues = None
     if settings.audio_song_path or audio_song_payload is not None:
         if settings.frozen_embedded_specialization:
             raise ExportError("audio requires the full versioned package reader")
@@ -3315,6 +3338,10 @@ def export_graph(
             else:
                 audio_song.decode_song(audio_song_payload)
                 audio_payload = audio_song_payload
+            if "nw.shader.film" in active_film_operators:
+                import audio_presentation_cues
+
+                presentation_cues = audio_presentation_cues.from_film(document, audio_payload)
         except (ValueError, OSError) as exc:
             raise ExportError(f"invalid audio song: {exc}") from exc
         if not settings.player_template and not allow_test_payloads:
@@ -3565,6 +3592,7 @@ def export_graph(
         }
         if sampled_history:
             manifest["stateful_extension"]["sampled_scene_history"] = stateful_report["sampled_scene_history"]
+            manifest["film_workload"] = stateful_report["film_workload"]
             manifest["package_sha256"] = hashlib.sha256(package_bytes).hexdigest()
         if film_optional_provenance:
             manifest["optional_artifact"] = True
@@ -3619,7 +3647,7 @@ def export_graph(
                 "memory_budget_bytes": int(settings.memory_budget),
             }
         )
-        _attach_audio_manifest(manifest, audio_payload)
+        _attach_audio_manifest(manifest, audio_payload, presentation_cues)
         _refresh_manifest_sha256(manifest)
         manifest_data = optimizer.manifest_bytes(manifest)
         specialized_player_bytes: bytes | None = None
@@ -4033,9 +4061,10 @@ def export_graph(
             manifest["optional_artifact"] = not is_common or bool(film_optional_provenance)
             if "nw.shader.film" in manifest["retained"]["code"]:
                 manifest["package_sha256"] = hashlib.sha256(package_bytes).hexdigest()
+                manifest["film_workload"] = compile_report["film_workload"]
             if film_optional_provenance:
                 manifest["film_lowering"] = dict(film_optional_provenance)
-            _attach_audio_manifest(manifest, audio_payload)
+            _attach_audio_manifest(manifest, audio_payload, presentation_cues)
             manifest["manifest_sha256"] = "sha256:v1:" + hashlib.sha256(
                 nwp.canonical_json_bytes(
                     {

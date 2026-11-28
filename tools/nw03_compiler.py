@@ -2306,8 +2306,7 @@ def _lower_film_shader(document, root, entry_point, target, thread_group, dispat
     try:
         hlsl = nw13_film.emit(
             document, root, entry_point=entry_point, thread_group=thread_group,
-            width=image_width or thread_group[0] * dispatch_groups[0],
-            height=image_height or thread_group[1] * dispatch_groups[1],
+            dispatch_groups=dispatch_groups, width=image_width, height=image_height,
         )
     except (KeyError, ValueError, TypeError, OSError) as error:
         diagnostics = getattr(error, "diagnostics", []) or [
@@ -2317,7 +2316,7 @@ def _lower_film_shader(document, root, entry_point, target, thread_group, dispat
     return GeneratedShader(
         specialization_id=root.node_id, entry_point=entry_point, target=target,
         family=PASS_FAMILY, hlsl=hlsl, source_map=(), root_expression="",
-        root_node_ids=dependencies, thread_group=thread_group, execution_root=root.node_id,
+        root_node_ids=dependencies, thread_group=nw13_film.THREAD_GROUP, execution_root=root.node_id,
     )
 
 
@@ -2326,8 +2325,8 @@ def lower_to_fused_hlsl(
     *,
     target: str = SHADER_TARGET,
     entry_point: str = ENTRY_POINT,
-    thread_group: tuple[int, int, int] = THREAD_GROUP,
-    dispatch_groups: tuple[int, int, int] = DISPATCH_GROUPS,
+    thread_group: tuple[int, int, int] | None = None,
+    dispatch_groups: tuple[int, int, int] | None = None,
     image_width: int | None = None,
     image_height: int | None = None,
 ) -> tuple[list[GeneratedShader], list[dict[str, Any]]]:
@@ -2345,6 +2344,8 @@ def lower_to_fused_hlsl(
 
     generated: list[GeneratedShader] = []
     seen_keys: set[str] = set()
+    shader_threads = THREAD_GROUP if thread_group is None else thread_group
+    shader_dispatch = DISPATCH_GROUPS if dispatch_groups is None else dispatch_groups
     for root in roots:
         if root.operator_id == "nw.shader.film":
             try:
@@ -2375,8 +2376,8 @@ def lower_to_fused_hlsl(
         hlsl, source_map = _emit_compute_hlsl(
             hlsl_expression,
             dependency_ids,
-            thread_group=thread_group,
-            dispatch_groups=dispatch_groups,
+            thread_group=shader_threads,
+            dispatch_groups=shader_dispatch,
             entry_point=entry_point,
             image_width=image_width,
             image_height=image_height,
@@ -2390,7 +2391,7 @@ def lower_to_fused_hlsl(
             source_map=tuple(source_map),
             root_expression=expression_text,
             root_node_ids=tuple(dependency_ids),
-            thread_group=thread_group,
+            thread_group=shader_threads,
             execution_root=root.node_id,
         )
         if candidate.specialization_key in seen_keys:
@@ -2572,8 +2573,8 @@ def lower_to_selective_hlsl(
     fused_roots: Iterable[str] = (),
     target: str = SHADER_TARGET,
     entry_point: str = ENTRY_POINT,
-    thread_group: tuple[int, int, int] = THREAD_GROUP,
-    dispatch_groups: tuple[int, int, int] = DISPATCH_GROUPS,
+    thread_group: tuple[int, int, int] | None = None,
+    dispatch_groups: tuple[int, int, int] | None = None,
     image_width: int | None = None,
     image_height: int | None = None,
     texture_sample_roots: Iterable[str] = (),
@@ -2596,11 +2597,14 @@ def lower_to_selective_hlsl(
     fused = set(fused_roots)
     texture_roots = set(texture_sample_roots)
     generated: list[GeneratedShader] = []
+    shader_threads, shader_dispatch = thread_group, dispatch_groups
+    thread_group = THREAD_GROUP if shader_threads is None else shader_threads
+    dispatch_groups = DISPATCH_GROUPS if shader_dispatch is None else shader_dispatch
     for root in roots:
         if root.operator_id == "nw.shader.film":
             try:
                 generated.append(_lower_film_shader(
-                    document, root, entry_point, target, thread_group, dispatch_groups,
+                    document, root, entry_point, target, shader_threads, shader_dispatch,
                     image_width, image_height,
                 ))
             except CompilerError as error:
@@ -3121,6 +3125,7 @@ def _build_package(
     dxc_version: str,
     optimization: str,
     release: bool = True,
+    film_dispatch: Any = None,
 ) -> NwpPackage:
     bindings = (
         RootBinding("params", "cbv", 0, 0, 0),
@@ -3156,7 +3161,7 @@ def _build_package(
             pass_family=PASS_FAMILY,
             binding_slot=0,
             binding_space=0,
-            size_bytes=OUTPUT_BUFFER_BYTES,
+            size_bytes=(film_dispatch.width * film_dispatch.height * 16 if film_dispatch else OUTPUT_BUFFER_BYTES),
         ),
     ]
     film_shaders = [
@@ -3181,6 +3186,11 @@ def _build_package(
             timeline_interpolation="none",
         )
     ]
+    if film_clock:
+        parameters.extend(
+            ParameterRecord(index, f"nw05.present.{axis}", "uint", "initialization", 1, struct.pack("<I", value))
+            for index, (axis, value) in enumerate(zip(("width", "height"), film_dispatch.extent, strict=True), start=2)
+        )
     shaders: list[ShaderRecord] = []
     for index, shader in enumerate(generated, start=1):
         shader_compiled = compiled[shader.specialization_key]
@@ -3233,6 +3243,8 @@ def _build_package(
             ),
         ),
     ]
+    if film_clock:
+        frame.insert(0, Instruction("frame.set_timeline", (InstructionOperand("u32", 1), InstructionOperand("u64", 0))))
     for shader in shaders:
         initialization.append(
             Instruction(
@@ -3247,13 +3259,13 @@ def _build_package(
             Instruction(
                 "frame.dispatch",
                 (
-                    InstructionOperand("u32", DISPATCH_GROUPS[0]),
-                    InstructionOperand("u32", DISPATCH_GROUPS[1]),
-                    InstructionOperand("u32", DISPATCH_GROUPS[2]),
+                    *(InstructionOperand("u32", group) for group in (film_dispatch.groups if film_dispatch else DISPATCH_GROUPS)),
                     InstructionOperand("shader_ref", shader.shader_id),
                 ),
             )
         )
+    if film_clock:
+        frame.append(Instruction("frame.present", (InstructionOperand("resource_ref", 2),)))
     derived = nwp_package.derive_capability_requirements(
         resources, initialization, frame, shaders, [root_signature]
     )
@@ -3380,11 +3392,55 @@ def compile_package(
     output_path = Path(output_path)
     if document is None:
         document = load_graph(graph_path)
+    film_dispatch = None
+    film_workload = None
+    film_roots = [root for root in _reachable_shader_roots(document) if root.operator_id == "nw.shader.film"]
+    if film_roots:
+        import nw13_film
+        try:
+            if len(film_roots) != 1:
+                raise ValueError("a compiled film package requires exactly one film root")
+            root = film_roots[0]
+            film_options = dict(thread_group=shader_thread_group, dispatch_groups=dispatch_groups,
+                                width=image_width, height=image_height)
+            film_data, source_dispatch, film_workload = nw13_film.admit_film(document, root, **film_options)
+            feedback = nw13_film.history.read_feedback(document)
+            if generated_shaders_override is None:
+                if feedback is not None:
+                    raise ValueError("typed film History requires the full graph exporter, not a shader-only package")
+                film_dispatch = source_dispatch
+            else:
+                # Internal pre-lowered paths must still admit the same authored
+                # dimensions and work. The typed History assembler replaces the
+                # temporary shader-only package with its actual command ABI.
+                if any(shader.thread_group != source_dispatch.thread_group for shader in generated_shaders_override):
+                    raise ValueError("pre-lowered film shader thread group disagrees with the authored dispatch")
+                actual_sources = {(shader.specialization_id, shader.entry_point): shader.hlsl
+                                  for shader in generated_shaders_override}
+                if feedback is not None:
+                    _, _, _, scene, settings, _ = film_data
+                    timing, _ = nw13_film.film_timing(scene, settings)
+                    expected = nw13_film.history.sampled_shader_sources(
+                        document, root, feedback, scene, timing, source_dispatch,
+                    )
+                else:
+                    expected = {(root.node_id, entry): nw13_film.emit(
+                        document, root, entry_point=entry, **film_options,
+                    ) for node_id, entry in actual_sources if node_id == root.node_id}
+                    if len(expected) != 1:
+                        raise ValueError("pre-lowered stateless film needs exactly one authored pass")
+                    film_dispatch = source_dispatch
+                if len(actual_sources) != len(generated_shaders_override) or actual_sources != expected:
+                    raise ValueError("pre-lowered film source disagrees with the admitted raster or passes")
+        except (KeyError, ValueError, TypeError, OSError) as exc:
+            raise CompilerError("film package admission failed", [
+                _diagnostic("invalid_film", str(exc), node_id=film_roots[0].node_id, operator_id="nw.shader.film")
+            ]) from exc
     if generated_shaders_override is None:
         generated, diagnostics = lower_to_fused_hlsl(
             document,
-            thread_group=shader_thread_group or THREAD_GROUP,
-            dispatch_groups=dispatch_groups or DISPATCH_GROUPS,
+            thread_group=shader_thread_group,
+            dispatch_groups=dispatch_groups,
             image_width=image_width,
             image_height=image_height,
         )
@@ -3540,6 +3596,7 @@ def compile_package(
             dxc_version=dxc_version,
             optimization=optimization,
             release=release,
+            film_dispatch=film_dispatch,
         )
         package_bytes = nwp_package.encode_package(package)
         valid, package_diagnostics = nwp_package.validate_package_bytes(package_bytes)
@@ -3573,8 +3630,11 @@ def compile_package(
             dxc_version=dxc_version,
             optimization=optimization,
             release=release,
+            profile_fingerprint=package.capability.profile_fingerprint,
             source_path=str(graph_path),
         )
+        if film_workload is not None:
+            report["film_workload"] = film_workload
         # Publish only after every validation succeeded.
         nwp_package.write_package_atomic(package, output_path)
         if dev_sidecar_path is not None:
@@ -3602,6 +3662,7 @@ def _build_report(
     dxc_version: str,
     optimization: str,
     release: bool,
+    profile_fingerprint: str,
     source_path: str = "",
 ) -> dict[str, Any]:
     shader_rows = []
@@ -3646,16 +3707,7 @@ def _build_report(
         "profile": {
             "id": document.profile_id,
             "requirements_digest": document.requirements_digest,
-            "profile_fingerprint": _build_package(
-                document,
-                generated,
-                compiled,
-                semantic_digest=semantic_digest,
-                dxc_identity=dxc_identity,
-                dxc_version=dxc_version,
-                optimization=optimization,
-                release=release,
-            ).capability.profile_fingerprint,
+            "profile_fingerprint": profile_fingerprint,
         },
         "compiler": {
             "fingerprint": _compiler_fingerprint(

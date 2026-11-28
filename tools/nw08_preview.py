@@ -407,6 +407,9 @@ class ReferencePreviewBackend:
             import nw13_film
             start = time.perf_counter()
             try:
+                # A Studio viewport is presentation geometry, not a request
+                # to compile a different film raster or bypass its work budget.
+                width, height = nw13_film.resolve_dispatch(document, film).extent
                 image = nw13_film.reference_image(document, film, tick, width=width, height=height)
             except (OSError, ValueError, TypeError, KeyError) as error:
                 raise PreviewError(f"film node {film.node_id}: {error}") from error

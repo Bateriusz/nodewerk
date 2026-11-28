@@ -410,7 +410,8 @@ def test_native_capture_rejects_truncated_or_nonfinite_readback(tmp_path):
         measure._read_capture(path, (1, 1))
 
 
-def test_release_film_shaders_validate_and_report_actual_bytes(tmp_path):
+@pytest.mark.parametrize("profile", ["hotel_corridor", "hotel_corridor.inspection"])
+def test_release_film_shaders_validate_and_report_actual_bytes(tmp_path, profile):
     import os
     import shutil
     import nw03_compiler as compiler
@@ -422,10 +423,10 @@ def test_release_film_shaders_validate_and_report_actual_bytes(tmp_path):
     dxc = shutil.which("dxc")
     if dxc is None:
         pytest.skip("real DXC is unavailable")
-    document = production.load_production(REPO_ROOT, PRODUCTION)
+    document = production.load_production(REPO_ROOT, REPO_ROOT / f"fixtures/nw13/{profile}.production.json")
     graph = compiler.load_graph(REPO_ROOT / document["graph"])
-    shaders, diagnostics = compiler.lower_to_fused_hlsl(
-        graph, thread_group=(8, 8, 1), dispatch_groups=(6, 4, 1), image_width=48, image_height=27)
+    spec = nw13_film.resolve_dispatch(graph, graph.nodes["film"])
+    shaders, diagnostics = compiler.lower_to_fused_hlsl(graph)
     assert not diagnostics and len(shaders) == 1
     common = tmp_path / "common" / "shader.dxil"
     # The upstream Linux tarball reports its dev/commit identifier rather
@@ -437,7 +438,7 @@ def test_release_film_shaders_validate_and_report_actual_bytes(tmp_path):
     feedback = nw13_history.read_feedback(graph)
     post = tmp_path / "post" / "shader.dxil"
     shader = replace(shaders[0], entry_point="FilmFeedback",
-                     hlsl=nw13_history.emit_composite(feedback, scene, timing, 48, 27))
+                     hlsl=nw13_history.emit_composite(feedback, scene, timing, *spec.extent))
     compiler.compile_generated_shader(shader, post, dxc_executable=dxc, allow_unpinned_dxc=os.name != "nt")
     metadata = nw13_film.compile_inline_ray_payload(graph, tmp_path / "ray", dxc,
                                                    allow_unpinned_dxc=os.name != "nt")
@@ -445,11 +446,142 @@ def test_release_film_shaders_validate_and_report_actual_bytes(tmp_path):
     assert result["blob"] == common.read_bytes()
     assert metadata["inline_shader_bytes"] == ray.stat().st_size
     assert metadata["bounds_count"] == 17
+    assert metadata["film_workload"]["raster"] == list(spec.extent)
     with pytest.raises(ValueError, match="baseline requires"):
         offline_shader_pack.validate_dxil_container(ray.read_bytes())
     assert all(path.stat().st_size > 0 for path in (common, post, ray))
     offline_shader_pack.validate_dxil_container(common.read_bytes())
     offline_shader_pack.validate_dxil_container(post.read_bytes())
+
+
+@pytest.mark.parametrize("sampled", [False, True], ids=["stateless", "history"])
+def test_film_raster_admission_fails_closed_across_lowering_paths(tmp_path, sampled):
+    from dataclasses import replace
+    import nw03_compiler as compiler
+    import nw05_export as export
+    import nw08_preview as preview
+    import nw13_film as film
+
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    if not sampled:
+        document["effects"].pop("temporal_feedback")
+    source = tmp_path / "authored.nwgraph"
+    production.import_graph(REPO_ROOT, document, source)
+    canonical = compiler.load_graph(source)
+    for invalid_options in ({"image_width": 96, "image_height": 54}, {"dispatch_groups": (7, 4, 1)},
+                            {"dispatch_groups": (6, 4, 2)}, {"thread_group": (16, 8, 1)}):
+        for lower in (compiler.lower_to_fused_hlsl, compiler.lower_to_selective_hlsl):
+            shaders, diagnostics = lower(canonical, **invalid_options)
+            assert not shaders and diagnostics[0]["code"] == "invalid_film"
+    assert film.resolve_dispatch(canonical, canonical.nodes["film"]).groups == (6, 4, 1)
+    (generated,), diagnostics = compiler.lower_to_fused_hlsl(canonical)
+    assert not diagnostics
+    misbound = replace(generated, hlsl=generated.hlsl.replace("#define FRAME_WIDTH 48", "#define FRAME_WIDTH 96"))
+    with pytest.raises(compiler.CompilerError) as override:
+        compiler.compile_package(source, tmp_path / "bad.nwp", dxc_executable="not-used",
+                                 generated_shaders_override=(misbound,))
+    assert "pre-lowered film source disagrees" in override.value.diagnostics[0]["message"]
+
+    # The previous real counterexample: alter only the NW05 graph dimensions
+    # while leaving the embedded film's workload declaration at 48x27.
+    original = source.read_text(encoding="utf-8")
+    mismatch = tmp_path / "mismatch.nwgraph"
+    mismatch.write_text(original.replace("setting nw05_output_width 48", "setting nw05_output_width 96")
+                        .replace("setting nw05_output_height 27", "setting nw05_output_height 54"), encoding="utf-8")
+    document["rendering"].update(width=96, height=54)
+    too_much = tmp_path / "over-budget.nwgraph"
+    production.import_graph(REPO_ROOT, document, too_much)
+    for path, message in ((mismatch, "disagree with graph output"), (too_much, "exceeds the verification-v1 evaluation budget")):
+        graph = compiler.load_graph(path)
+        shaders, diagnostics = compiler.lower_to_fused_hlsl(graph)
+        assert not shaders and message in diagnostics[0]["message"]
+        with pytest.raises(compiler.CompilerError) as direct:
+            compiler.compile_package(path, tmp_path / "bad.nwp", dxc_executable="not-used")
+        assert message in direct.value.diagnostics[0]["message"]
+        with pytest.raises((compiler.CompilerError, export.ExportError)) as published:
+            export.export_graph(path, tmp_path / "bad-export", allow_test_payloads=True, dxc_executable="not-used")
+        assert message in str(published.value) or any(message in item["message"] for item in published.value.diagnostics)
+        with pytest.raises(preview.PreviewError, match=message):
+            preview.ReferencePreviewBackend().render(graph, 0, width=1920, height=1080)
+        with pytest.raises(ValueError, match=message):
+            film.compile_inline_ray_payload(graph, tmp_path / "bad-ray", "not-used")
+    assert not any((tmp_path / name).exists() for name in ("bad.nwp", "bad-export", "bad-ray"))
+
+
+def test_stateless_direct_package_and_studio_use_authored_raster(tmp_path, monkeypatch):
+    import os
+    import subprocess
+    import nw03_compiler as compiler
+    import nw08_preview as preview
+    import nw09_export
+    import nwp_package as nwp
+
+    document = production.load_production(REPO_ROOT, PRODUCTION)
+    document["effects"].pop("temporal_feedback")
+    source = tmp_path / "stateless.nwgraph"
+    production.import_graph(REPO_ROOT, document, source)
+    graph = compiler.load_graph(source)
+    tool = nw09_export._test_dxc(tmp_path / "dxc")
+    package_path, report_path = tmp_path / "direct.nwp", tmp_path / "build.json"
+    monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
+    result = subprocess.run([sys.executable, "tools/nodewerkc.py", "compile-package", str(source), str(package_path),
+                             "--dxc", tool, "--allow-test-payloads", "--report", str(report_path)],
+                            cwd=REPO_ROOT, env=os.environ.copy(), capture_output=True, text=True, timeout=45)
+    assert result.returncode == 0, result.stdout + result.stderr
+    package = nwp.decode_package(package_path.read_bytes())
+    dispatch = next(command for command in package.frame if command.opcode == "frame.dispatch")
+    assert tuple(op.value for op in dispatch.operands[:3]) == (6, 4, 1)
+    assert next(item.size_bytes for item in package.resources if item.name == "output") == 48 * 27 * 16
+    assert package.frame[-1].opcode == "frame.present"
+    report = json.loads(report_path.read_bytes())
+    assert report["film_workload"]["raster"] == [48, 27]
+    assert report["profile"]["profile_fingerprint"] == package.capability.profile_fingerprint
+    frame = preview.ReferencePreviewBackend().render(graph, 0, width=1920, height=1080)
+    assert (frame.width, frame.height, len(frame.image_data)) == (48, 27, 48 * 27 * 16)
+
+
+def test_inspection_profile_keeps_same_scene_and_admits_higher_native_detail(tmp_path, monkeypatch):
+    from copy import deepcopy
+    import nw05_export as export
+    import nw09_export
+    import nw13_film as film
+    import nwp_package as nwp
+
+    original = production.load_production(REPO_ROOT, PRODUCTION)
+    detail = production.load_production(REPO_ROOT, REPO_ROOT / "fixtures/nw13/hotel_corridor.inspection.production.json")
+    small, (_, _, _, _, small_settings, _) = production.film_graph(REPO_ROOT, original)
+    large, (_, _, _, _, large_settings, _) = production.film_graph(REPO_ROOT, detail)
+    assert original["id"] != detail["id"] and detail["presentation"] == {"mode": "maximized"}
+    assert production.playback_song(REPO_ROOT, original) == production.playback_song(REPO_ROOT, detail)
+    assert small.nodes["film"].params["scene"] == large.nodes["film"].params["scene"]
+    for node in set(small.nodes) - {"film"}:
+        assert (small.nodes[node].params, small.nodes[node].inputs) == (large.nodes[node].params, large.nodes[node].inputs)
+    comparable = deepcopy(large_settings)
+    comparable["rendering"].update(width=48, height=27)
+    comparable["rendering"].pop("work_profile")
+    assert comparable == small_settings
+    regenerated = tmp_path / "compiled-source.nwgraph"
+    production.import_graph(REPO_ROOT, detail, regenerated)
+    assert regenerated.read_bytes() == (REPO_ROOT / detail["graph"]).read_bytes()
+    model = production.validate_production(REPO_ROOT, detail)["film_workload"]
+    assert model["raster"] == [320, 180] and model["dispatch_groups"] == [40, 23, 1]
+    assert model["rgba32f_surface_bytes"] == 921_600
+    assert model["max_scene_passes"] == 2 and model["work_units"] <= model["work_limit"]
+    assert model["max_object_frame_initializations"] == 40 * 23 * 17 * 2
+    assert "#define FILM_SHARED_OBJECTS 1" in film.emit(large, large.nodes["film"], entry_point="CSMain")
+    assert "#define FILM_SHARED_OBJECTS 0" in film.emit(small, small.nodes["film"], entry_point="CSMain")
+    projections = film.project_inspection_rasters(large, large.nodes["film"], [(320, 180), (512, 288), (640, 360)])
+    assert projections[0]["within_raster_limits"] and projections[0]["within_work_limit"]
+    assert projections[1]["within_raster_limits"] and not projections[1]["within_work_limit"]
+    assert not projections[2]["within_raster_limits"] and not projections[2]["within_work_limit"]
+    monkeypatch.setenv("NODEWERK_NW03_TEST_DIGEST", "1")
+    result = export.export_graph(REPO_ROOT / detail["graph"], tmp_path / "inspection-export", allow_test_payloads=True,
+                                 dxc_executable=nw09_export._test_dxc(tmp_path / "dxc"))
+    artifact = result.artifacts[nwp.COMMON_PROFILE_ID]
+    assert artifact.manifest["film_workload"] == model
+    assert artifact.package.history[0].state_bytes == model["rgba32f_surface_bytes"]
+    assert all(tuple(op.value for op in command.operands[:3]) == (40, 23, 1) for command in artifact.package.frame
+               if command.opcode in ("frame.dispatch", "frame.simulation_step"))
 
 
 def test_shared_export_packages_the_preview_cue_bytes_and_integer_clock(tmp_path):

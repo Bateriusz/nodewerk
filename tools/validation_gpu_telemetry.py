@@ -17,7 +17,7 @@ MEASURED_APPLICATIONS = ("common_baseline.exe", "optional_variant.exe", "fallbac
                          "canonical_release.exe", "canonical_reference.exe")
 
 
-def _power_profiles(system: Path, executables: Path) -> dict[str, dict]:
+def _power_profiles(system: Path, executables: Path, applications=MEASURED_APPLICATIONS) -> dict[str, dict]:
     """Read the effective PREFERRED_PSTATE setting from the installed NVIDIA driver."""
     # NVDRS_SETTING_V1 and NVDRS_APPLICATION_V4 from NVIDIA's public NVAPI ABI.
     u32, handle = ctypes.c_uint32, ctypes.c_void_p
@@ -73,7 +73,7 @@ def _power_profiles(system: Path, executables: Path) -> dict[str, dict]:
         global_profile, base_profile = handle(), handle()
         checked(global_profile_query(session, ctypes.byref(global_profile)))
         checked(base_profile_query(session, ctypes.byref(base_profile)))
-        for name in MEASURED_APPLICATIONS:
+        for name in applications:
             application, profile = Application(), handle()
             application.version = ctypes.sizeof(application) | (4 << 16)
             found = application_profile(session, (executables / name).as_posix(),
@@ -115,7 +115,7 @@ def _run(exe: Path, *args: str, timeout: int = 10) -> str:
     ).stdout
 
 
-def observe_operating(executables: Path) -> dict[str, Any]:
+def observe_operating(executables: Path, *, applications=MEASURED_APPLICATIONS) -> dict[str, Any]:
     """Read matching controls and instantaneous clock/thermal telemetry."""
     system = _system()
     try:
@@ -127,16 +127,18 @@ def observe_operating(executables: Path) -> dict[str, Any]:
             "power_plan": _run(system / "powercfg.exe", "/getactivescheme"),
             "pcie_power": _run(system / "powercfg.exe", "/query", "SCHEME_CURRENT", "SUB_PCIEXPRESS", "ASPM"),
             "nvidia_smi_xml": _run(nv_smi, "-q", "-x"),
-            "nvidia_power_profiles": _power_profiles(system, executables),
+            "nvidia_power_profiles": (_power_profiles(system, executables) if applications == MEASURED_APPLICATIONS
+                                      else _power_profiles(system, executables, applications)),
         }
     except (OSError, AttributeError, ValueError, StopIteration, subprocess.SubprocessError) as exc:
         return {"unavailable": str(exc)}
 
 
-def observe(executables: Path) -> dict[str, Any]:
+def observe(executables: Path, *, applications=MEASURED_APPLICATIONS) -> dict[str, Any]:
     """Collect OS and NVIDIA driver telemetry using installed runtime tools."""
     system = _system()
-    result = observe_operating(executables)
+    result = (observe_operating(executables) if applications == MEASURED_APPLICATIONS
+              else observe_operating(executables, applications=applications))
     try:
         query = """
 $ErrorActionPreference = 'Stop'
@@ -203,7 +205,7 @@ def _gpu_ceiling_power_limit(gpu: ET.Element) -> float:
     raise ValueError("GPU ceiling power limit is unavailable")
 
 
-def _qualify_impl(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[str, Any]:
+def _qualify_impl(raw: Mapping[str, Any], adapter: Mapping[str, Any], applications=MEASURED_APPLICATIONS) -> dict[str, Any]:
     """Return stable bound provenance or raise with the exact failed predicate."""
     if "unavailable" in raw:
         raise ValueError(f"host observation unavailable: {raw.get('unavailable')}")
@@ -309,9 +311,9 @@ def _qualify_impl(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[st
         }
 
     modes = raw["nvidia_power_profiles"]
-    if set(modes) != set(MEASURED_APPLICATIONS):
-        missing = sorted(set(MEASURED_APPLICATIONS) - set(modes))
-        extra = sorted(set(modes) - set(MEASURED_APPLICATIONS))
+    if set(modes) != set(applications):
+        missing = sorted(set(applications) - set(modes))
+        extra = sorted(set(modes) - set(applications))
         raise ValueError(f"NVIDIA power-profile coverage mismatch; missing={missing}, extra={extra}")
     for name, mode in modes.items():
         if type(mode["value"]) is not int or mode["value"] not in range(6):
@@ -360,11 +362,11 @@ def _qualify_impl(raw: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[st
 
 
 def qualify_with_diagnostics(
-    raw: Mapping[str, Any], adapter: Mapping[str, Any]
+    raw: Mapping[str, Any], adapter: Mapping[str, Any], *, applications=MEASURED_APPLICATIONS,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Return provenance plus an exact fail-closed rejection reason."""
     try:
-        return _qualify_impl(raw, adapter), []
+        return _qualify_impl(raw, adapter, applications), []
     except (AttributeError, ValueError, TypeError, KeyError, ET.ParseError) as exc:
         return None, [f"{type(exc).__name__}: {exc}"]
 

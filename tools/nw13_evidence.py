@@ -14,6 +14,7 @@ import subprocess
 from typing import Any, Mapping, Sequence
 
 import nwp_package as nwp
+import nw13_work_graph_protocol as work_graph
 
 
 COMMON_PROFILE_ID = nwp.COMMON_PROFILE_ID
@@ -91,12 +92,15 @@ def optional_lowering_matrix() -> dict[str, Any]:
         "common_surface": {
             "profile_id": COMMON_PROFILE_ID,
             "requirements_digest": COMMON_REQUIREMENTS_DIGEST,
-            "surface_realization": "raster indexed/instanced",
+            "artifact_id": "nw13.common",
+            "surface_realization": "compute.bounded_solid_trace",
             "rtx_required": False,
-            "selection_basis": "matched non-RTX surface measurements; common fallback remains independently buildable",
+            "selection_basis": "implemented bounded compute tracing without RTX; physical performance comparison remains pending",
         },
         "dxr_inline_ray_query": {
-            "status": "capability_qualified",
+            "status": "capability_gated_optional",
+            "lowering": "dxr.inline_ray_query.cs6_5",
+            "matched_physical_acceptance": None,
             "profile_id": RAY_PROFILE_ID,
             "requirements_digest": RAY_REQUIREMENTS_DIGEST,
             "shader_model": "6_5",
@@ -113,7 +117,7 @@ def optional_lowering_matrix() -> dict[str, Any]:
             "shader_model": "6_5",
             "query": {"mesh_shader_tier": ">=1"},
             "fallback_artifact_id": MESH_FALLBACK_ID,
-            "decision": "defer",
+            "decision_record": "benchmarks/nw11/decisions/mesh-shader.v1.json",
             "reason": "NW-11 mesh-shader decisions remain pending on both representative devices; no NW-13 matched workload justifies promotion",
         },
         "work_graphs": {
@@ -121,8 +125,8 @@ def optional_lowering_matrix() -> dict[str, Any]:
             "profile_id": WORK_GRAPH_PROFILE_ID,
             "fallback_artifact_id": WORK_GRAPH_FALLBACK_ID,
             "criterion": {
-                "kind": "runtime_size_or_workload_feasibility",
-                "accept_if": "measured total benefit exceeds the conventional equivalent without increasing distribution or dependency closure",
+                "kind": "matched_gpu_dispatch_median",
+                "accept_if": work_graph.CRITERION,
             },
             "decision": "defer_until_measured",
         },
@@ -235,6 +239,8 @@ def select_lowering(
         tier = caps.get("work_graphs_tier")
         if not isinstance(tier, (int, float)) or tier < 1:
             _unsupported(feature, "work graphs require an experimental queried Work Graphs tier", tier=tier)
+        if not _shader_model_at_least(caps.get("highest_shader_model"), "6_8"):
+            _unsupported(feature, "work graphs require queried shader model 6.8")
         return {
             "feature": feature,
             "profile_id": WORK_GRAPH_PROFILE_ID,
@@ -250,10 +256,14 @@ def select_lowering(
     raise AssertionError("unreachable")
 
 
-def work_graph_experiment(*, conventional_metric: float, work_graph_metric: float | None, criterion: str = "runtime_size_or_workload_feasibility") -> dict[str, Any]:
-    """Execute one bounded experiment against the conventional equivalent."""
-    if conventional_metric <= 0:
-        raise EvidenceError("conventional metric must be positive")
+def work_graph_experiment(*, conventional_metric: float, work_graph_metric: float | None, criterion: str = work_graph.CRITERION) -> dict[str, Any]:
+    """Project supplied medians; the physical runner separately verifies raw paired samples."""
+    if criterion != work_graph.CRITERION:
+        raise EvidenceError("Work Graphs criterion cannot be changed for the declared experiment")
+    try:
+        work_graph.median_decision(conventional_metric, conventional_metric)
+    except work_graph.ObservationError as exc:
+        raise EvidenceError(str(exc)) from exc
     if work_graph_metric is None:
         return {
             "format": "nw13.work-graph-experiment",
@@ -265,9 +275,10 @@ def work_graph_experiment(*, conventional_metric: float, work_graph_metric: floa
             "reason": "matched Work Graphs measurement unavailable",
             "satisfies_completion": False,
         }
-    if work_graph_metric < 0:
-        raise EvidenceError("work graph metric must be non-negative")
-    adopted = work_graph_metric < conventional_metric * 0.95
+    try:
+        decision = work_graph.median_decision(conventional_metric, work_graph_metric)
+    except work_graph.ObservationError as exc:
+        raise EvidenceError(str(exc)) from exc
     return {
         "format": "nw13.work-graph-experiment",
         "version": 1,
@@ -275,8 +286,8 @@ def work_graph_experiment(*, conventional_metric: float, work_graph_metric: floa
         "conventional_metric": conventional_metric,
         "work_graph_metric": work_graph_metric,
         "measured_ratio": work_graph_metric / conventional_metric,
-        "decision": "adopt" if adopted else "reject",
-        "reason": "measured total benefit threshold met" if adopted else "no measured total benefit over conventional equivalent",
+        "decision": decision,
+        "reason": "measured dispatch threshold met" if decision == "adopt" else "strict dispatch improvement threshold not met",
         "satisfies_completion": True,
     }
 

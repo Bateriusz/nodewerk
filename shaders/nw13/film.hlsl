@@ -59,6 +59,17 @@ float noise3(float3 p,uint seed) {
 
 /* FILM_DATA */
 
+#if FILM_SHARED_OBJECTS
+groupshared ObjectFrame sharedObjects[OBJECT_COUNT];
+#define FILM_OBJECT_PARAM
+#define FILM_OBJECT_ARG
+#define FILM_OBJECT(i) sharedObjects[i]
+#else
+#define FILM_OBJECT_PARAM ObjectFrame objects[OBJECT_COUNT],
+#define FILM_OBJECT_ARG objects,
+#define FILM_OBJECT(i) objects[i]
+#endif
+
 bool traceObject(ObjectFrame pose,uint i,float3 origin,float3 ray,float begin,inout Hit hit) {
     float3 localOrigin=mul(pose.inverse,float4(origin,1)).xyz;
     float3 raw=mul(pose.inverse,float4(ray,0)).xyz;
@@ -103,7 +114,7 @@ bool traceObject(ObjectFrame pose,uint i,float3 origin,float3 ray,float begin,in
     return false;
 }
 
-bool trace(ObjectFrame objects[OBJECT_COUNT],float3 origin,float3 ray,
+bool trace(FILM_OBJECT_PARAM float3 origin,float3 ray,
            float begin,float limit,uint ignored,out Hit hit) {
     hit=(Hit)0;
     hit.distance=min(limit,TRACE_LIMIT);
@@ -121,14 +132,14 @@ bool trace(ObjectFrame objects[OBJECT_COUNT],float3 origin,float3 ray,
     while (query.Proceed()) {
         uint index=query.CandidatePrimitiveIndex();
         if (index!=ignored && index<OBJECT_COUNT &&
-            traceObject(objects[index],index,origin,ray,begin,hit)) {
+            traceObject(FILM_OBJECT(index),index,origin,ray,begin,hit)) {
             query.CommitProceduralPrimitiveHit(hit.distance);
         }
     }
 #else
     [loop]
     for (uint index=0;index<OBJECT_COUNT;++index) {
-        if (index!=ignored) traceObject(objects[index],index,origin,ray,begin,hit);
+        if (index!=ignored) traceObject(FILM_OBJECT(index),index,origin,ray,begin,hit);
     }
 #endif
     return hit.objectId!=0xffffffffu;
@@ -137,7 +148,7 @@ bool trace(ObjectFrame objects[OBJECT_COUNT],float3 origin,float3 ray,
 float3 miss(float3 ray) {
     return MISS_RADIANCE+max(0,ray.y)*float3(0.10,0.14,0.22);
 }
-float3 direct(ObjectFrame objects[OBJECT_COUNT],Hit hit,float3 ray,uint t) {
+float3 direct(FILM_OBJECT_PARAM Hit hit,float3 ray,uint t) {
     Material m=materialAt(hit.objectId);
     float3 color=0.025+m.base*0.04+m.emission;
     [loop]
@@ -150,7 +161,7 @@ float3 direct(ObjectFrame objects[OBJECT_COUNT],Hit hit,float3 ray,uint t) {
         float cosine=dot(hit.normal,toward);
         if (cosine<=0) continue;
         Hit occluder;
-        if (SHADOWS && trace(objects,hit.position+toward*4*EPS,toward,0,d-2*EPS,hit.objectId,occluder)) continue;
+        if (SHADOWS && trace(FILM_OBJECT_ARG hit.position+toward*4*EPS,toward,0,d-2*EPS,hit.objectId,occluder)) continue;
         float falloff=saturate(1-d/light.range);
         float attenuation=light.intensity*falloff*falloff/(1+d*d);
         float3 halfRay=normalize(toward-ray);
@@ -159,7 +170,7 @@ float3 direct(ObjectFrame objects[OBJECT_COUNT],Hit hit,float3 ray,uint t) {
     }
     return color;
 }
-float3 scenePixel(int2 pixel,Camera cam,uint t,uint action,ObjectFrame objects[OBJECT_COUNT],out float depth) {
+float3 scenePixel(int2 pixel,Camera cam,uint t,uint action,FILM_OBJECT_PARAM out float depth) {
     float2 uv=(float2(pixel)+0.5)/float2(FRAME_WIDTH,FRAME_HEIGHT);
     float3 forward=normalize(cam.target-cam.eye), right=normalize(cross(forward,cam.up));
     float3 up=normalize(cross(right,forward));
@@ -169,16 +180,16 @@ float3 scenePixel(int2 pixel,Camera cam,uint t,uint action,ObjectFrame objects[O
     Hit hit;
     float3 color=miss(ray);
     depth=1e20;
-    if (trace(objects,cam.eye,ray,cam.lens.z/projection,cam.lens.w/projection,0xffffffffu,hit)) {
-        color=direct(objects,hit,ray,t);
+    if (trace(FILM_OBJECT_ARG cam.eye,ray,cam.lens.z/projection,cam.lens.w/projection,0xffffffffu,hit)) {
+        color=direct(FILM_OBJECT_ARG hit,ray,t);
         depth=hit.distance*projection;
         Material m=materialAt(hit.objectId);
         if (REFLECTIONS && m.response.y>0.2) {
             float3 reflected=reflect(ray,hit.normal);
             Hit bounce;
             float3 radiance=miss(reflected);
-            if (trace(objects,hit.position+reflected*6*EPS,reflected,0,TRACE_LIMIT,hit.objectId,bounce))
-                radiance=direct(objects,bounce,reflected,t);
+            if (trace(FILM_OBJECT_ARG hit.position+reflected*6*EPS,reflected,0,TRACE_LIMIT,hit.objectId,bounce))
+                radiance=direct(FILM_OBJECT_ARG bounce,reflected,t);
             color=lerp(color,radiance,m.response.y*(1-m.response.x*0.5));
         }
     }
@@ -196,15 +207,20 @@ groupshared float tileDepth[TILE_WIDTH*TILE_HEIGHT];
 void FILM_ENTRY(uint3 pixel:SV_DispatchThreadID, uint3 group:SV_GroupID, uint lane:SV_GroupIndex) {
     uint t=min(presentationTick,(uint)FILM_DURATION_TICKS), action=actionAt(t);
     Camera cam=cameraAt(t);
+#if FILM_SHARED_OBJECTS
+    if (lane<OBJECT_COUNT) sharedObjects[lane]=frameAt(lane,action);
+    GroupMemoryBarrierWithGroupSync();
+#else
     ObjectFrame objects[OBJECT_COUNT];
     setupObjects(action,objects);
+#endif
     int2 corner=int2(group.xy)*int2(GROUP_X,GROUP_Y)-BLOOM_RADIUS;
     for (uint slot=lane;slot<TILE_WIDTH*TILE_HEIGHT;slot+=GROUP_X*GROUP_Y) {
         int2 pixelCoord=corner+int2(slot%TILE_WIDTH,slot/TILE_WIDTH);
         float3 value=0;
         float depth=1e20;
         if (all(pixelCoord>=0) && pixelCoord.x<FRAME_WIDTH && pixelCoord.y<FRAME_HEIGHT)
-            value=scenePixel(pixelCoord,cam,t,action,objects,depth);
+            value=scenePixel(pixelCoord,cam,t,action,FILM_OBJECT_ARG depth);
         tile[slot]=value;
 #if FILM_CAPTURE_DEPTH
         tileDepth[slot]=depth;

@@ -270,7 +270,7 @@ Statuses are deliberately separate:
 
 | Technique | Status | Decision |
 |---|---|---|
-| DXR inline ray query | `capability_qualified` | adopt only with queried capability and matched acceptance |
+| DXR inline ray query | `capability_gated_optional` | production candidate; matched physical acceptance is pending |
 | Mesh shader | `pending_unavailable` | defer (NW-11 per-device decisions pending) |
 | Work Graphs | `experimental` | defer until one bounded experiment meets the predeclared criterion |
 | SER | `pending_unavailable` | defer; requires measured divergence and end-to-end gain |
@@ -287,19 +287,90 @@ clocks.
 
 The bounded Work Graphs experiment is recorded in
 [`benchmarks/nw13/work-graph-experiment.v1.json`](../benchmarks/nw13/work-graph-experiment.v1.json).
-The conventional and Work Graphs arms route 1,024 deterministic candidates
-through the same visibility and shading functions. Each compares all output
-slots with a CPU oracle after explicitly invalidating the previous values
-outside the measured GPU interval. The predeclared criterion requires a median GPU
-dispatch time below 95% of the conventional arm, exact output and at most
-32 MiB of backing memory. The Windows runner logs hosted WARP baseline
-execution and leaves Work Graphs adoption pending until a matched device run.
+The common film and its independently built fallback use bounded compute
+tracing, not raster surface selection; the optional film arm is the NW-13
+inline ray query compute lowering. The separate
+[NW-11 mesh result](../benchmarks/nw11/decisions/mesh-shader.v1.json)
+remains pending on both representative devices and does not promote any
+NW-13 feature.
+
+### Run the Work Graphs experiment from its immutable CI artifact
+
+Use `nw13-work-graph-physical-<tested-sha>` from the selected **NW-13
+Procedural Film** Actions run, not the ordinary film archive or an older
+checkout. The tested SHA may be the PR merge-test commit. It contains the
+exact built EXE, both DXIL files, the shared capability probe, sources,
+an isolated Python runtime, the launcher's complete dependency inventory,
+and the conventional hosted WARP receipt for those exact inputs. Hosted WARP
+does not measure the optional arm or physical performance.
+
+Keep the original downloaded ZIP. Obtain
+`work-graph-physical-trust.json` independently from the same run's job
+summary or separate Windows validation artifact, not from the Work Graphs
+ZIP. Confirm the artifact ID, run, attempt, tested commit and archive digest
+against GitHub's authenticated run and artifact metadata. Then, on the
+physical Windows desktop, verify the original ZIP before extracting it or
+executing anything from it:
 
 ```powershell
-cmake -S src/nw13 -B build/nw13-work-graph -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build/nw13-work-graph --target nw13_work_graph
-python tools/nw13_work_graph.py build/nw13-work-graph/nw13_work_graph.exe --output build/nw13-evidence/work-graph-matched.json
+$zip = "C:\nw13\work-graphs.zip"
+$trustFile = "C:\nw13\work-graph-physical-trust.json"
+$commit = "<exact tested SHA from the GitHub run>"
+$bundle = "C:\nw13\work-graphs"
+$trust = Get-Content -LiteralPath $trustFile -Raw | ConvertFrom-Json
+if ($trust.commit -cne $commit -or
+    (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant() -cne $trust.archive_sha256) {
+    throw "Wrong GitHub Work Graphs archive"
+}
+if (Test-Path -LiteralPath $bundle) { throw "Use a fresh extraction directory" }
+Expand-Archive -LiteralPath $zip -DestinationPath $bundle
+$launch = Join-Path $bundle "run-work-graphs.ps1"
+& $launch -Archive $zip -TrustRecord $trustFile -ExpectedCommit $commit -VerifyOnly
+if ($LASTEXITCODE -ne 0) { throw "Work Graphs verification failed" }
 ```
+
+Choose the physical adapter from the verified probe. The probe's default
+query lists adapter indexes; query the intended non-software index explicitly
+to get its LUID (here `$index` is the index you chose):
+
+```powershell
+$probe = Join-Path $bundle "bin/nw11_capability_probe.exe"
+(& $probe | ConvertFrom-Json).adapters | Format-Table
+$index = [int](Read-Host "Index of the intended non-software adapter")
+$luid = (& $probe --adapter-index $index | ConvertFrom-Json).adapter.adapter_luid
+& $launch -Archive $zip -TrustRecord $trustFile -ExpectedCommit $commit `
+    -AdapterLuid $luid -OutputDirectory "C:\nw13\work-graphs-result"
+```
+
+This uses the existing desktop session and installed GPU/Windows drivers.
+It requires no checkout, Python installation, compiler, reboot, GPU tuning
+or network access after downloading and verifying the GitHub inputs. Keep
+the output outside the archive. The runner checks the physical host, PCI
+identity and operating controls with the shared validators and re-verifies
+the complete input inventory before and after dispatch.
+
+The conventional and Work Graphs arms route 1,024 deterministic candidates
+through the same visibility and shading functions on one explicitly selected
+D3D12 device and queue. One warm-up per arm precedes nine alternating pairs.
+Every dispatch verifies all output slots against the CPU oracle after
+poisoning the prior values. The runner retains raw begin/end GPU timestamps,
+queue frequency, per-arm output checks and backing allocation in the
+native observation, and independently computes the decision. Adoption of
+this isolated **experiment** requires a median GPU dispatch time strictly
+below 95% of conventional, exact output and at most 32 MiB of actual backing
+allocation. Preparation, resets and readback are outside the timed interval.
+There is no distribution-size threshold or production promotion.
+
+Keep `work-graph-matched.json` and the raw stdout/stderr files. A measured
+`reject` means a valid pair of arms did not meet the declared criterion;
+`unsupported`, `failed` and `inconclusive` are separate, do not qualify as
+measured rejection, and do not fill missing metrics with zero. On queried
+unsupported hardware the runner exercises the conventional fallback on the
+same adapter and records it separately. A successful unsupported-feature
+run requires that fallback to pass the CPU oracle. If the fallback fails,
+the runner retains the unsupported capability observation, reports the
+overall run as `failed` and exits nonzero; neither outcome is a physical
+Work Graphs measurement.
 
 ## 11. Artifacts, reproducibility and physical qualification
 
@@ -347,6 +418,9 @@ checks bind a graph CPU oracle and, when supported, matched common/DXR frames.
 Controlled re-exports test moving-shadow and off-camera material response;
 two frames at identical frozen action must show the camera move. None of
 these hosted checks establishes physical presentation timing or GPU adoption.
+
+Use the [CI-bound physical film handoff](nw13-physical-film.md) to measure the
+exact delivered players on Windows without rebuilding.
 
 Physical GPU/audio qualification continues to use
 [ADR 0009](architecture/0009-validation-and-evidence-lifecycle.md), the

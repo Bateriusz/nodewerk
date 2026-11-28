@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,118 @@ OPERATOR = "nw.shader.film"
 LIBRARY = "nw.geom.library"
 MAX_FIELD_GRADIENT = 8.0
 TEMPLATE = Path(__file__).resolve().parents[1] / "shaders" / "nw13" / "film.hlsl"
+THREAD_GROUP = (8, 8, 1)  # Also the versioned typed-History package group.
+WORK_PROFILES = {
+    "verification-v1": (512, 288, 150_000_000),
+    # Preserve the versioned sampled-History surface limits as well as the
+    # independent player allocation budget. A larger raster needs a new proof.
+    "inspection-v1": (512, 288, 6_500_000_000),
+}
+
+
+@dataclass(frozen=True)
+class FilmDispatch:
+    width: int
+    height: int
+    groups: tuple[int, int, int]
+    profile: str
+
+    @property
+    def extent(self):
+        return self.width, self.height
+
+    @property
+    def thread_group(self):
+        return THREAD_GROUP
+
+
+def resolve_dispatch(document, root, *, rendering=None, thread_group=None,
+                     dispatch_groups=None, width=None, height=None):
+    """One image and command shape, independent of window/presentation size."""
+    if rendering is None:
+        rendering = json.loads(root.params["production"][0])["rendering"]
+    extent = tuple(rendering[key] for key in ("width", "height"))
+    profile = rendering.get("work_profile", "verification-v1")
+    if not isinstance(profile, str) or profile not in WORK_PROFILES:
+        raise ValueError("film work_profile is not a supported bounded profile")
+    max_width, max_height, _ = WORK_PROFILES[profile]
+    if any(type(axis) is not int or not 1 <= axis <= limit
+           for axis, limit in zip(extent, (max_width, max_height), strict=True)):
+        raise ValueError(f"film raster dimensions must be integers within {max_width}x{max_height} for {profile}")
+    keys = ("nw05_output_width", "nw05_output_height")
+    if any(key in document.settings for key in keys):
+        try:
+            graph_extent = tuple(int(document.settings[key], 10) for key in keys)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("film graph must declare both integer raster axes or neither") from exc
+        if graph_extent != extent:
+            raise ValueError(f"film raster dimensions {extent} disagree with graph output {graph_extent}")
+    if any(key in document.settings for key in ("nw07_output_width", "nw07_output_height")):
+        raise ValueError("legacy NW-07 output settings cannot override the authored film raster")
+    if (width is None) != (height is None) or (width is not None and (
+            type(width) is not int or type(height) is not int or (width, height) != extent)):
+        raise ValueError(f"requested film raster dimensions {(width, height)} disagree with authored raster {extent}")
+    if thread_group is not None and (any(type(size) is not int for size in thread_group)
+                                     or tuple(thread_group) != THREAD_GROUP):
+        raise ValueError(f"film thread group must be exactly {THREAD_GROUP}")
+    groups = tuple((size + group - 1) // group for size, group in zip(extent, THREAD_GROUP[:2], strict=True)) + (1,)
+    if dispatch_groups is not None and (any(type(size) is not int for size in dispatch_groups)
+                                        or tuple(dispatch_groups) != groups):
+        raise ValueError(f"film dispatch must cover the raster in exactly {groups} groups")
+    return FilmDispatch(*extent, groups, profile)
+
+
+def _workload(dispatch, recipes, scene, rendering, emitter, effects, feedback):
+    def field_cost(recipe):
+        factor = math.prod(recipe["parameters"]["counts"]) if recipe["operator"] == "nw.geom.repeat" else 1
+        weight = 32 if recipe["operator"] == "nw.geom.displace" else 1
+        return weight + factor * sum(field_cost(child) for child in recipe["children"])
+
+    # HLSL shades a clipped tile including the bloom halo. Count every
+    # in-bounds sample, including samples shared by adjacent groups. All
+    # rounded dispatch lanes still execute setup and the tile barrier.
+    def samples_on_axis(size, group_count, lanes):
+        return sum(min(size, (index + 1) * lanes + radius) - max(0, index * lanes - radius)
+                   for index in range(group_count))
+
+    radius = effects.get("bloom", {}).get("radius", 0)
+    gx, gy, _ = dispatch.groups
+    tx, ty, _ = dispatch.thread_group
+    group_count = gx * gy
+    lanes = group_count * tx * ty
+    pixels = dispatch.width * dispatch.height
+    samples = samples_on_axis(dispatch.width, gx, tx) * samples_on_axis(dispatch.height, gy, ty)
+    passes = 2 if feedback else 1
+    rays_per_sample = (1 + rendering["reflection_bounces"]) * (1 + (len(scene.lights) if rendering["shadows"] else 0))
+    steps = rendering["max_steps"]
+    fields_per_step = sum(field_cost(recipes[obj.geometry]) for obj in scene.objects.values())
+    # A hit may evaluate six additional field samples for its gradient.
+    field_units = passes * samples * rays_per_sample * (steps + 6) * fields_per_step
+    # Keep other repeated shader work explicitly bounded and visible. Units
+    # are deterministic admission weights, not instructions/ticks or timing.
+    tile_slots = group_count * (tx + 2 * radius) * (ty + 2 * radius)
+    setup = passes * (group_count if dispatch.profile == "inspection-v1" else lanes) * len(scene.objects)
+    box_tests = passes * samples * rays_per_sample * len(scene.objects)
+    particles = passes * samples * (emitter.count if emitter else 0)
+    bloom_taps = passes * pixels * (1 + 2 * radius) ** 2
+    tonemap_pixels = passes * pixels if "tonemap" in effects else 0
+    history_lanes = lanes if feedback else 0
+    history_copy_bytes = 2 * pixels * 16 if feedback else 0
+    units = (field_units + 32 * setup + 8 * box_tests + 16 * particles + 4 * bloom_taps
+             + 20 * tonemap_pixels + 32 * history_lanes + history_copy_bytes // 4
+             + passes * (16 * lanes + 4 * tile_slots))
+    return {
+        "profile": dispatch.profile, "raster": list(dispatch.extent), "thread_group": list(dispatch.thread_group),
+        "dispatch_groups": list(dispatch.groups), "rounded_lanes_per_pass": lanes,
+        "tile_slots_per_pass": tile_slots,
+        "scene_samples_per_pass": samples, "max_scene_passes": passes,
+        "max_rays_per_sample": rays_per_sample, "max_weighted_field_operations": field_units,
+        "max_object_frame_initializations": setup, "max_ray_object_candidates": box_tests,
+        "max_particle_evaluations": particles, "max_bloom_taps": bloom_taps, "max_tonemap_pixels": tonemap_pixels,
+        "max_history_composite_lanes": history_lanes, "max_history_copy_bytes": history_copy_bytes,
+        "rgba32f_surface_bytes": pixels * 16,
+        "work_units": units, "work_limit": WORK_PROFILES[dispatch.profile][2],
+    }
 
 
 def _literal(value: Any) -> str:
@@ -69,7 +182,7 @@ def graph_geometry(document, root) -> tuple[dict, dict]:
     return tree, recipes
 
 
-def read_film(document, root):
+def admit_film(document, root, **dispatch_options):
     tree, recipes = graph_geometry(document, root)
     settings = json.loads(root.params["production"][0])
     scene_doc = json.loads(root.params["scene"][0])
@@ -97,14 +210,16 @@ def read_film(document, root):
             a.end_tick != b.start_tick for a, b in zip(scene.shots, scene.shots[1:]))):
         raise ValueError("film shots must be a contiguous, non-overlapping presentation sequence")
     rendering = settings["rendering"]
-    width, height = int(rendering["width"]), int(rendering["height"])
-    steps = int(rendering["max_steps"])
+    dispatch = resolve_dispatch(document, root, rendering=rendering, **dispatch_options)
+    steps = rendering["max_steps"]
     ray_length = float(rendering["max_distance"])
     epsilon = float(rendering["epsilon"])
-    if not (1 <= width <= 512 and 1 <= height <= 288 and 1 <= steps <= 128
+    if not (type(steps) is int and 1 <= steps <= 128
             and 0 < ray_length <= 128 and 1e-5 <= epsilon <= 0.05):
-        raise ValueError("film image dimensions, ray steps, length or epsilon exceed the common limits")
-    if rendering["samples"] != 1 or rendering["reflection_bounces"] not in (0, 1):
+        raise ValueError("film ray steps, length or epsilon exceed the common limits")
+    if (type(rendering["samples"]) is not int or rendering["samples"] != 1
+            or type(rendering["shadows"]) is not bool or type(rendering["reflection_bounces"]) is not int
+            or rendering["reflection_bounces"] not in (0, 1)):
         raise ValueError("film common pass supports one sample and zero or one reflection bounce")
     if not (1 <= len(scene.objects) <= 32 and len(scene.lights) <= 8):
         raise ValueError("film common pass supports 1..32 objects and at most 8 lights")
@@ -122,24 +237,42 @@ def read_film(document, root):
             not scene.contains_point(key.value) for key in emitter.origin_track.keys
         )):
             raise ValueError("film emitter exceeds its animation key or scene bounds")
-    radius = settings.get("effects", {}).get("bloom", {}).get("radius", 0)
+    effects = settings.get("effects", {})
+    radius = effects.get("bloom", {}).get("radius", 0)
     if type(radius) is not int or not 0 <= radius <= 2:
         raise ValueError("film common pass requires a bloom radius in 0..2")
-    traces = ((width + 7) // 8) * ((height + 7) // 8) * (8 + 2 * radius) ** 2
-    def field_cost(recipe):
-        factor = math.prod(recipe["parameters"]["counts"]) if recipe["operator"] == "nw.geom.repeat" else 1
-        weight = 32 if recipe["operator"] == "nw.geom.displace" else 1
-        return weight + factor * sum(field_cost(child) for child in recipe["children"])
+    feedback = history.read_feedback(document)
+    if feedback is not None and feedback.film_id != root.node_id:
+        raise ValueError("the selected feedback must bind this exact film root")
+    workload = _workload(dispatch, recipes, scene, rendering, emitter, effects, feedback)
+    if workload["work_units"] > workload["work_limit"]:
+        raise ValueError(f"film per-frame work {workload['work_units']} exceeds the {dispatch.profile} "
+                         f"evaluation budget {workload['work_limit']} for {dispatch.width}x{dispatch.height}")
+    return (prepared, recipes, bounds, scene, settings, emitter), dispatch, workload
 
-    traces *= steps * sum(field_cost(recipes[obj.geometry]) for obj in scene.objects.values())
-    traces *= max(1, len(scene.lights) + 1)
-    traces *= 1 + rendering["reflection_bounces"]
-    # The one-tap scheduler renders current plus at most one predecessor.
-    # Account for both passes under the same established frame work ceiling.
-    traces *= 2 if history.read_feedback(document) is not None else 1
-    if traces > 150_000_000:
-        raise ValueError("film per-frame trace work exceeds the common evaluation budget")
-    return prepared, recipes, bounds, scene, settings, emitter
+
+def read_film(document, root):
+    return admit_film(document, root)[0]
+
+
+def project_inspection_rasters(document, root, dimensions):
+    """Static comparisons of the same scene, including disallowed candidates."""
+    (_, recipes, _, scene, settings, emitter), _, _ = admit_film(document, root)
+    feedback = history.read_feedback(document)
+    profile = "inspection-v1"
+    max_width, max_height, _ = WORK_PROFILES[profile]
+    output = []
+    for width, height in dimensions:
+        if type(width) is not int or type(height) is not int or not (1 <= width <= 1920 and 1 <= height <= 1080):
+            raise ValueError("film raster projections are bounded to 1920x1080")
+        groups = ((width + THREAD_GROUP[0] - 1) // THREAD_GROUP[0],
+                  (height + THREAD_GROUP[1] - 1) // THREAD_GROUP[1], 1)
+        model = _workload(FilmDispatch(width, height, groups, profile), recipes, scene, settings["rendering"],
+                          emitter, settings.get("effects", {}), feedback)
+        model["within_raster_limits"] = 1 <= width <= max_width and 1 <= height <= max_height
+        model["within_work_limit"] = model["work_units"] <= model["work_limit"]
+        output.append(model)
+    return output
 
 
 def _sdf(recipe, names):
@@ -288,7 +421,7 @@ def _camera(scene):
     return "\n".join(lines)
 
 
-def _objects(scene, bounds, recipes, names, epsilon):
+def _objects(scene, bounds, recipes, names, epsilon, *, shared=False):
     objects = list(scene.objects.values())
     indices = {obj.id: i for i, obj in enumerate(objects)}
     lines = [f"#define OBJECT_COUNT {len(objects)}"]
@@ -296,7 +429,10 @@ def _objects(scene, bounds, recipes, names, epsilon):
         pos, rot, scale = (_track(obj.tracks.get(f"transform.{attr}"), getattr(obj, attr), "t")
                            for attr in ("position", "rotation", "scale"))
         lines.append(f"float4x4 local{i}(uint t){{return localInverse({pos},{rot},{scale});}}")
-    lines.append("void setupObjects(uint t,out ObjectFrame objects[OBJECT_COUNT]){")
+    if shared:
+        lines.append("ObjectFrame frameAt(uint index,uint t){ObjectFrame frame=(ObjectFrame)0;switch(index){")
+    else:
+        lines.append("void setupObjects(uint t,out ObjectFrame objects[OBJECT_COUNT]){")
     for i, obj in enumerate(objects):
         chain = f"local{i}(t)"
         parent = obj.parent
@@ -305,10 +441,12 @@ def _objects(scene, bounds, recipes, names, epsilon):
             parent = scene.objects[parent].parent
         bound = bounds[obj.geometry].expanded(4 * epsilon)
         lipschitz = geometry.field_lipschitz(recipes[obj.geometry], bound)
-        lines.append(f"objects[{i}].inverse={chain};"
-                     f"objects[{i}].low={_literal(bound.minimum)};objects[{i}].high={_literal(bound.maximum)};"
-                     f"objects[{i}].stepScale={_literal(0.95/lipschitz)};")
-    lines.append("}")
+        target = "frame" if shared else f"objects[{i}]"
+        lines.append((f"case {i}:" if shared else "") +
+                     f"{target}.inverse={chain};"
+                     f"{target}.low={_literal(bound.minimum)};{target}.high={_literal(bound.maximum)};"
+                     f"{target}.stepScale={_literal(0.95/lipschitz)};" + ("break;" if shared else ""))
+    lines.append("}return frame;}" if shared else "}")
     # Scalar noinline signatures are valid in DXIL; keeping the shared field
     # specialization out of line controls size across primary/shadow/reflection
     # rays and normal samples without changing runtime dependencies.
@@ -375,11 +513,12 @@ float3 dust(float3 color,float2 uv,float depth,uint action,Camera cam){{
 """
 
 
-def emit(document, root, *, entry_point, thread_group, width, height):
-    _, recipes, bounds, scene, settings, emitter = read_film(document, root)
+def emit(document, root, *, entry_point, thread_group=None, dispatch_groups=None, width=None, height=None):
+    (_, recipes, bounds, scene, settings, emitter), dispatch, _ = admit_film(
+        document, root, thread_group=thread_group, dispatch_groups=dispatch_groups, width=width, height=height,
+    )
     feedback = history.read_feedback(document)
-    if feedback is not None and feedback.film_id != root.node_id:
-        raise ValueError("the selected feedback must bind this exact film root")
+    shared = dispatch.profile == "inspection-v1"
     # The recipe library organizes scene geometry. Only object-bound solids
     # and their dependencies enter the shader.
     solid_ids = set()
@@ -413,10 +552,11 @@ def emit(document, root, *, entry_point, thread_group, width, height):
     template = TEMPLATE.read_text(encoding="utf-8")
     return template.replace("/* FILM_SETTINGS */", "\n".join(
         f"#define {key} {val}" for key, val in {
-            "FRAME_WIDTH": width, "FRAME_HEIGHT": height, "TRACE_STEPS": int(rendering["max_steps"]),
+            "FRAME_WIDTH": dispatch.width, "FRAME_HEIGHT": dispatch.height, "TRACE_STEPS": rendering["max_steps"],
             "FILM_DURATION_TICKS": scene.duration_ticks,
             "FILM_CAPTURE_DEPTH": int(feedback is not None),
-            "GROUP_X": thread_group[0], "GROUP_Y": thread_group[1],
+            "FILM_SHARED_OBJECTS": int(shared),
+            "GROUP_X": dispatch.thread_group[0], "GROUP_Y": dispatch.thread_group[1],
             "BLOOM_RADIUS": int(bloom.get("radius", 0)),
             "TRACE_LIMIT": _literal(rendering["max_distance"]), "EPS": _literal(rendering["epsilon"]),
             "SHADOWS": int(rendering["shadows"]), "REFLECTIONS": rendering["reflection_bounces"],
@@ -426,23 +566,25 @@ def emit(document, root, *, entry_point, thread_group, width, height):
             "BLOOM_THRESHOLD": _literal(bloom.get("threshold", 1)),
         }.items()
     )).replace("/* FILM_DATA */", "\n".join((
-        solid_functions, timeline, _camera(scene), _objects(scene, bounds, recipes, names, rendering["epsilon"]),
+        solid_functions, timeline, _camera(scene),
+        _objects(scene, bounds, recipes, names, rendering["epsilon"], shared=shared),
         _lights(scene, settings, onsets), _particle_code(emitter, scene),
     ))).replace("FILM_ENTRY", entry_point)
 
 
 class FrameOracle:
     """One authored CPU renderer shared by Studio and evidence."""
-    def __init__(self, document, root, *, width, height):
+    def __init__(self, document, root, *, width=None, height=None):
         import nw13_render
 
-        prepared, _, _, self.scene, self.settings, self.emitter = read_film(document, root)
-        self.width, self.height = width, height
+        data, dispatch, _ = admit_film(document, root, width=width, height=height)
+        prepared, _, _, self.scene, self.settings, self.emitter = data
+        self.width, self.height = dispatch.extent
         self.timing, self.onsets = film_timing(self.scene, self.settings)
         self.feedback = history.read_feedback(document)
         self.resets = history.reset_ticks(self.scene, self.timing)
         rendering = self.settings["rendering"]
-        self.renderer = nw13_render.Renderer(self.scene, prepared.document, width=width, height=height, **{
+        self.renderer = nw13_render.Renderer(self.scene, prepared.document, width=self.width, height=self.height, **{
             key: rendering[key] for key in ("max_steps", "samples", "epsilon", "max_distance",
                                             "shadows", "reflection_bounces", "miss_radiance")
         })
@@ -473,7 +615,7 @@ class FrameOracle:
                                  weight=self.feedback.weight, depth_tolerance=self.feedback.depth_tolerance)
 
 
-def reference_image(document, root, tick, *, width, height):
+def reference_image(document, root, tick, *, width=None, height=None):
     return FrameOracle(document, root, width=width, height=height).render(tick)
 
 
@@ -565,14 +707,13 @@ def compile_inline_ray_payload(document, output, dxc, *, allow_unpinned_dxc=Fals
     if len(roots) != 1 or roots[0].operator_id != OPERATOR:
         raise ValueError("inline ray lowering requires one reachable film root")
     root = roots[0]
-    _, _, bounds, scene, settings, _ = read_film(document, root)
+    (_, _, bounds, scene, settings, _), dispatch, workload = admit_film(document, root)
     rendering = settings["rendering"]
     if rendering["max_distance"] > 64.0:
         raise ValueError("inline ray lowering admits rays of at most 64 units")
-    width, height = int(document.settings["nw05_output_width"]), int(document.settings["nw05_output_height"])
     shaders, diagnostics = compiler.lower_to_fused_hlsl(
-        document, target="cs_6_5", thread_group=(8, 8, 1),
-        dispatch_groups=((width + 7) // 8, (height + 7) // 8, 1), image_width=width, image_height=height,
+        document, target="cs_6_5", thread_group=dispatch.thread_group,
+        dispatch_groups=dispatch.groups, image_width=dispatch.width, image_height=dispatch.height,
     )
     if diagnostics or len(shaders) != 1 or shaders[0].specialization_id != root.node_id:
         raise compiler.CompilerError("film inline ray lowering requires a single compute shader", diagnostics)
@@ -602,5 +743,6 @@ def compile_inline_ray_payload(document, output, dxc, *, allow_unpinned_dxc=Fals
         "inline_shader_sha256": "sha256:" + hashlib.sha256(dxil).hexdigest(),
         "payload_sha256": "sha256:" + hashlib.sha256(header.read_bytes()).hexdigest(),
         "bounds_count": len(tuples),
+        "film_workload": workload,
         "acceleration_builds": {"bottom": 1, "top": 1, "per_frame": 0},
     }
